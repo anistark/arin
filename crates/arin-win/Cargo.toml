@@ -1,0 +1,15 @@
+[package]
+name = "arin-win"
+description = "Windows renderer and capture backends for Arin. Layered window, DXGI capture."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+# Intentionally none yet. The windows crate arrives with the implementation in 0.6.
+
+[lints]
+workspace = true

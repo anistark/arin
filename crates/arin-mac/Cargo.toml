@@ -1,0 +1,30 @@
+[package]
+name = "arin-mac"
+description = "macOS renderer and capture backends for Arin. NSPanel, Core Animation, ScreenCaptureKit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+arin-core.workspace = true
+arin-protocol.workspace = true
+tracing.workspace = true
+
+# Target-gated so the workspace still builds on Linux CI, where this crate compiles to
+# nothing. Core must never depend on it either way.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-graphics.workspace = true
+objc2-foundation.workspace = true
+objc2-quartz-core.workspace = true
+objc2-screen-capture-kit.workspace = true
+
+[lints]
+workspace = true

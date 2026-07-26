@@ -1,0 +1,19 @@
+[package]
+name = "arin-resolve"
+description = "Grounding resolver registry for Arin. Turns a natural language target into coordinates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+arin-core.workspace = true
+arin-protocol.workspace = true
+# Adapters implement `Resolver`, whose `resolve` returns a `BoxFuture`.
+futures.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

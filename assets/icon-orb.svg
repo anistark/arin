@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="128" height="128" role="img" aria-label="Arin mascot orb">
+  <title>Arin — mascot orb</title>
+  <defs>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="8%" stop-color="#1E3A8A" stop-opacity="0.9"/>
+      <stop offset="42%" stop-color="#1E3A8A" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#1E3A8A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ring" cx="50%" cy="50%" r="55%">
+      <stop offset="38%" stop-color="#3B82F6"/><stop offset="100%" stop-color="#1E3A8A"/>
+    </radialGradient>
+    <radialGradient id="core" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#FFFFFF"/><stop offset="34%" stop-color="#A9DCFF"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </radialGradient>
+    <linearGradient id="wing" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#1E3A8A"/><stop offset="60%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#7FE3FF"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="41" fill="url(#halo)"/>
+  <circle cx="50" cy="50" r="20" fill="url(#ring)"/>
+  <circle cx="50" cy="50" r="11.4" fill="url(#core)"/>
+  <g fill="#7FE3FF">
+    <circle cx="44" cy="30" r="1.9" opacity="0.8"/>
+    <circle cx="57" cy="22" r="1.5" opacity="0.5"/>
+    <circle cx="50" cy="15" r="1.1" opacity="0.28"/>
+  </g>
+</svg>

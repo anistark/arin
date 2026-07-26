@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # The hard dependency rule, enforced. Core and the protocol must build and pass their
+  # tests with no platform crate in the tree. If a macOS dependency lands in core, this
+  # job breaks, and that is the intended outcome rather than an inconvenience.
+  core-on-linux:
+    name: core and protocol (linux, no platform crates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test -p arin-protocol -p arin-core --all-targets
+
+  workspace:
+    name: workspace (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: Test
+        run: cargo test --workspace
+
+  lint:
+    name: fmt and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+  # The product boundary, enforced. Arin draws and never actuates: no synthetic clicks,
+  # keystrokes, or scrolls. That promise is what keeps the permission surface to Screen
+  # Recording alone, so it is checked rather than trusted.
+  #
+  # Comment lines are skipped so the rule can be written down next to the code it
+  # governs. If this fires on something legitimate, the answer is almost certainly that
+  # the feature belongs in a separate project, not that the check needs loosening.
+  draw-only:
+    name: no input synthesis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Scan for input synthesis APIs
+        run: |
+          hits=$(grep -rnE 'CGEventPost|CGEventTap|CGEventCreateMouseEvent|CGEventCreateKeyboardEvent|SendInput|XTestFake|uinput' \
+            --include='*.rs' crates/ | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::input synthesis API referenced. Arin draws and never actuates"
+            echo "$hits"
+            exit 1
+          fi
+          echo "clean: no input synthesis APIs referenced"

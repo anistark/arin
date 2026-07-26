@@ -1,0 +1,16 @@
+[package]
+name = "arin-linux"
+description = "Linux renderer and capture backends for Arin. wlr layer shell via wgpu, xdg desktop portal capture."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+# Intentionally none yet. The wgpu and Wayland stack arrives with the implementation in
+# 0.4 rather than sitting in the dependency graph unused until then.
+
+[lints]
+workspace = true

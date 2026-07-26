@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="128" height="128" role="img" aria-label="Arin orb, animated">
+  <title>Arin — orb, animated</title>
+  <defs>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="8%" stop-color="#1E3A8A" stop-opacity="0.9"/>
+      <stop offset="42%" stop-color="#1E3A8A" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#1E3A8A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ring" cx="50%" cy="50%" r="55%">
+      <stop offset="38%" stop-color="#3B82F6"/><stop offset="100%" stop-color="#1E3A8A"/>
+    </radialGradient>
+    <radialGradient id="core" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#FFFFFF"/><stop offset="34%" stop-color="#A9DCFF"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </radialGradient>
+  </defs>
+  <circle cx="50" cy="50" r="41" fill="url(#halo)"/>
+  <circle cx="50" cy="50" r="20" fill="url(#ring)">
+    <animate attributeName="r" dur="3.2s" repeatCount="indefinite" values="19.2;20.8;19.2"
+      calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1"/>
+  </circle>
+  <circle cx="50" cy="50" r="11.4" fill="url(#core)">
+    <animate attributeName="r" dur="3.2s" repeatCount="indefinite" values="10.9;12.0;10.9"
+      calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1"/>
+  </circle>
+  <g fill="#7FE3FF">
+    <circle cx="44" r="1.9">
+      <animate attributeName="cy" dur="2.6s" repeatCount="indefinite" values="42;8"/>
+      <animate attributeName="opacity" dur="2.6s" repeatCount="indefinite" values="0;0.85;0"/>
+    </circle>
+    <circle cx="57" r="1.5">
+      <animate attributeName="cy" dur="3.1s" begin="0.8s" repeatCount="indefinite" values="42;6"/>
+      <animate attributeName="opacity" dur="3.1s" begin="0.8s" repeatCount="indefinite" values="0;0.7;0"/>
+    </circle>
+    <circle cx="50" r="1.2">
+      <animate attributeName="cy" dur="2.9s" begin="1.5s" repeatCount="indefinite" values="40;4"/>
+      <animate attributeName="opacity" dur="2.9s" begin="1.5s" repeatCount="indefinite" values="0;0.55;0"/>
+    </circle>
+  </g>
+</svg>
