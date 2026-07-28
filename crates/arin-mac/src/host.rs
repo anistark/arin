@@ -13,13 +13,15 @@
 use crate::display::{Screen, screens};
 use crate::panel::Panel;
 use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result};
-use arin_protocol::{AnnotationId, DisplayId, DisplayInfo, LogicalRect};
+use arin_protocol::{AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect, StrokeStyle};
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::NSColor;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_quartz_core::{CALayer, CATransaction};
+use objc2_core_graphics::{CGColor, CGMutablePath};
+use objc2_foundation::NSString;
+use objc2_quartz_core::{CALayer, CAShapeLayer, CATextLayer, CATransaction};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -181,6 +183,7 @@ impl Renderer for MacRenderer {
                 return;
             };
             let mut host_points: Vec<(AnnotationId, DisplayId)> = Vec::new();
+            let panel_height = panel.screen().info.logical_size[1];
 
             let layer = match &kind {
                 AnnotationKind::Point { at, .. } => {
@@ -188,7 +191,7 @@ impl Renderer for MacRenderer {
                     orb.set_visible(true);
                     // Flying rather than teleporting is what makes the orb read as one
                     // thing moving between targets instead of blinking out and back.
-                    let flight = orb.travel_to(CGPoint::new(at.x, at.y));
+                    let flight = orb.travel_to(to_layer_point(*at, panel_height));
                     host_points.push((id.clone(), screen_id));
                     if !flight.is_zero() {
                         // Land it: back to round, a flare, and the calm pointing pulse.
@@ -200,12 +203,15 @@ impl Renderer for MacRenderer {
                     }
                     None
                 }
-                AnnotationKind::Highlight { .. } => Some(highlight_layer(anchor)),
-                // Text boxes and freehand paths are protocol level already and land in
-                // 0.2. The daemon accepts them today, so drop rather than fail.
-                AnnotationKind::Textbox { .. } | AnnotationKind::Path { .. } => {
-                    tracing::debug!(%id, "annotation kind not rendered yet");
-                    None
+                AnnotationKind::Highlight { .. } => Some(highlight_layer(anchor, panel_height)),
+                AnnotationKind::Textbox { text } => Some(textbox_layer(
+                    anchor,
+                    text,
+                    panel.screen().info.scale,
+                    panel_height,
+                )),
+                AnnotationKind::Path { points, style } => {
+                    Some(path_layer(points, style.as_ref(), panel_height))
                 }
             };
 
@@ -283,16 +289,10 @@ impl Renderer for MacRenderer {
 }
 
 /// A stroked rectangle over the target region.
-fn highlight_layer(rect: LogicalRect) -> Retained<CALayer> {
+fn highlight_layer(rect: LogicalRect, panel_height: f64) -> Retained<CALayer> {
     let layer = CALayer::new();
-    layer.setFrame(CGRect::new(
-        CGPoint::new(rect.x, rect.y),
-        CGSize::new(rect.width, rect.height),
-    ));
-    let color =
-        NSColor::colorWithSRGBRed_green_blue_alpha(ANNOTATION.0, ANNOTATION.1, ANNOTATION.2, 1.0)
-            .CGColor();
-    layer.setBorderColor(Some(&color));
+    layer.setFrame(to_layer_rect(rect, panel_height));
+    layer.setBorderColor(Some(&srgb(ANNOTATION.0, ANNOTATION.1, ANNOTATION.2, 1.0)));
     layer.setBorderWidth(3.0);
     layer.setCornerRadius(4.0);
     layer
@@ -301,4 +301,201 @@ fn highlight_layer(rect: LogicalRect) -> Retained<CALayer> {
 /// Displays known to the host, for diagnostics.
 pub fn known_screens(mtm: MainThreadMarker) -> Vec<Screen> {
     screens(mtm)
+}
+
+/// Convert a protocol point into the panel's layer coordinates.
+///
+/// The protocol measures from the top left of the display and grows downward, the way a
+/// screenshot reads. A panel's layer tree measures from the bottom left and grows upward.
+/// Every position handed to Core Animation goes through here or [`to_layer_rect`], so the
+/// rule lives in one place rather than in each call site's head.
+fn to_layer_point(point: LogicalPoint, panel_height: f64) -> CGPoint {
+    CGPoint::new(point.x, panel_height - point.y)
+}
+
+/// Convert a protocol rect into the panel's layer coordinates.
+///
+/// A rect is anchored by its top left, so the height comes off as well as the origin.
+/// Forgetting that puts a box one box-height out, which is subtle enough to ship.
+fn to_layer_rect(rect: LogicalRect, panel_height: f64) -> CGRect {
+    CGRect::new(
+        CGPoint::new(rect.x, panel_height - rect.y - rect.height),
+        CGSize::new(rect.width, rect.height),
+    )
+}
+
+/// A block of explanatory text pinned to a region.
+///
+/// Display only, and deliberately not a control. The overlay is click through, so there
+/// is nothing here to focus, select, or type into, and there will not be within 0.x.
+fn textbox_layer(
+    rect: LogicalRect,
+    text: &str,
+    scale: f64,
+    panel_height: f64,
+) -> Retained<CALayer> {
+    const PADDING: f64 = 10.0;
+    const FONT_SIZE: f64 = 13.0;
+
+    let panel = CALayer::new();
+    panel.setFrame(to_layer_rect(rect, panel_height));
+    // Dark and mostly opaque, because the text has to be readable over whatever the user
+    // happens to have on screen, which is not something an annotation gets to choose.
+    panel.setBackgroundColor(Some(&srgb(0.06, 0.07, 0.10, 0.92)));
+    panel.setCornerRadius(6.0);
+    panel.setBorderWidth(1.5);
+    panel.setBorderColor(Some(&srgb(ANNOTATION.0, ANNOTATION.1, ANNOTATION.2, 0.9)));
+
+    let label = CATextLayer::new();
+    label.setFrame(CGRect::new(
+        CGPoint::new(PADDING, PADDING),
+        CGSize::new(
+            (rect.width - PADDING * 2.0).max(1.0),
+            (rect.height - PADDING * 2.0).max(1.0),
+        ),
+    ));
+    unsafe { label.setString(Some(&NSString::from_str(text))) };
+    label.setFontSize(FONT_SIZE);
+    label.setForegroundColor(Some(&srgb(0.93, 0.95, 0.98, 1.0)));
+    label.setWrapped(true);
+    // Without this the text renders at 1x and is then scaled up, which on a Retina panel
+    // looks soft in exactly the way real text does not.
+    label.setContentsScale(scale);
+
+    panel.addSublayer(&label);
+    panel
+}
+
+/// A freehand path.
+fn path_layer(
+    points: &[LogicalPoint],
+    style: Option<&StrokeStyle>,
+    panel_height: f64,
+) -> Retained<CALayer> {
+    let path = CGMutablePath::new();
+    let mut rest = points.iter();
+    if let Some(first) = rest.next() {
+        let start = to_layer_point(*first, panel_height);
+        unsafe {
+            CGMutablePath::move_to_point(Some(&path), std::ptr::null(), start.x, start.y);
+            for point in rest {
+                let point = to_layer_point(*point, panel_height);
+                CGMutablePath::add_line_to_point(Some(&path), std::ptr::null(), point.x, point.y);
+            }
+        }
+    }
+
+    let layer = CAShapeLayer::new();
+    layer.setPath(Some(&path));
+    layer.setStrokeColor(Some(&stroke_color(style)));
+    // A stroked path, not a filled shape. Without this the path closes itself and fills,
+    // which turns a gesture into a blob.
+    layer.setFillColor(None);
+    layer.setLineWidth(style.and_then(|s| s.width).unwrap_or(3.0));
+    layer.setLineCap(unsafe { objc2_quartz_core::kCALineCapRound });
+    layer.setLineJoin(unsafe { objc2_quartz_core::kCALineJoinRound });
+    Retained::into_super(layer)
+}
+
+/// The stroke colour a client asked for, or the annotation default.
+///
+/// A colour that cannot be read falls back to the default rather than to something
+/// arbitrary, because a mark in an unexpected colour is harder to notice than one in the
+/// usual one.
+fn stroke_color(style: Option<&StrokeStyle>) -> Retained<CGColor> {
+    match style.and_then(|s| s.color.as_deref()).and_then(parse_hex) {
+        Some((r, g, b)) => srgb(r, g, b, 1.0),
+        None => srgb(ANNOTATION.0, ANNOTATION.1, ANNOTATION.2, 1.0),
+    }
+}
+
+/// Parse `#RRGGBB` into components in `0.0..=1.0`.
+fn parse_hex(hex: &str) -> Option<(f64, f64, f64)> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let component = |at: usize| -> f64 {
+        f64::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap_or(0)) / 255.0
+    };
+    Some((component(0), component(2), component(4)))
+}
+
+fn srgb(r: f64, g: f64, b: f64, a: f64) -> Retained<CGColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, a).CGColor()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_hex, to_layer_point, to_layer_rect};
+    use arin_protocol::{LogicalPoint, LogicalRect};
+
+    /// A 14 inch panel, which is what the numbers below are sized against.
+    const HEIGHT: f64 = 982.0;
+
+    #[test]
+    fn the_protocol_origin_is_the_top_of_the_panel() {
+        // Protocol y grows downward, so y of zero is the top, which in layer space is
+        // the full height up.
+        assert_eq!(
+            to_layer_point(LogicalPoint::new(10.0, 0.0), HEIGHT).y,
+            HEIGHT
+        );
+        assert_eq!(
+            to_layer_point(LogicalPoint::new(10.0, HEIGHT), HEIGHT).y,
+            0.0
+        );
+    }
+
+    #[test]
+    fn x_is_never_touched() {
+        assert_eq!(
+            to_layer_point(LogicalPoint::new(412.0, 88.0), HEIGHT).x,
+            412.0
+        );
+        assert_eq!(
+            to_layer_rect(LogicalRect::new(412.0, 88.0, 30.0, 20.0), HEIGHT)
+                .origin
+                .x,
+            412.0
+        );
+    }
+
+    #[test]
+    fn a_rect_loses_its_height_as_well_as_its_origin() {
+        // A box asked for at the very top should sit with its top edge at the top, which
+        // means its layer origin is a box height below the ceiling.
+        let top = to_layer_rect(LogicalRect::new(0.0, 0.0, 100.0, 90.0), HEIGHT);
+        assert_eq!(top.origin.y, HEIGHT - 90.0);
+
+        // And one asked for at the bottom sits on the floor.
+        let bottom = to_layer_rect(LogicalRect::new(0.0, HEIGHT - 90.0, 100.0, 90.0), HEIGHT);
+        assert_eq!(bottom.origin.y, 0.0);
+    }
+
+    #[test]
+    fn a_box_near_the_top_lands_above_one_near_the_bottom() {
+        // The property that actually failed on screen, stated directly.
+        let near_top = to_layer_rect(LogicalRect::new(0.0, 40.0, 500.0, 90.0), HEIGHT);
+        let near_bottom = to_layer_rect(LogicalRect::new(0.0, 850.0, 500.0, 90.0), HEIGHT);
+        assert!(
+            near_top.origin.y > near_bottom.origin.y,
+            "a smaller protocol y must render higher up the screen"
+        );
+    }
+
+    #[test]
+    fn a_well_formed_colour_parses() {
+        let (r, g, b) = parse_hex("#FFB020").expect("the annotation default should parse");
+        assert!((r - 1.0).abs() < 1e-9);
+        assert!((g - 0xB0 as f64 / 255.0).abs() < 1e-9);
+        assert!((b - 0x20 as f64 / 255.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn malformed_colours_fall_back_rather_than_guess() {
+        for bad in ["FFB020", "#FFB", "#GGGGGG", "#FFB0200", "", "#"] {
+            assert!(parse_hex(bad).is_none(), "{bad:?} should not parse");
+        }
+    }
 }

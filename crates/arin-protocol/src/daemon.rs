@@ -111,6 +111,11 @@ pub enum InvalidationReason {
     SessionEnd,
     /// The annotation's time to live expired.
     Ttl,
+    /// The user cleared it, from the menu bar or the global hotkey.
+    ///
+    /// Distinct from `session_end` because the client did not ask for it and may want to
+    /// say so. The clear affordance belongs to the user, not to the agent driving.
+    Cleared,
     /// A reason introduced by a newer daemon than this build knows about.
     #[serde(untagged)]
     Unknown(String),

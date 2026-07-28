@@ -18,8 +18,8 @@ only.
   check and a 1MB payload cap, the session and annotation state machine, the `Renderer`,
   `Capture`, and `Resolver` seams, the scroll watcher, and a socket client shared by the
   CLI and the MCP server.
-- `arin-cli`: the `arin` binary, with `daemon`, `point`, `highlight`, `clear`, and
-  `status`. `daemon --headless` runs the whole protocol with no renderer.
+- `arin-cli`: the `arin` binary, with `daemon`, `point`, `highlight`, `annotate`, `draw`,
+  `clear`, and `status`. `daemon --headless` runs the whole protocol with no renderer.
 - `arin-resolve`: the resolver registry. No adapters yet, those land in 0.3.
 - `arin-linux`, `arin-win`, `arin-mcp`: crate scaffolds carrying their documented scope.
 - CI covering the two invariants the architecture rests on: core and the protocol build
@@ -35,14 +35,30 @@ only.
 - `--hold` on `arin point` and `arin highlight`, which keeps the mark up until
   interrupted. Annotations live as long as the session that made them, so a one shot
   command otherwise clears its own mark on the way out.
+- The clear affordance: a menu bar item and a global hotkey, `Cmd+Shift+K`. Either
+  removes every annotation, whoever drew it. A session can only clear its own marks by
+  design, so this is the one route that is the user's rather than an agent's.
 - The orb's five state vocabulary, its flight, and its ember trail. Points now fly to
   their target along a bowed arc, squashing along the direction of travel and trailing
   sparks, then flare and settle into a slow pulse. Idle, thinking, travelling, pointing
   and ending each have their own pulse rate and ember density.
-- ScreenCaptureKit capture on macOS, which is what makes scroll detection live. The
-  filter excludes Arin's own process, so a capture never contains the overlay and the
-  daemon cannot mistake its own drawing for the page moving. A denied Screen Recording
-  permission is reported with what to do about it.
+- ScreenCaptureKit capture on macOS, which is what makes scroll detection live. Frames
+  come back at the display's physical resolution, so a Retina panel is compared at the
+  detail it actually has. A denied Screen Recording permission is reported with what to
+  do about it.
+- The Screen Recording first run flow. Arin prompts for the permission at startup, and
+  because the macOS prompt for this one only offers a route to System Settings rather
+  than granting anything itself, it then watches for the switch to flip and says when
+  capture goes live. A user who answered the prompt on an earlier run gets taken straight
+  to the right Settings pane, since macOS will not ask a second time.
+- `arin permissions`, which reports whether capture actually works rather than whether it
+  is permitted. The two differ: macOS reports a grant immediately, but ScreenCaptureKit
+  will not serve a process that was already running when the grant landed, and the only
+  fix is a restart that nothing else tells you about.
+- Text box and path rendering on macOS, and the `arin annotate` and `arin draw` commands
+  that reach them. A text box is a rounded panel with a tinted border, sized in points so
+  it stays legible on a Retina display. A path is stroked with round caps and joins, and
+  takes an optional colour and width.
 
 ### Changed
 
@@ -61,11 +77,33 @@ only.
   while a mark is small and local.
 - The scroll watcher only captures displays that have something drawn on them, and
   re-baselines around the daemon's own drawing.
+- Protocol coordinates are converted to AppKit's orientation in one tested function
+  rather than by asking Core Animation to flip the panel's layer. `setGeometryFlipped`
+  did not take on the overlay's content view, which drew every annotation at the wrong
+  end of the screen.
+
+### Fixed
+
+- A capture request made from inside ScreenCaptureKit's own completion handler could hang
+  for the full 30 second timeout with no error. The two requests are now made in sequence
+  from the calling thread, which turns a silent hang into an immediate and accurate
+  failure.
+
+### Known gaps
+
+- Only one process can capture at a time. While the daemon runs, a second process asking
+  ScreenCaptureKit for a screenshot has its request dropped without an error, so
+  `arin capture` does not work alongside a live daemon. The daemon is unaffected, and
+  `arin permissions` defers to it rather than reading the failure as a denied permission.
+- A macOS capture contains Arin's own overlay. Both documented ways to exclude it were
+  tried, by window and by application, and neither keeps it out of the frame. Change
+  detection tolerates this rather than depending on the exclusion working, so it is not
+  blocking, but a capture is not a clean shot of the screen underneath.
 
 ### Notes
 
-Points, highlights, and the orb all draw on macOS, and capture is wired to
-ScreenCaptureKit. Still to come before 0.1: text box and path rendering, the menu bar
-item, and the global hotkey.
+0.1 is feature complete. Every annotation kind draws on macOS, capture is wired to
+ScreenCaptureKit with a first run permission flow, and the marks can be cleared from the
+menu bar or a global hotkey.
 
 [Unreleased]: https://github.com/your-org/arin/compare/HEAD

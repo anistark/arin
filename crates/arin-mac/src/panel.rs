@@ -71,16 +71,19 @@ impl Panel {
 
         let bounds = NSRect::new(objc2_foundation::NSPoint::new(0.0, 0.0), screen.frame.size);
         let view = NSView::initWithFrame(NSView::alloc(mtm), bounds);
-        view.setWantsLayer(true);
 
         let root = CALayer::new();
         root.setFrame(bounds);
-        // Protocol coordinates grow downward from the top left, the way a screenshot
-        // reads. Flipping here means every layer position below is already in protocol
-        // space and no call site has to remember to invert y.
-        root.setGeometryFlipped(true);
-        view.setLayer(Some(&root));
 
+        // Assigning the layer before asking for one makes this a layer *hosting* view,
+        // so the layer is ours to keep sublayers on rather than one AppKit may replace.
+        view.setLayer(Some(&root));
+        view.setWantsLayer(true);
+
+        // Deliberately left in AppKit's own orientation, y growing upward from the bottom
+        // left. `setGeometryFlipped(true)` was tried here to make protocol coordinates
+        // land directly and did not take, which put every annotation at the wrong end of
+        // the screen. Inverting y is now arithmetic in `host`, where it can be tested.
         panel.setContentView(Some(&view));
 
         let orb = Orb::new();
@@ -104,7 +107,9 @@ impl Panel {
         self.screen
     }
 
-    /// The layer annotations are added to, in protocol coordinates.
+    /// The layer annotations are added to.
+    ///
+    /// Sublayers are positioned in AppKit coordinates, not protocol ones. Convert first.
     pub fn root(&self) -> &CALayer {
         &self.root
     }

@@ -30,6 +30,10 @@ tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 arin-mac.workspace = true
+# Carbon `RegisterEventHotKey` under the hood for ordinary chords, which needs no
+# permission. Only registered on macOS for now, since it is the only platform with a
+# renderer and the Linux build would otherwise pull in an X11 stack for nothing.
+global-hotkey.workspace = true
 # For the MainThreadMarker that `arin displays` needs before touching AppKit.
 objc2.workspace = true
 

@@ -191,6 +191,32 @@ impl Daemon {
             .collect()
     }
 
+    /// Remove every annotation, whoever owns it.
+    ///
+    /// This is the user's escape hatch rather than a client operation. A session can
+    /// only clear its own marks, by design, so nothing a client can send will take down
+    /// another client's. The person looking at the screen needs a way to say enough, and
+    /// this is it.
+    pub fn clear_everything(&self) -> Vec<Invalidated> {
+        let mut state = self.state.lock().expect("state lock");
+        let doomed: Vec<AnnotationId> = state.annotations.keys().cloned().collect();
+        state.annotations.clear();
+        drop(state);
+
+        if doomed.is_empty() {
+            return Vec::new();
+        }
+        self.mark_drawn();
+
+        if let Err(e) = self.renderer.clear_all() {
+            tracing::warn!(error = %e, "renderer refused a clear");
+        }
+        doomed
+            .into_iter()
+            .map(|id| Invalidated::one(id, InvalidationReason::Cleared))
+            .collect()
+    }
+
     /// Drop annotations whose time to live has run out.
     pub fn expire_annotations(&self) -> Vec<Invalidated> {
         let now = std::time::Instant::now();

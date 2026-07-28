@@ -23,13 +23,24 @@ dispatch2.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
   "NSApplication",
+  "NSButton",
+  "NSCell",
   "NSColor",
+  "NSControl",
+  "NSEvent",
+  "NSImage",
+  "NSMenu",
+  "NSMenuItem",
   "NSGraphics",
   "NSPanel",
   "NSResponder",
   "NSScreen",
+  "NSStatusBar",
+  "NSStatusBarButton",
+  "NSStatusItem",
   "NSView",
   "NSWindow",
+  "NSWorkspace",
 ] }
 objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
 objc2-core-graphics = { workspace = true, features = [
@@ -40,6 +51,7 @@ objc2-core-graphics = { workspace = true, features = [
   "CGImage",
   "CGColorSpace",
   "CGPath",
+  "CGWindow",
 ] }
 objc2-foundation = { workspace = true, features = [
   "NSArray",
@@ -47,6 +59,7 @@ objc2-foundation = { workspace = true, features = [
   "NSDictionary",
   "NSGeometry",
   "NSString",
+  "NSURL",
   "NSValue",
 ] }
 objc2-quartz-core = { workspace = true, features = [
@@ -58,6 +71,8 @@ objc2-quartz-core = { workspace = true, features = [
   "CALayer",
   "CAMediaTiming",
   "CAMediaTimingFunction",
+  "CAShapeLayer",
+  "CATextLayer",
   "CATransaction",
   "CATransform3D",
   "objc2-core-graphics",

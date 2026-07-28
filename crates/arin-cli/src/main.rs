@@ -9,8 +9,12 @@ use arin_core::{
     Capture, Client, Config, Daemon, NoopCapture, NoopRenderer, Renderer, ScrollWatcher, Server,
 };
 use arin_protocol::{
-    Clear, ClientMessage, DaemonMessage, DisplayId, Highlight, LogicalRect, Point,
+    Anchor, Clear, ClientMessage, DaemonMessage, DisplayId, Draw, Highlight, LogicalRect, Point,
+    StrokeStyle, Textbox,
 };
+#[cfg(target_os = "macos")]
+mod hotkey;
+
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,6 +74,38 @@ enum Command {
         target: Target,
     },
 
+    /// Place a block of explanatory text. Display only, never an input.
+    Annotate {
+        /// Left edge in logical points.
+        x: f64,
+        /// Top edge in logical points.
+        y: f64,
+        /// Width in logical points.
+        width: f64,
+        /// Height in logical points.
+        height: f64,
+        /// The text to render.
+        #[arg(long)]
+        text: String,
+        #[command(flatten)]
+        target: Target,
+    },
+
+    /// Draw a freehand path through a list of `x,y` points.
+    Draw {
+        /// Points in logical coordinates, for example `100,200 140,210 180,190`.
+        #[arg(required = true, num_args = 2..)]
+        points: Vec<String>,
+        /// Stroke width in logical points.
+        #[arg(long)]
+        width: Option<f64>,
+        /// Stroke colour as `#RRGGBB`. Omit to let the daemon choose.
+        #[arg(long)]
+        color: Option<String>,
+        #[command(flatten)]
+        target: Target,
+    },
+
     /// Remove annotations.
     Clear {
         /// The annotation to clear. Omit to clear everything in the session.
@@ -82,6 +118,16 @@ enum Command {
     /// List the displays the overlay covers, with the id to pass to `--display`.
     #[cfg(target_os = "macos")]
     Displays,
+
+    /// Report whether screen capture works, and help fix it if it does not.
+    ///
+    /// Exits non-zero when capture is not working, so it can gate a script.
+    #[cfg(target_os = "macos")]
+    Permissions {
+        /// Open the Screen Recording list in System Settings instead of reporting.
+        #[arg(long)]
+        open: bool,
+    },
 
     /// Take one frame and report what came back. Needs Screen Recording.
     #[cfg(target_os = "macos")]
@@ -136,9 +182,26 @@ fn main() -> Result<()> {
         #[cfg(target_os = "macos")]
         Command::Displays => list_displays(),
         #[cfg(target_os = "macos")]
+        Command::Permissions { open } => check_permissions(&config, open),
+        #[cfg(target_os = "macos")]
         Command::Capture { display, probe } => capture_once(display, probe),
         other => block_on(run_client(config, other)),
     }
+}
+
+/// Parse an `x,y` pair from the command line.
+fn parse_point(raw: &str) -> Result<[f64; 2]> {
+    let (x, y) = raw
+        .split_once(',')
+        .with_context(|| format!("{raw:?} is not an `x,y` pair"))?;
+    Ok([
+        x.trim()
+            .parse()
+            .with_context(|| format!("bad x in {raw:?}"))?,
+        y.trim()
+            .parse()
+            .with_context(|| format!("bad y in {raw:?}"))?,
+    ])
 }
 
 fn block_on<F: std::future::Future<Output = Result<()>>>(future: F) -> Result<()> {
@@ -185,11 +248,38 @@ async fn serve(
     capture: Arc<dyn Capture>,
 ) -> Result<()> {
     let daemon = Arc::new(Daemon::new(config, renderer, capture));
+
+    // The menu bar is built before the daemon exists, so the action arrives now rather
+    // than at construction.
+    #[cfg(target_os = "macos")]
+    {
+        let daemon = Arc::clone(&daemon);
+        arin_mac::on_clear(move || {
+            let cleared = daemon.clear_everything();
+            if !cleared.is_empty() {
+                tracing::info!(count = cleared.len(), "cleared from the menu bar");
+            }
+        });
+    }
+
     let server = Server::bind(Arc::clone(&daemon)).context("could not bind the socket")?;
 
     tracing::info!(socket = %server.socket_path().display(), "arin daemon ready");
 
     let watcher = tokio::spawn(watch_for_scrolling(Arc::clone(&daemon)));
+
+    // Held for as long as the daemon runs. Dropping the manager unregisters the chord,
+    // so the binding is tied to the daemon's lifetime rather than leaking past it.
+    #[cfg(target_os = "macos")]
+    let _hotkey = match hotkey::listen(Arc::clone(&daemon)) {
+        Ok(manager) => Some(manager),
+        Err(e) => {
+            // Losing the hotkey costs the user their escape hatch, but the daemon is
+            // still useful without it and refusing to start would be worse.
+            tracing::warn!(error = %e, "clear hotkey unavailable");
+            None
+        }
+    };
 
     tokio::select! {
         result = server.run() => result.context("the socket server stopped")?,
@@ -230,6 +320,58 @@ fn list_displays() -> Result<()> {
             "{}\t{:.0}x{:.0} at {}x",
             info.id, info.logical_size[0], info.logical_size[1], info.scale
         );
+    }
+    Ok(())
+}
+
+/// Report whether screen capture works, and offer the way to fix it.
+///
+/// Separate from `arin status`, which asks whether the daemon is reachable. This asks
+/// something else: a daemon with no permission is running perfectly, it just cannot see
+/// the screen.
+///
+/// Proving the permission means taking a frame, and only one process can do that at a
+/// time. So when the daemon is up it is the authority and this reports what it can check
+/// without capturing, rather than taking its own failure to capture as a denial. Those
+/// two look identical from here and mean opposite things.
+#[cfg(target_os = "macos")]
+fn check_permissions(config: &Config, open: bool) -> Result<()> {
+    if open {
+        if !arin_mac::open_screen_recording_settings() {
+            bail!("could not open System Settings");
+        }
+        println!(
+            "opened System Settings, now {}",
+            arin_mac::SCREEN_RECORDING_HELP
+        );
+        return Ok(());
+    }
+
+    if std::os::unix::net::UnixStream::connect(&config.socket_path).is_ok() {
+        if !arin_mac::screen_recording_granted() {
+            println!("{}", arin_mac::ScreenRecording::Missing.explain());
+            println!("`arin permissions --open` goes straight to the switch");
+            std::process::exit(1);
+        }
+        println!("screen recording is granted");
+        println!(
+            "the daemon is running, and it is the one process that can take a frame. \
+             Its log says on startup whether capture actually works. To prove it from \
+             here, stop the daemon and run this again."
+        );
+        return Ok(());
+    }
+
+    // Capture must never run on the main thread.
+    let state = std::thread::spawn(arin_mac::screen_recording)
+        .join()
+        .map_err(|_| anyhow::anyhow!("the permission check panicked"))?;
+
+    println!("{}", state.explain());
+
+    if state != arin_mac::ScreenRecording::Working {
+        println!("`arin permissions --open` goes straight to the switch");
+        std::process::exit(1);
     }
     Ok(())
 }
@@ -385,13 +527,51 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
             ClientMessage::Highlight(highlight)
         }
 
+        Command::Annotate {
+            x,
+            y,
+            width,
+            height,
+            text,
+            target,
+        } => {
+            hold = target.hold;
+            ClientMessage::Textbox(Textbox::new(
+                Anchor::new(
+                    LogicalRect::new(x, y, width, height),
+                    DisplayId(target.display),
+                ),
+                text,
+            ))
+        }
+
+        Command::Draw {
+            points,
+            width,
+            color,
+            target,
+        } => {
+            hold = target.hold;
+            let path = points
+                .iter()
+                .map(|p| parse_point(p))
+                .collect::<Result<Vec<_>>>()?;
+            let mut draw = Draw::new(DisplayId(target.display), path);
+            if width.is_some() || color.is_some() {
+                draw.style = Some(StrokeStyle { width, color });
+            }
+            ClientMessage::Draw(draw)
+        }
+
         Command::Clear { annotation_id } => ClientMessage::Clear(match annotation_id {
             Some(id) => Clear::one(arin_protocol::AnnotationId::new(id)),
             None => Clear::all(),
         }),
 
         #[cfg(target_os = "macos")]
-        Command::Displays | Command::Capture { .. } => unreachable!("handled above"),
+        Command::Displays | Command::Capture { .. } | Command::Permissions { .. } => {
+            unreachable!("handled above")
+        }
         Command::Daemon { .. } | Command::Status => unreachable!("handled above"),
     };
 

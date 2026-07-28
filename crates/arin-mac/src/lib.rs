@@ -20,9 +20,9 @@
 //!
 //! # Status
 //!
-//! The overlay panel, display enumeration, the orb, and highlight rendering work. Still
-//! to come in 0.1: the particle emitter and bezier flight, ScreenCaptureKit capture and
-//! its permission flow, the menu bar item, and the global hotkey.
+//! Complete for 0.1. The overlay, display enumeration, every annotation kind, the orb
+//! with its flight and ember trail, ScreenCaptureKit capture and its permission flow,
+//! the menu bar item, and the global hotkey all work.
 //!
 //! # Building
 //!
@@ -36,13 +36,20 @@
 mod capture;
 mod display;
 mod host;
+mod menubar;
 mod orb;
 mod panel;
+mod permission;
 
 pub use capture::MacCapture;
 pub use display::Screen;
 pub use host::{MacRenderer, known_screens};
+pub use menubar::{MenuBar, on_clear};
 pub use orb::MINIMUM_FEATURED_SIZE;
+pub use permission::{
+    SCREEN_RECORDING_HELP, ScreenRecording, begin_screen_recording_flow,
+    open_screen_recording_settings, screen_recording, screen_recording_granted,
+};
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -69,7 +76,13 @@ where
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
     let renderer = MacRenderer::install(mtm);
+    // Held for the life of the process. Dropping it takes the icon out of the menu bar.
+    let _menu = MenuBar::install(mtm);
     setup(renderer, MacCapture::default());
+
+    // After the daemon, so the overlay is already usable while the user is off granting
+    // the permission. Returns at once and does its waiting on its own thread.
+    permission::begin_screen_recording_flow();
 
     app.run();
     unreachable!("the AppKit event loop does not return");

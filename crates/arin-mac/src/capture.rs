@@ -17,6 +17,17 @@
 //! scroll by how much of the screen changed, which does not care whether the overlay is
 //! in the frame.
 //!
+//! # One capturing process at a time
+//!
+//! While the overlay daemon runs, a second process asking for a screenshot does not get
+//! one. ScreenCaptureKit releases the completion block without ever calling it, so the
+//! request fails with no error to report. Measured by running `arin capture` against a
+//! live daemon, and against a headless one, which succeeds.
+//!
+//! Nothing in the daemon is affected, since it is the one capturing. It is the diagnostic
+//! commands that cannot take their own frame, so they ask the daemon rather than guessing
+//! from a failure that looks identical to a missing permission.
+//!
 //! # Blocking
 //!
 //! [`arin_core::Capture`] is synchronous and ScreenCaptureKit is not, so this bridges by
@@ -27,14 +38,14 @@
 use arin_core::{Error, Frame, Result};
 use arin_protocol::DisplayId;
 use block2::RcBlock;
-use objc2::AnyThread;
+use objc2::{AnyThread, Message as _};
 use objc2_core_graphics::{CGDataProvider, CGDisplayCopyDisplayMode, CGDisplayMode, CGImage};
 use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{
     SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
 };
 use std::sync::Arc;
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
 /// How long to wait for ScreenCaptureKit before giving up.
@@ -120,43 +131,70 @@ impl arin_core::Capture for MacCapture {
 }
 
 /// Ask ScreenCaptureKit for one frame of a display.
+///
+/// Two round trips, deliberately not nested. The obvious shape is to request the image
+/// from inside the shareable content handler, since that is where the content arrives.
+/// Doing so deadlocks: the handler runs on ScreenCaptureKit's own callback queue, and
+/// asking the framework for more work from inside it never returns whenever another
+/// process is also an active client. It looks fine in isolation, which is what makes it
+/// worth the extra channel: the failure only shows up once the daemon and a second
+/// command are both using capture, and then it presents as a timeout with no error.
 fn capture_display(display: DisplayId, max_edge: Option<u32>) -> Result<Shot> {
+    let content = shareable_content()?;
+
+    // Back on our own thread now, so this is an ordinary call rather than a reentrant one.
+    let (filter, config) = build_filter(&content.0, display.0, max_edge).map_err(Error::Capture)?;
+
     let (tx, rx) = sync_channel::<std::result::Result<Shot, String>>(1);
-    let target = display.0;
-
-    // ScreenCaptureKit hands back the shareable content asynchronously, and the capture
-    // itself is asynchronous again, so the second request is made from inside the first
-    // one's handler.
-    let outer = {
-        let tx = tx.clone();
-        RcBlock::new(
-            move |content: *mut SCShareableContent, error: *mut NSError| {
-                if let Some(message) = error_message(error) {
-                    let _ = tx.send(Err(permission_hint(message)));
-                    return;
-                }
-                match unsafe { content.as_ref() } {
-                    Some(content) => match build_filter(content, target, max_edge) {
-                        Ok((filter, config)) => request_image(&filter, &config, tx.clone()),
-                        Err(e) => {
-                            let _ = tx.send(Err(e));
-                        }
-                    },
-                    None => {
-                        let _ = tx.send(Err("no shareable content returned".into()));
-                    }
-                }
-            },
-        )
-    };
-
-    unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&outer) };
+    request_image(&filter, &config, tx);
 
     match rx.recv_timeout(TIMEOUT) {
         Ok(Ok(shot)) => Ok(shot),
         Ok(Err(message)) => Err(Error::Capture(message)),
+        Err(RecvTimeoutError::Timeout) => Err(Error::Capture(
+            "ScreenCaptureKit did not return an image in time".into(),
+        )),
+        Err(RecvTimeoutError::Disconnected) => Err(Error::Capture(
+            "ScreenCaptureKit dropped the image request without answering".into(),
+        )),
+    }
+}
+
+/// What is on screen, as ScreenCaptureKit sees it.
+///
+/// Wrapped so it can leave the callback queue it arrives on. See [`capture_display`] for
+/// why that matters.
+struct ShareableContent(objc2::rc::Retained<SCShareableContent>);
+
+// SAFETY: an immutable snapshot of the window list with no thread affinity. Nothing here
+// touches AppKit or any main thread only API, and the value is read on exactly one thread
+// after the handler that produced it has returned.
+unsafe impl Send for ShareableContent {}
+
+/// Ask what is shareable, and wait for the answer on the calling thread.
+fn shareable_content() -> Result<ShareableContent> {
+    let (tx, rx) = sync_channel::<std::result::Result<ShareableContent, String>>(1);
+
+    let handler = RcBlock::new(
+        move |content: *mut SCShareableContent, error: *mut NSError| {
+            let result = match error_message(error) {
+                Some(message) => Err(permission_hint(message)),
+                None => match unsafe { content.as_ref() } {
+                    Some(content) => Ok(ShareableContent(content.retain())),
+                    None => Err("no shareable content returned".into()),
+                },
+            };
+            let _ = tx.send(result);
+        },
+    );
+
+    unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
+
+    match rx.recv_timeout(TIMEOUT) {
+        Ok(Ok(content)) => Ok(content),
+        Ok(Err(message)) => Err(Error::Capture(message)),
         Err(_) => Err(Error::Capture(
-            "ScreenCaptureKit did not respond in time".into(),
+            "ScreenCaptureKit did not list the shareable content in time".into(),
         )),
     }
 }
