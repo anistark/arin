@@ -46,10 +46,16 @@ enum Command {
 
     /// Put the orb on a point.
     Point {
-        /// Horizontal position in logical points.
-        x: f64,
-        /// Vertical position in logical points.
-        y: f64,
+        /// Horizontal position in logical points. Omit when using `--at`.
+        x: Option<f64>,
+        /// Vertical position in logical points. Omit when using `--at`.
+        y: Option<f64>,
+        /// A position named relative to the display instead of `x y`.
+        ///
+        /// One of `top-left`, `top`, `top-right`, `left`, `center`, `right`,
+        /// `bottom-left`, `bottom`, `bottom-right`, or a pair like `50%,30%`.
+        #[arg(long, value_name = "POSITION", conflicts_with_all = ["x", "y"])]
+        at: Option<String>,
         /// Short caption to render next to the orb.
         #[arg(long)]
         label: Option<String>,
@@ -133,7 +139,7 @@ enum Command {
     #[cfg(target_os = "macos")]
     Capture {
         /// The display to capture.
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = DisplayId::DEFAULT.0)]
         display: u32,
         /// Report the pixel at a logical point, as `x,y`.
         #[arg(long)]
@@ -144,7 +150,7 @@ enum Command {
 #[derive(Debug, Args)]
 struct Target {
     /// The display to draw on. `arin displays` lists the ids.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = DisplayId::DEFAULT.0)]
     display: u32,
 
     /// Keep the mark on screen until interrupted.
@@ -154,6 +160,29 @@ struct Target {
     /// mark stay up long enough to look at.
     #[arg(long)]
     hold: bool,
+
+    /// Remove the mark after this many seconds.
+    ///
+    /// Seconds here, milliseconds on the wire. Combine with `--hold` to watch a mark
+    /// expire, since otherwise the session ends first and takes it away regardless.
+    #[arg(long, value_name = "SECONDS")]
+    ttl: Option<f64>,
+}
+
+impl Target {
+    /// The time to live in the milliseconds the protocol carries.
+    ///
+    /// Rounds up, so a sub-millisecond TTL asks for the shortest life the wire can
+    /// express rather than zero, which is refused.
+    fn ttl_ms(&self) -> Result<Option<u64>> {
+        let Some(seconds) = self.ttl else {
+            return Ok(None);
+        };
+        if !seconds.is_finite() || seconds <= 0.0 {
+            bail!("--ttl wants a positive number of seconds, got {seconds}");
+        }
+        Ok(Some(((seconds * 1000.0).ceil() as u64).max(1)))
+    }
 }
 
 /// Not `#[tokio::main]` on purpose.
@@ -267,6 +296,7 @@ async fn serve(
     tracing::info!(socket = %server.socket_path().display(), "arin daemon ready");
 
     let watcher = tokio::spawn(watch_for_scrolling(Arc::clone(&daemon)));
+    let expiry = tokio::spawn(expire_annotations(Arc::clone(&daemon)));
 
     // Held for as long as the daemon runs. Dropping the manager unregisters the chord,
     // so the binding is tied to the daemon's lifetime rather than leaking past it.
@@ -287,7 +317,25 @@ async fn serve(
     }
 
     watcher.abort();
+    expiry.abort();
     Ok(())
+}
+
+/// Sweep away annotations whose time to live has run out.
+///
+/// Its own task rather than a step inside the scroll watcher, because that one skips a
+/// tick when nothing is drawn and does a screen capture when something is. Expiry has to
+/// keep its own schedule and costs nothing to run.
+async fn expire_annotations(daemon: Arc<Daemon>) {
+    let mut ticker = tokio::time::interval(daemon.config().expiry_tick);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        ticker.tick().await;
+        for expired in daemon.expire_annotations() {
+            tracing::debug!(?expired, "annotation expired");
+        }
+    }
 }
 
 /// The no-op backends, plus a refusal for any platform without a renderer.
@@ -501,12 +549,21 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
         Command::Point {
             x,
             y,
+            at,
             label,
             target,
         } => {
             hold = target.hold;
-            let mut point = Point::at(x, y, DisplayId(target.display));
+            let display = DisplayId(target.display);
+            let mut point = match (x, y, at) {
+                (Some(x), Some(y), None) => Point::at(x, y, display),
+                (None, None, Some(at)) => Point::named(at, display),
+                // Clap rejects `x` alongside `--at`, so what is left is half a pair or
+                // nothing at all.
+                _ => bail!("point wants `x y`, or `--at <POSITION>`"),
+            };
             point.label = label;
+            point.ttl_ms = target.ttl_ms()?;
             ClientMessage::Point(point)
         }
 
@@ -524,6 +581,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
                 DisplayId(target.display),
             );
             highlight.label = label;
+            highlight.ttl_ms = target.ttl_ms()?;
             ClientMessage::Highlight(highlight)
         }
 
@@ -536,13 +594,16 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
             target,
         } => {
             hold = target.hold;
-            ClientMessage::Textbox(Textbox::new(
-                Anchor::new(
-                    LogicalRect::new(x, y, width, height),
-                    DisplayId(target.display),
-                ),
-                text,
-            ))
+            ClientMessage::Textbox(
+                Textbox::new(
+                    Anchor::new(
+                        LogicalRect::new(x, y, width, height),
+                        DisplayId(target.display),
+                    ),
+                    text,
+                )
+                .with_ttl_ms(target.ttl_ms()?),
+            )
         }
 
         Command::Draw {
@@ -556,7 +617,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
                 .iter()
                 .map(|p| parse_point(p))
                 .collect::<Result<Vec<_>>>()?;
-            let mut draw = Draw::new(DisplayId(target.display), path);
+            let mut draw = Draw::new(DisplayId(target.display), path).with_ttl_ms(target.ttl_ms()?);
             if width.is_some() || color.is_some() {
                 draw.style = Some(StrokeStyle { width, color });
             }
@@ -630,15 +691,34 @@ mod tests {
         let Command::Point {
             x,
             y,
+            at,
             label,
             target,
         } = cli.command
         else {
             panic!("expected point");
         };
-        assert_eq!((x, y), (412.0, 88.0));
+        assert_eq!((x, y), (Some(412.0), Some(88.0)));
+        assert_eq!(at, None);
         assert_eq!(target.display, 1);
         assert_eq!(label.as_deref(), Some("Save"));
+    }
+
+    #[test]
+    fn a_named_position_replaces_the_coordinates() {
+        let cli = Cli::parse_from(["arin", "point", "--at", "top-left"]);
+        let Command::Point { x, y, at, .. } = cli.command else {
+            panic!("expected point");
+        };
+        assert_eq!((x, y), (None, None));
+        assert_eq!(at.as_deref(), Some("top-left"));
+    }
+
+    /// Coordinates and a name are two answers to the same question, so clap refuses them
+    /// together rather than leaving the daemon to pick one.
+    #[test]
+    fn coordinates_and_a_name_cannot_both_be_given() {
+        assert!(Cli::try_parse_from(["arin", "point", "412", "88", "--at", "top-left"]).is_err());
     }
 
     #[test]

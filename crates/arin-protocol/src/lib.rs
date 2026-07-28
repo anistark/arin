@@ -31,6 +31,7 @@ mod daemon;
 mod envelope;
 mod geom;
 mod ids;
+mod position;
 mod validate;
 mod version;
 
@@ -43,6 +44,7 @@ pub use daemon::{Ack, DaemonMessage, ErrorCode, Invalidated, InvalidationReason,
 pub use envelope::Envelope;
 pub use geom::{DisplayId, DisplayInfo, LogicalPoint, LogicalRect};
 pub use ids::{AnnotationId, SessionId};
+pub use position::Position;
 pub use validate::{Validate, ValidationError};
 pub use version::{PROTOCOL_VERSION, Version, VersionParseError};
 

@@ -4,8 +4,9 @@ All notable changes to this project are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Minors
-ship biweekly. 1.0 is the protocol freeze, after which protocol changes are additive
-only.
+ship biweekly, but nothing is tagged before 1.0: 0.x versions are cycle boundaries rather
+than releases, so everything below stays under `[Unreleased]` until `v1.0.0`. 1.0 is the
+protocol freeze, after which protocol changes are additive only.
 
 ## [Unreleased]
 
@@ -59,6 +60,52 @@ only.
   that reach them. A text box is a rounded panel with a tinted border, sized in points so
   it stays legible on a Retina display. A path is stroked with round caps and joins, and
   takes an optional colour and width.
+- Named positions on `point`, as a third target form beside coordinates and a query.
+  `at` takes one of nine names, `top-left` through `bottom-right`, or a percentage pair
+  like `50%,30%`, and the daemon resolves it against the display it was sent to, which is
+  the whole reason it exists: a client that has not taken a screenshot cannot name a
+  coordinate but can still say where it means. `--at` on the CLI, `at` on the MCP tool.
+  Corners resolve a tenth of the way in rather than to the origin, since a mark at the
+  literal corner is clipped by the edge. `"50,30"` without the signs is refused rather
+  than read as percentages, because it is indistinguishable from the coordinates `x` and
+  `y` take and would be wrong by a factor of the display size.
+- Contrast adaptive annotation colour. The daemon samples the region it is about to draw
+  over and keeps the usual amber unless amber genuinely cannot be seen there, at which
+  point it picks from a small palette that never includes blue, since blue belongs to the
+  orb. Scored against the median sample: a region of real interface contains something
+  near black and something near white, so scoring the worst pixel gives every candidate
+  about 1.0 and decides nothing. A colour a client named is never second-guessed, and a
+  capture that fails falls back to the default rather than failing the request. Turn the
+  whole thing off with `adaptive_color` to draw everything in the default and never
+  capture except for scroll detection.
+- Colour is resolved once, in the daemon, and reaches the renderer already decided. The
+  macOS backend no longer parses hex or knows what the default is, so the two platforms
+  still to come cannot drift from it.
+- Time to live, per annotation. `ttl_ms` on `point`, `highlight`, `textbox`, and `draw`,
+  `--ttl` in seconds on the CLI, and `ttl_seconds` on the MCP tools. The daemon sweeps on
+  a timer rather than arming a timer per mark, since the alternative is a task per
+  annotation that has to be cancelled whenever a clear, a scroll, or a session end gets
+  there first. A client's own TTL wins over the configured default, and a zero is refused
+  rather than drawn and swept in the same breath, because at that point it is a unit
+  mistake more often than an intent. The plumbing existed since 0.1 and nothing called it.
+- `arin-mcp`: the MCP server, over stdio, built on `rmcp`. Four tools, `point_at`,
+  `highlight`, `annotate`, and `clear`, named after what an agent is trying to do rather
+  than after the wire message underneath. It opens one session on startup and holds it, so
+  a mark survives across turns of a conversation, and closing the client ends the session
+  and takes the marks with it. Every tool reports back the display's size and scale, which
+  is what an agent working from a screenshot needs in order to send logical points rather
+  than pixels. A daemon refusal is passed through with its own message and wire code
+  intact, since that is what tells a model how to phrase the next call.
+- `DisplayId::DEFAULT`, the display a client fills in when the user named none. The wire
+  contract is unchanged: every positioned message still carries an explicit `display_id`,
+  and the daemon still never substitutes one.
+- Caption rendering for `--label` on points and highlights. The protocol has always
+  carried the field and the daemon has always stored it, but the macOS renderer dropped
+  it, so `arin point 412 88 --label Save` acked and drew an unlabelled orb. A caption is
+  now a dark pill sized to its own text, placed beside the orb or above the region.
+  Placement has a preferred side and a fallback, so a mark near an edge puts its caption
+  on the side with room rather than half off the display, and a label too long to be one
+  truncates instead of running the width of the screen.
 
 ### Changed
 
@@ -77,6 +124,14 @@ only.
   while a mark is small and local.
 - The scroll watcher only captures displays that have something drawn on them, and
   re-baselines around the daemon's own drawing.
+- The README is rewritten around what Arin now is rather than what it was mid-0.1. It
+  gained an install line, the one-line MCP setup, the four tools, and a protocol summary,
+  and lost a status section claiming that capture, the menu bar, the hotkey, and the orb's
+  flight were all still to come. Every command and JSON example in it was replayed against
+  a running daemon.
+- The repository is `github.com/anistark/arin`, set once on the workspace and inherited by
+  every crate. The copyright holder is named. Both were placeholders blocking the
+  crates.io publish in 0.3.
 - The phoenix logo is a new mark: a flat silhouette in a single blue with a soft glow,
   shipped as a transparent PNG. It replaces the gradient SVG pair, so the README header
   no longer animates. The orb is unchanged and stays the on screen primitive.
@@ -87,6 +142,16 @@ only.
 
 ### Fixed
 
+- A downscaled capture reported the area it covered as its own pixel count over the
+  display's backing scale, so a 512 wide frame of a 1512 point display claimed to cover
+  256 points. Anything mapping a rect into that frame landed in the corner, which is where
+  the contrast picker was sampling until this was found. A frame's `logical_size` is now
+  the display's whatever resolution it was recorded at, and its `scale` is its own pixels
+  per point, which is what `width == logical_size[0] * scale` always claimed.
+- An expiring annotation did not count as the daemon changing the screen, so scroll
+  detection compared a frame containing the mark against one without it and read the
+  difference as the page moving. Every other annotation on that display went with it.
+  Only reachable once something actually swept, which nothing did until now.
 - A capture request made from inside ScreenCaptureKit's own completion handler could hang
   for the full 30 second timeout with no error. The two requests are now made in sequence
   from the calling thread, which turns a silent hang into an immediate and accurate
@@ -109,4 +174,4 @@ only.
 ScreenCaptureKit with a first run permission flow, and the marks can be cleared from the
 menu bar or a global hotkey.
 
-[Unreleased]: https://github.com/your-org/arin/compare/HEAD
+[Unreleased]: https://github.com/anistark/arin/commits/main

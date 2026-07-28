@@ -5,7 +5,7 @@
 
 use arin_core::{
     Annotation, Capture, Config, Connection, Daemon, Error, Frame, OrbState, Renderer, Rendering,
-    Resolution, Resolver, Result,
+    Resolution, Resolver, Result, Rgb,
 };
 use arin_protocol::*;
 use futures::future::BoxFuture;
@@ -19,6 +19,8 @@ struct FakeRenderer {
     drawn: Mutex<Vec<AnnotationId>>,
     cleared: Mutex<Vec<AnnotationId>>,
     states: Mutex<Vec<OrbState>>,
+    /// The colour each annotation arrived with, in draw order.
+    colors: Mutex<Vec<Rgb>>,
 }
 
 impl Renderer for FakeRenderer {
@@ -32,6 +34,7 @@ impl Renderer for FakeRenderer {
 
     fn draw(&self, annotation: &Annotation) -> Result<()> {
         self.drawn.lock().unwrap().push(annotation.id.clone());
+        self.colors.lock().unwrap().push(annotation.color);
         Ok(())
     }
 
@@ -457,4 +460,356 @@ async fn a_straight_path_still_produces_a_drawable_anchor() {
     .unwrap();
 
     assert_eq!(daemon.annotation_count(), 1);
+}
+
+// time to live
+
+/// A daemon whose config differs from the harness default.
+fn daemon_with(config: Config) -> (Arc<Daemon>, Arc<FakeRenderer>) {
+    let renderer = Arc::new(FakeRenderer::default());
+    let daemon = Daemon::new(config, renderer.clone(), Arc::new(FakeCapture));
+    (Arc::new(daemon), renderer)
+}
+
+fn expiring_config(default_ttl: Option<std::time::Duration>) -> Config {
+    Config {
+        default_ttl,
+        ..Config::with_socket_path("/tmp/arin-test.sock")
+    }
+}
+
+/// Long enough for a one millisecond ttl to be comfortably past.
+async fn let_it_expire() {
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+}
+
+#[tokio::test]
+async fn a_ttl_expires_the_annotation() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(
+        Point::at(1.0, 1.0, DISPLAY).with_ttl_ms(Some(1)),
+    )))
+    .await
+    .unwrap();
+    assert_eq!(daemon.annotation_count(), 1);
+
+    let_it_expire().await;
+    let expired = daemon.expire_annotations();
+
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].reason, InvalidationReason::Ttl);
+    assert_eq!(daemon.annotation_count(), 0);
+    assert_eq!(renderer.cleared.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_annotation_with_no_ttl_is_never_swept() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+
+    let_it_expire().await;
+    assert!(daemon.expire_annotations().is_empty());
+    assert_eq!(daemon.annotation_count(), 1);
+}
+
+#[tokio::test]
+async fn a_clients_ttl_wins_over_the_daemon_default() {
+    // A default long enough that the sweep below can only be the client's own ttl.
+    let (daemon, _) = daemon_with(expiring_config(Some(std::time::Duration::from_secs(3600))));
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(
+        Point::at(1.0, 1.0, DISPLAY).with_ttl_ms(Some(1)),
+    )))
+    .await
+    .unwrap();
+
+    let_it_expire().await;
+    assert_eq!(daemon.expire_annotations().len(), 1);
+}
+
+#[tokio::test]
+async fn the_default_ttl_applies_when_a_client_asks_for_nothing() {
+    let (daemon, _) = daemon_with(expiring_config(Some(std::time::Duration::from_millis(1))));
+    let mut conn = started(daemon.clone()).await;
+
+    // Every drawing message, since each one has to reach for the default separately.
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(0.0, 0.0, 10.0, 10.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+    conn.handle(wrap(ClientMessage::Textbox(Textbox::new(
+        Anchor::new(LogicalRect::new(0.0, 0.0, 10.0, 10.0), DISPLAY),
+        "text",
+    ))))
+    .await
+    .unwrap();
+    conn.handle(wrap(ClientMessage::Draw(Draw::new(
+        DISPLAY,
+        vec![[0.0, 0.0], [10.0, 10.0]],
+    ))))
+    .await
+    .unwrap();
+
+    let_it_expire().await;
+    assert_eq!(daemon.expire_annotations().len(), 4);
+    assert_eq!(daemon.annotation_count(), 0);
+}
+
+/// The bug this guards: an expiry changes the screen, and scroll detection compares
+/// captures. Without a bumped generation the vanishing mark reads as the page moving and
+/// takes every other annotation on that display with it.
+#[tokio::test]
+async fn expiring_counts_as_the_daemon_changing_the_screen() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(
+        Point::at(1.0, 1.0, DISPLAY).with_ttl_ms(Some(1)),
+    )))
+    .await
+    .unwrap();
+
+    let before = daemon.render_generation();
+    let_it_expire().await;
+    daemon.expire_annotations();
+
+    assert!(
+        daemon.render_generation() > before,
+        "an expiry has to bump the render generation"
+    );
+}
+
+/// A sweep that expires nothing must not claim the screen changed, or scroll detection
+/// re-baselines on every tick and stops noticing real scrolling.
+#[tokio::test]
+async fn a_sweep_that_expires_nothing_changes_nothing() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+
+    let before = daemon.render_generation();
+    assert!(daemon.expire_annotations().is_empty());
+    assert_eq!(daemon.render_generation(), before);
+}
+
+#[tokio::test]
+async fn a_zero_ttl_is_refused_rather_than_drawn_and_removed() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    let error = conn
+        .handle(wrap(ClientMessage::Point(
+            Point::at(1.0, 1.0, DISPLAY).with_ttl_ms(Some(0)),
+        )))
+        .await
+        .expect_err("a zero ttl should be refused");
+
+    assert_eq!(error.to_wire().code, ErrorCode::BadSchema);
+    assert_eq!(daemon.annotation_count(), 0);
+}
+
+// annotation colour
+
+/// A capture that returns a real frame of one flat colour, so the contrast picker has
+/// something to look at. The harness `FakeCapture` deliberately returns a truncated
+/// buffer, which is its own test.
+struct FlatCapture(Rgb);
+
+impl Capture for FlatCapture {
+    fn capture(&self, display: DisplayId) -> Result<Frame> {
+        let (w, h) = (64usize, 64usize);
+        let mut pixels = vec![0u8; w * h * 4];
+        for px in pixels.chunks_exact_mut(4) {
+            px[0] = self.0.b;
+            px[1] = self.0.g;
+            px[2] = self.0.r;
+            px[3] = 255;
+        }
+        Ok(Frame {
+            display,
+            scale: 1.0,
+            logical_size: [1728.0, 1117.0],
+            width: w as u32,
+            height: h as u32,
+            pixels: pixels.into(),
+        })
+    }
+}
+
+fn daemon_over(background: Rgb, config: Config) -> (Arc<Daemon>, Arc<FakeRenderer>) {
+    let renderer = Arc::new(FakeRenderer::default());
+    let daemon = Daemon::new(config, renderer.clone(), Arc::new(FlatCapture(background)));
+    (Arc::new(daemon), renderer)
+}
+
+fn config() -> Config {
+    Config::with_socket_path("/tmp/arin-test.sock")
+}
+
+#[tokio::test]
+async fn a_mark_on_a_dark_screen_keeps_the_default_colour() {
+    let (daemon, renderer) = daemon_over(Rgb::new(0x1E, 0x1E, 0x1E), config());
+    let mut conn = started(daemon).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        renderer.colors.lock().unwrap()[0],
+        arin_core::contrast::DEFAULT
+    );
+}
+
+#[tokio::test]
+async fn a_mark_over_its_own_colour_moves_away_from_it() {
+    // The case a fixed colour cannot survive: the screen is already the mark's colour.
+    let (daemon, renderer) = daemon_over(arin_core::contrast::DEFAULT, config());
+    let mut conn = started(daemon).await;
+
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(0.0, 0.0, 100.0, 100.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    let chosen = renderer.colors.lock().unwrap()[0];
+    assert_ne!(chosen, arin_core::contrast::DEFAULT);
+    assert!(!chosen.is_blue_family(), "{chosen:?} belongs to the orb");
+}
+
+#[tokio::test]
+async fn a_colour_the_client_named_is_not_second_guessed() {
+    // Over a background the picker would certainly move away from.
+    let (daemon, renderer) = daemon_over(arin_core::contrast::DEFAULT, config());
+    let mut conn = started(daemon).await;
+
+    let mut draw = Draw::new(DISPLAY, vec![[0.0, 0.0], [10.0, 10.0]]);
+    draw.style = Some(StrokeStyle {
+        width: None,
+        color: Some("#123456".into()),
+    });
+    conn.handle(wrap(ClientMessage::Draw(draw))).await.unwrap();
+
+    assert_eq!(
+        renderer.colors.lock().unwrap()[0],
+        Rgb::new(0x12, 0x34, 0x56)
+    );
+}
+
+#[tokio::test]
+async fn turning_the_picker_off_always_draws_the_default() {
+    let config = Config {
+        adaptive_color: false,
+        ..config()
+    };
+    // A background the picker would otherwise flee.
+    let (daemon, renderer) = daemon_over(arin_core::contrast::DEFAULT, config);
+    let mut conn = started(daemon).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        renderer.colors.lock().unwrap()[0],
+        arin_core::contrast::DEFAULT
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_colour_falls_back_to_a_chosen_one_not_a_failure() {
+    let (daemon, renderer) = daemon_over(Rgb::new(0x1E, 0x1E, 0x1E), config());
+    let mut conn = started(daemon).await;
+
+    let mut draw = Draw::new(DISPLAY, vec![[0.0, 0.0], [10.0, 10.0]]);
+    draw.style = Some(StrokeStyle {
+        width: None,
+        color: Some("not a colour".into()),
+    });
+    let reply = conn.handle(wrap(ClientMessage::Draw(draw))).await.unwrap();
+
+    assert!(matches!(reply, DaemonMessage::Ack(_)));
+    assert_eq!(
+        renderer.colors.lock().unwrap()[0],
+        arin_core::contrast::DEFAULT
+    );
+}
+
+// named positions
+
+/// The display the fake renderer reports, so a named position has something to land on.
+const FAKE_DISPLAY: [f64; 2] = [1728.0, 1117.0];
+
+#[tokio::test]
+async fn a_named_position_lands_where_it_says() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::named("center", DISPLAY))))
+        .await
+        .unwrap();
+
+    assert_eq!(renderer.drawn.lock().unwrap().len(), 1);
+    assert_eq!(daemon.annotation_count(), 1);
+}
+
+/// Every name has to resolve to somewhere on the display it was sent to. A name that
+/// resolved off screen would ack happily and draw nothing at all.
+#[tokio::test]
+async fn every_name_resolves_onto_the_display() {
+    for name in Position::NAMES {
+        let position = Position::parse(name).expect("a documented name must parse");
+        let at = position.resolve(FAKE_DISPLAY);
+        assert!(
+            (0.0..=FAKE_DISPLAY[0]).contains(&at.x) && (0.0..=FAKE_DISPLAY[1]).contains(&at.y),
+            "{name} resolved to {at:?}, off the display"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_position_nobody_knows_is_refused_rather_than_guessed() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    let err = conn
+        .handle(wrap(ClientMessage::Point(Point::named(
+            "somewhere over there",
+            DISPLAY,
+        ))))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), ErrorCode::BadSchema);
+    assert_eq!(daemon.annotation_count(), 0);
+}
+
+/// The daemon is the one that knows the geometry, so the same name on two displays of
+/// different sizes has to land in different places.
+#[tokio::test]
+async fn a_name_resolves_against_the_display_it_was_sent_to() {
+    let small = Position::parse("bottom-right")
+        .unwrap()
+        .resolve([800.0, 600.0]);
+    let large = Position::parse("bottom-right")
+        .unwrap()
+        .resolve([3840.0, 2160.0]);
+    assert!(large.x > small.x && large.y > small.y);
 }

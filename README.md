@@ -31,60 +31,136 @@ the point: a tool that can only render pixels is safe to leave running, needs no
 Accessibility permission, and is auditable in an afternoon. Agents that need to act
 should compose Arin with a separate actuator.
 
-## Status
+## Install
 
-Pre-release, and honest about it. On macOS the daemon draws: points put the orb on a
-target and highlights outline a region, on a click through overlay that never takes
-focus. Capture, the menu bar item, and the global hotkey are still to come, and the orb
-does not yet fly or trail embers.
+Needs a [Rust toolchain](https://rustup.rs). macOS 14.2 or newer.
 
 ```
-git clone https://github.com/your-org/arin && cd arin
-cargo run --bin arin -- daemon
+git clone https://github.com/anistark/arin && cd arin
+cargo install --path crates/arin-cli
+cargo install --path crates/arin-mcp
 ```
 
-Then from another shell:
+Then start the daemon. It asks for Screen Recording on first run, which it needs to
+notice when the page scrolls under a mark. Nothing is drawn until an agent asks.
 
 ```
-cargo run --bin arin -- displays
-cargo run --bin arin -- point 412 88 --display 1 --label Save --hold
+arin daemon
 ```
-
-`--hold` keeps the mark up until you interrupt it, since annotations live only as long as
-the session that made them. On platforms without a renderer, `daemon --headless` runs the
-whole protocol and draws nothing.
 
 ## Use from an agent
+
+Add it to your MCP client. For Claude Code that is one line:
+
+```
+claude mcp add arin -- arin-mcp
+```
+
+Or, in any client that takes the standard JSON:
+
+```json
+{
+  "mcpServers": {
+    "arin": { "command": "arin-mcp" }
+  }
+}
+```
+
+That exposes four tools. They are named after what an agent is trying to do rather than
+after the message underneath, so a model reaches for the right one without being told.
+
+| Tool | What it does |
+|---|---|
+| `point_at` | Puts the orb on a position, with an optional caption |
+| `highlight` | Outlines a region, with an optional caption |
+| `annotate` | Places a block of explanatory text |
+| `clear` | Removes one mark, or every mark the agent drew |
+
+Every call reports back the display's size and scale, so an agent working from a
+screenshot can convert pixels to logical points without asking twice. Marks live until
+they are cleared, the content scrolls, or the client disconnects. Pass `ttl_seconds` to
+have one remove itself instead.
+
+## Drive it from a shell
+
+The CLI speaks the same protocol an agent would, which makes it the quickest way to see
+what Arin does.
+
+```
+arin displays
+arin point 412 88 --display 1 --label Save --hold
+arin point --at top-right --label "the close button"
+arin highlight 100 200 340 90 --label "the counterargument" --ttl 5
+arin annotate 300 200 320 80 --text "This is where the retry loop lives"
+arin draw 100,200 140,210 180,190 --color '#FF3B30'
+```
+
+`--hold` keeps a mark up until you interrupt it, since annotations live only as long as
+the session that made them and a one-shot command ends its session on the way out.
+`--ttl` takes seconds. On a platform with no renderer yet, `arin daemon --headless` runs
+the whole protocol and draws nothing.
+
+## The protocol
+
+Newline-delimited JSON over a Unix domain socket. The socket is mode 0600 inside a
+directory only its owner can traverse, every connection has its peer credentials checked
+before a byte is read, and there is no network listener.
 
 ```json
 {"v":"0.1","type":"session_start","client_name":"claude-code"}
 {"v":"0.1","type":"point","x":412,"y":88,"display_id":1,"label":"Save"}
+{"v":"0.1","type":"point","at":"top-right","display_id":1,"label":"close"}
 {"v":"0.1","type":"highlight","rect":[100,200,340,90],"display_id":1,"label":"the counterargument"}
+{"v":"0.1","type":"textbox","rect":[300,200,320,80],"display_id":1,"text":"the retry loop"}
+{"v":"0.1","type":"draw","display_id":1,"path":[[100,200],[140,210]],"ttl_ms":5000}
+{"v":"0.1","type":"clear","all":true}
 {"v":"0.1","type":"session_end"}
 ```
 
-Clients that can ground coordinates themselves send them directly. Clients that cannot
-send a natural language query and Arin resolves it with a pluggable grounding model.
+The daemon replies to each with an `ack` carrying the annotation's id and the display it
+landed on, or an `error` naming a machine-readable code. A mark that stops being valid
+comes back as an `invalidated` with a reason: `scroll`, `ttl`, `session_end`, `cleared`,
+or `display_change`.
 
 Every coordinate is a logical point paired with an explicit display. Never physical
 pixels: a Retina screenshot is 2x the logical size, and mixed-DPI multi-monitor setups
 make implicit conversion unrecoverable. Clients working from a screenshot divide by the
 scale reported in the ack.
 
-## Platforms
+A client that has not measured the screen can name a position instead of a coordinate:
+one of `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`,
+`bottom-right`, or a pair like `50%,30%`. The daemon resolves it against the display,
+since the daemon is the one that knows how big the display is. Names are approximate by
+design, so anything needing precision sends coordinates.
+
+Clients that can ground coordinates themselves send them directly. Clients that cannot
+will be able to send a natural language query instead, resolved by a pluggable grounding
+model. That lands in 0.3.
+
+## Status
+
+Pre-release, and honest about it. On macOS everything below works: the overlay is click
+through and never takes focus, all four annotation kinds draw, the orb flies to its
+target and trails embers, capture drives scroll invalidation, and marks can be cleared
+from the menu bar or with `Cmd+Shift+K`.
 
 | Platform | Status |
 |---|---|
-| macOS 14.2+ | draws, 0.1 in progress |
+| macOS 14.2+ | works |
 | Linux, KDE and wlroots | 0.4 |
 | Windows | 0.6 |
 | Linux, GNOME | not supported, no layer shell |
 
+Nothing is tagged before 1.0. The 0.x line ships from `main`.
+
 ## Privacy
 
 Arin has no analytics, no accounts, and no network listener. The daemon binds a Unix
-domain socket and nothing else. The only egress is an optional grounding model call,
+domain socket and nothing else. The only egress will be an optional grounding model call,
 which is explicit and off by default. Local grounding lands in 0.5.
+
+Screen Recording is the only permission Arin asks for, and it is used to notice when
+content moves under a mark. Frames are compared in memory and never leave the machine.
 
 ## License
 

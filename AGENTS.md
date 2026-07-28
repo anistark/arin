@@ -59,10 +59,10 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
 | `arin-protocol` | Message types, schema validation, version negotiation. Pure types, no IO. | no | done for 0.1 |
 | `arin-core` | Daemon. Socket server, auth, session and annotation state machine, anchor model, scroll invalidation loop. Depends on traits only. | no | done for 0.1 |
 | `arin-resolve` | `Resolver` registry and adapters. Not built until 0.3. | no | registry only |
-| `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | panel, orb, point and highlight draw. Capture pending. |
+| `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | done for 0.1 |
 | `arin-linux` | Renderer via wgpu on wlr layer shell. Capture via xdg desktop portal. 0.4. | Linux | empty |
 | `arin-win` | Layered window renderer, DXGI capture. 0.6. | Windows | empty |
-| `arin-mcp` | MCP server binary. Translates MCP tool calls into socket messages. 0.2. | no | tool names only |
+| `arin-mcp` | MCP server binary. Translates MCP tool calls into socket messages. 0.2. | no | four tools over stdio |
 | `arin-cli` | `arin` binary: daemon control, debug commands, scripting client. | no | working |
 
 The `Renderer`, `Capture`, and `Resolver` traits all live in `arin-core`, matching the diagram. `arin-resolve` holds the registry and the adapters that implement `Resolver`, not the trait itself.
@@ -199,14 +199,14 @@ Do not relitigate these without asking.
 
 Do not assume answers. Ask before building past these.
 
-1. **Security model.** Baseline is a 0600 socket in a directory only its owner can traverse, a peer credential check, strict schema validation, and a 1MB payload cap. All of that is implemented. The full threat model, client authentication, annotation provenance, and resolver egress consent are unresolved. This must be settled before the protocol is tagged, because auth shape affects the `session_start` handshake.
+1. **Security model.** Baseline is a 0600 socket in a directory only its owner can traverse, a peer credential check, strict schema validation, and a 1MB payload cap. All of that is implemented. The full threat model, client authentication, annotation provenance, and resolver egress consent are unresolved. This must be settled before the protocol freezes at 1.0, because auth shape affects the `session_start` handshake.
 2. Whether `ack` should stream progress for slow resolves, or clients should poll.
 
 ---
 
 ## Conventions
 
-- Biweekly 0.x releases. SemVer. Tag every cycle even if small.
+- Biweekly 0.x cycles. SemVer. Nothing is tagged before `v1.0.0`, which is the repo's first tag: 0.x versions are cycle boundaries, not releases, and the 0.x line ships from `main`.
 - Protocol changes are additive within a major version. Reserved fields exist so this stays true.
 - Tests: golden JSON tests for protocol and core, runnable headless with no display.
 - Name is kept shallow in code. Binary name and crate prefix reference a single const. Socket path is config driven. A rename should be a day of work, not a migration.
@@ -224,11 +224,11 @@ Do not assume answers. Ask before building past these.
 
 - **Never commit unless explicitly asked. Always use the `/commit-msg` skill to commit and stick to its instructions.**
 - **Follow open source branch naming conventions, and open a branch when starting work on a module or feature.** `feat/<topic>`, `fix/<topic>`, `docs/<topic>`, `refactor/<topic>`, `chore/<topic>`, for example `feat/mac-overlay-panel`. Never work directly on `main`.
-- **Keep the workspace [CHANGELOG.md](CHANGELOG.md) updated.** Follow [SemVer](https://semver.org) and [Keep a Changelog](https://keepachangelog.com) conventions: notable changes land under `[Unreleased]` in the same branch as the change, and the section rolls into a version heading at tag time. Minors ship biweekly. 1.0 is the protocol freeze, after which protocol changes are additive only.
+- **Keep the workspace [CHANGELOG.md](CHANGELOG.md) updated.** Follow [SemVer](https://semver.org) and [Keep a Changelog](https://keepachangelog.com) conventions: notable changes land under `[Unreleased]` in the same branch as the change. Since nothing is tagged before 1.0, that section keeps accumulating across the whole 0.x line and rolls into a `[1.0.0]` heading at the freeze. 1.0 is the protocol freeze, after which protocol changes are additive only.
 
 ## Docs
 
-- **`docs/` holds public-facing docs only**: anything a user of the repo should read, such as the wire protocol once it is tagged, or an operating guide. **Everything else, meaning planning, drafts, research, and internal notes, goes in `plan/`**, which is gitignored and not part of the published repo. Never create internal scratch docs inside the repo proper.
+- **`docs/` holds public-facing docs only**: anything a user of the repo should read, such as the wire protocol once it is published, or an operating guide. **Everything else, meaning planning, drafts, research, and internal notes, goes in `plan/`**, which is gitignored and not part of the published repo. Never create internal scratch docs inside the repo proper.
 
 ## Writing
 

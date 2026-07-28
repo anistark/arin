@@ -10,9 +10,10 @@
 //! than blocking on a round trip, so a busy main thread slows drawing but never stalls
 //! the socket.
 
+use crate::caption;
 use crate::display::{Screen, screens};
 use crate::panel::Panel;
-use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result};
+use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result, Rgb};
 use arin_protocol::{AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect, StrokeStyle};
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::MainThreadMarker;
@@ -25,16 +26,6 @@ use objc2_quartz_core::{CALayer, CAShapeLayer, CATextLayer, CATransaction};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-
-/// Default annotation colour, amber.
-///
-/// The contrast picker that samples the target region and chooses per annotation lands
-/// in 0.2. Until then everything uses the default, which is why blue is reserved.
-const ANNOTATION: (f64, f64, f64) = (
-    0xFF as f64 / 255.0,
-    0xB0 as f64 / 255.0,
-    0x20 as f64 / 255.0,
-);
 
 thread_local! {
     /// Main thread only. Every access happens inside a block dispatched to the main
@@ -176,6 +167,7 @@ impl Renderer for MacRenderer {
         let screen_id = annotation.display_id();
         let anchor = annotation.anchor.screen_rect;
         let kind = annotation.kind.clone();
+        let color = annotation.color;
 
         on_main(move |host, _mtm| {
             let Some(panel) = host.panel_for(screen_id) else {
@@ -183,15 +175,19 @@ impl Renderer for MacRenderer {
                 return;
             };
             let mut host_points: Vec<(AnnotationId, DisplayId)> = Vec::new();
-            let panel_height = panel.screen().info.logical_size[1];
+            let info = panel.screen().info;
+            let panel_size = CGSize::new(info.logical_size[0], info.logical_size[1]);
+            let panel_height = panel_size.height;
+            let scale = info.scale;
 
             let layer = match &kind {
-                AnnotationKind::Point { at, .. } => {
+                AnnotationKind::Point { at, label, .. } => {
+                    let target = to_layer_point(*at, panel_height);
                     let orb = panel.orb_mut();
                     orb.set_visible(true);
                     // Flying rather than teleporting is what makes the orb read as one
                     // thing moving between targets instead of blinking out and back.
-                    let flight = orb.travel_to(to_layer_point(*at, panel_height));
+                    let flight = orb.travel_to(target);
                     host_points.push((id.clone(), screen_id));
                     if !flight.is_zero() {
                         // Land it: back to round, a flare, and the calm pointing pulse.
@@ -201,17 +197,41 @@ impl Renderer for MacRenderer {
                             }
                         });
                     }
-                    None
+                    // The caption appears at the destination rather than riding the arc.
+                    // The orb is what carries the movement, and text sliding across the
+                    // screen is harder to read than text that is already there when the
+                    // orb arrives. It is also what keeps a clear during the flight from
+                    // racing a caption that has not been added yet.
+                    caption::is_drawable(label.as_ref())
+                        .map(|text| caption::beside_orb(text, target, color, panel_size, scale))
                 }
-                AnnotationKind::Highlight { .. } => Some(highlight_layer(anchor, panel_height)),
-                AnnotationKind::Textbox { text } => Some(textbox_layer(
-                    anchor,
-                    text,
-                    panel.screen().info.scale,
-                    panel_height,
-                )),
+                AnnotationKind::Highlight { label } => {
+                    let outline = highlight_layer(anchor, color, panel_height);
+                    match caption::is_drawable(label.as_ref()) {
+                        None => Some(outline),
+                        // `clear` removes one layer per annotation, so an outline and its
+                        // caption are grouped rather than tracked as two entries that
+                        // could come apart.
+                        Some(text) => {
+                            let group = CALayer::new();
+                            group.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), panel_size));
+                            group.addSublayer(&outline);
+                            group.addSublayer(&caption::against_rect(
+                                text,
+                                to_layer_rect(anchor, panel_height),
+                                color,
+                                panel_size,
+                                scale,
+                            ));
+                            Some(group)
+                        }
+                    }
+                }
+                AnnotationKind::Textbox { text } => {
+                    Some(textbox_layer(anchor, text, color, scale, panel_height))
+                }
                 AnnotationKind::Path { points, style } => {
-                    Some(path_layer(points, style.as_ref(), panel_height))
+                    Some(path_layer(points, style.as_ref(), color, panel_height))
                 }
             };
 
@@ -289,10 +309,10 @@ impl Renderer for MacRenderer {
 }
 
 /// A stroked rectangle over the target region.
-fn highlight_layer(rect: LogicalRect, panel_height: f64) -> Retained<CALayer> {
+fn highlight_layer(rect: LogicalRect, color: Rgb, panel_height: f64) -> Retained<CALayer> {
     let layer = CALayer::new();
     layer.setFrame(to_layer_rect(rect, panel_height));
-    layer.setBorderColor(Some(&srgb(ANNOTATION.0, ANNOTATION.1, ANNOTATION.2, 1.0)));
+    layer.setBorderColor(Some(&annotation_color(color, 1.0)));
     layer.setBorderWidth(3.0);
     layer.setCornerRadius(4.0);
     layer
@@ -331,6 +351,7 @@ fn to_layer_rect(rect: LogicalRect, panel_height: f64) -> CGRect {
 fn textbox_layer(
     rect: LogicalRect,
     text: &str,
+    color: Rgb,
     scale: f64,
     panel_height: f64,
 ) -> Retained<CALayer> {
@@ -344,7 +365,7 @@ fn textbox_layer(
     panel.setBackgroundColor(Some(&srgb(0.06, 0.07, 0.10, 0.92)));
     panel.setCornerRadius(6.0);
     panel.setBorderWidth(1.5);
-    panel.setBorderColor(Some(&srgb(ANNOTATION.0, ANNOTATION.1, ANNOTATION.2, 0.9)));
+    panel.setBorderColor(Some(&annotation_color(color, 0.9)));
 
     let label = CATextLayer::new();
     label.setFrame(CGRect::new(
@@ -370,6 +391,7 @@ fn textbox_layer(
 fn path_layer(
     points: &[LogicalPoint],
     style: Option<&StrokeStyle>,
+    color: Rgb,
     panel_height: f64,
 ) -> Retained<CALayer> {
     let path = CGMutablePath::new();
@@ -387,7 +409,7 @@ fn path_layer(
 
     let layer = CAShapeLayer::new();
     layer.setPath(Some(&path));
-    layer.setStrokeColor(Some(&stroke_color(style)));
+    layer.setStrokeColor(Some(&annotation_color(color, 1.0)));
     // A stroked path, not a filled shape. Without this the path closes itself and fills,
     // which turns a gesture into a blob.
     layer.setFillColor(None);
@@ -397,37 +419,23 @@ fn path_layer(
     Retained::into_super(layer)
 }
 
-/// The stroke colour a client asked for, or the annotation default.
+/// A colour the daemon resolved, at some alpha.
 ///
-/// A colour that cannot be read falls back to the default rather than to something
-/// arbitrary, because a mark in an unexpected colour is harder to notice than one in the
-/// usual one.
-fn stroke_color(style: Option<&StrokeStyle>) -> Retained<CGColor> {
-    match style.and_then(|s| s.color.as_deref()).and_then(parse_hex) {
-        Some((r, g, b)) => srgb(r, g, b, 1.0),
-        None => srgb(ANNOTATION.0, ANNOTATION.1, ANNOTATION.2, 1.0),
-    }
+/// Every annotation arrives with a concrete colour already chosen. This crate no longer
+/// has an opinion about palettes, contrast, or what a client asked for: that decision is
+/// the daemon's, so it stays the same on every platform.
+pub(crate) fn annotation_color(color: Rgb, alpha: f64) -> Retained<CGColor> {
+    let (r, g, b) = color.as_unit();
+    srgb(r, g, b, alpha)
 }
 
-/// Parse `#RRGGBB` into components in `0.0..=1.0`.
-fn parse_hex(hex: &str) -> Option<(f64, f64, f64)> {
-    let hex = hex.strip_prefix('#')?;
-    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    let component = |at: usize| -> f64 {
-        f64::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap_or(0)) / 255.0
-    };
-    Some((component(0), component(2), component(4)))
-}
-
-fn srgb(r: f64, g: f64, b: f64, a: f64) -> Retained<CGColor> {
+pub(crate) fn srgb(r: f64, g: f64, b: f64, a: f64) -> Retained<CGColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, a).CGColor()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_hex, to_layer_point, to_layer_rect};
+    use super::{to_layer_point, to_layer_rect};
     use arin_protocol::{LogicalPoint, LogicalRect};
 
     /// A 14 inch panel, which is what the numbers below are sized against.
@@ -482,20 +490,5 @@ mod tests {
             near_top.origin.y > near_bottom.origin.y,
             "a smaller protocol y must render higher up the screen"
         );
-    }
-
-    #[test]
-    fn a_well_formed_colour_parses() {
-        let (r, g, b) = parse_hex("#FFB020").expect("the annotation default should parse");
-        assert!((r - 1.0).abs() < 1e-9);
-        assert!((g - 0xB0 as f64 / 255.0).abs() < 1e-9);
-        assert!((b - 0x20 as f64 / 255.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn malformed_colours_fall_back_rather_than_guess() {
-        for bad in ["FFB020", "#FFB", "#GGGGGG", "#FFB0200", "", "#"] {
-            assert!(parse_hex(bad).is_none(), "{bad:?} should not parse");
-        }
     }
 }

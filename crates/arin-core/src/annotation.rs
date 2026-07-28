@@ -1,5 +1,6 @@
 //! What the daemon is currently showing.
 
+use crate::contrast::{self, Rgb};
 use crate::policy::Rendering;
 use arin_protocol::{Anchor, AnnotationId, DisplayId, LogicalPoint, SessionId, StrokeStyle};
 use std::time::{Duration, Instant};
@@ -19,6 +20,12 @@ pub struct Annotation {
     pub created: Instant,
     /// How long it should live. `None` means until cleared or invalidated.
     pub ttl: Option<Duration>,
+    /// What colour to draw it in.
+    ///
+    /// Always concrete by the time a renderer sees it. The daemon owns this decision, so
+    /// a platform backend never has to know about palettes, contrast, or what a client
+    /// asked for. See [`crate::contrast`].
+    pub color: Rgb,
 }
 
 impl Annotation {
@@ -31,7 +38,15 @@ impl Annotation {
             kind,
             created: Instant::now(),
             ttl: None,
+            color: contrast::DEFAULT,
         }
+    }
+
+    /// Set the colour to draw in.
+    #[must_use]
+    pub fn with_color(mut self, color: Rgb) -> Self {
+        self.color = color;
+        self
     }
 
     /// Set a time to live.

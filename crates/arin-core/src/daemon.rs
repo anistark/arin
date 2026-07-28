@@ -6,6 +6,7 @@
 
 use crate::annotation::{Annotation, AnnotationKind};
 use crate::config::Config;
+use crate::contrast::{self, Rgb};
 use crate::error::{Error, Result};
 use crate::policy::{OrbState, Rendering};
 use crate::session::Session;
@@ -218,6 +219,10 @@ impl Daemon {
     }
 
     /// Drop annotations whose time to live has run out.
+    ///
+    /// Called on a timer. Sweeping rather than arming one timer per annotation, because
+    /// the alternative is a task per mark that has to be cancelled whenever a clear, a
+    /// scroll, or a session end gets there first.
     pub fn expire_annotations(&self) -> Vec<Invalidated> {
         let now = std::time::Instant::now();
         let mut state = self.state.lock().expect("state lock");
@@ -232,13 +237,79 @@ impl Daemon {
         }
         drop(state);
 
+        if doomed.is_empty() {
+            return Vec::new();
+        }
+        // An expiry changes what is on screen just as much as a draw does, so scroll
+        // detection has to re-baseline. Without this the disappearing mark reads as the
+        // page moving and takes every other annotation on that display with it.
+        self.mark_drawn();
+
         doomed
             .into_iter()
             .map(|id| {
-                let _ = self.renderer.clear(&id);
+                if let Err(e) = self.renderer.clear(&id) {
+                    tracing::warn!(%id, error = %e, "renderer refused a clear");
+                }
                 Invalidated::one(id, InvalidationReason::Ttl)
             })
             .collect()
+    }
+
+    /// The colour to draw a region in.
+    ///
+    /// A colour the client named wins outright: it asked for something specific and
+    /// second-guessing it would make the field a suggestion. Otherwise the daemon samples
+    /// what is already on screen there and picks something that will show up against it.
+    ///
+    /// A capture that fails is not an error. Screen Recording may not be granted yet, and
+    /// a mark in the default colour is a far better outcome than a refused request, so
+    /// this falls back quietly and says so once at debug level.
+    fn color_for(&self, asked: Option<&str>, screen: DisplayId, rect: LogicalRect) -> Rgb {
+        if let Some(named) = asked {
+            match Rgb::parse(named) {
+                Some(color) => return color,
+                // Falls through to the adaptive pick rather than to the default, since a
+                // client that cared enough to name a colour is better served by a legible
+                // one than by whatever the palette starts with.
+                None => tracing::debug!(color = named, "unparseable colour, choosing one"),
+            }
+        }
+
+        if !self.config.adaptive_color {
+            return contrast::DEFAULT;
+        }
+
+        match self.capture.capture(screen) {
+            Ok(frame) => {
+                let picked = contrast::pick(&frame, rect);
+                // Logged because it is otherwise unobservable. A screenshot goes through
+                // colour management on the way out, so the pixels that come back are not
+                // the ones asked for and cannot be compared against the palette.
+                tracing::debug!(
+                    color = %picked,
+                    adapted = picked != contrast::DEFAULT,
+                    "chose an annotation colour"
+                );
+                picked
+            }
+            Err(e) => {
+                tracing::debug!(%screen, error = %e, "no frame to sample, using the default colour");
+                contrast::DEFAULT
+            }
+        }
+    }
+
+    /// The time to live a message asked for, or the daemon's default.
+    ///
+    /// A client's `ttl_ms` wins over the configured default, including when the default
+    /// is set and the client wants something shorter. There is deliberately no way to ask
+    /// for "no expiry" against a configured default: the default exists so an operator
+    /// can guarantee marks do not pile up, and a client opting out would defeat it.
+    fn ttl_for(&self, ttl_ms: Option<u64>) -> Option<std::time::Duration> {
+        ttl_ms
+            .map(std::time::Duration::from_millis)
+            .or(self.config.default_ttl)
     }
 
     fn store(&self, annotation: Annotation) -> Result<AnnotationId> {
@@ -312,12 +383,18 @@ impl Connection {
                 let session = self.require_session()?;
                 let anchor = textbox.resolved_anchor()?;
                 let display = self.daemon.display(anchor.display_id)?;
+                let (anchor_display, anchor_rect) = (anchor.display_id, anchor.screen_rect);
                 let annotation = Annotation::new(
                     session,
                     anchor,
                     AnnotationKind::Textbox { text: textbox.text },
                 )
-                .with_ttl(self.daemon.config.default_ttl);
+                .with_ttl(self.daemon.ttl_for(textbox.ttl_ms))
+                .with_color(self.daemon.color_for(
+                    None,
+                    anchor_display,
+                    anchor_rect,
+                ));
                 let id = self.daemon.store(annotation)?;
                 Ok(DaemonMessage::Ack(
                     Ack::annotation(id).with_display(display),
@@ -328,7 +405,10 @@ impl Connection {
                 let session = self.require_session()?;
                 let display = self.daemon.display(draw.display_id)?;
                 let points: Vec<LogicalPoint> = draw.points().collect();
-                let anchor = Anchor::new(bounding_rect(&points), draw.display_id);
+                let bounds = bounding_rect(&points);
+                let display_id = draw.display_id;
+                let asked = draw.style.as_ref().and_then(|s| s.color.clone());
+                let anchor = Anchor::new(bounds, draw.display_id);
                 let annotation = Annotation::new(
                     session,
                     anchor,
@@ -337,7 +417,12 @@ impl Connection {
                         style: draw.style,
                     },
                 )
-                .with_ttl(self.daemon.config.default_ttl);
+                .with_ttl(self.daemon.ttl_for(draw.ttl_ms))
+                .with_color(self.daemon.color_for(
+                    asked.as_deref(),
+                    display_id,
+                    bounds,
+                ));
                 let id = self.daemon.store(annotation)?;
                 Ok(DaemonMessage::Ack(
                     Ack::annotation(id).with_display(display),
@@ -372,6 +457,10 @@ impl Connection {
 
         let (at, rect, confidence) = match point.target()? {
             PointTarget::Coords(at) => (at, None, None),
+            // Resolved here rather than by the client, because the display's size is
+            // something only the daemon knows. That is the whole point of the form: a
+            // client that has not measured the screen can still say where it means.
+            PointTarget::Named(position) => (position.resolve(display.logical_size), None, None),
             PointTarget::Query(query) => {
                 let resolution = self.resolve(query, point.display_id).await?;
                 (
@@ -383,10 +472,8 @@ impl Connection {
         };
 
         let rendering = confidence.map_or(Rendering::Point, Rendering::for_confidence);
-        let anchor = Anchor::new(
-            rect.unwrap_or_else(|| region_around(at, UNCERTAIN_REGION)),
-            point.display_id,
-        );
+        let anchor_rect = rect.unwrap_or_else(|| region_around(at, UNCERTAIN_REGION));
+        let anchor = Anchor::new(anchor_rect, point.display_id);
 
         let annotation = Annotation::new(
             session,
@@ -397,7 +484,8 @@ impl Connection {
                 rendering,
             },
         )
-        .with_ttl(self.daemon.config.default_ttl);
+        .with_ttl(self.daemon.ttl_for(point.ttl_ms))
+        .with_color(self.daemon.color_for(None, point.display_id, anchor_rect));
 
         let id = self.daemon.store(annotation)?;
         self.daemon.renderer.set_orb_state(OrbState::Pointing)?;
@@ -431,7 +519,8 @@ impl Connection {
                 label: highlight.label,
             },
         )
-        .with_ttl(self.daemon.config.default_ttl);
+        .with_ttl(self.daemon.ttl_for(highlight.ttl_ms))
+        .with_color(self.daemon.color_for(None, highlight.display_id, rect));
 
         let id = self.daemon.store(annotation)?;
 

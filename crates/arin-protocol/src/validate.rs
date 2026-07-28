@@ -53,6 +53,31 @@ pub enum ValidationError {
         /// How many points were supplied.
         got: usize,
     },
+
+    /// A named position was not one this daemon knows.
+    #[error("{got:?} is not a position: use a name like `top-left`, or `50%,30%`")]
+    UnknownPosition {
+        /// What was sent, so the client can see what was read.
+        got: String,
+    },
+
+    /// A percentage fell outside the display.
+    ///
+    /// Carries the text rather than the parsed number so that [`ValidationError`] stays
+    /// `Eq`, which every other variant already is and which the wire tests rely on.
+    #[error("{got} is outside the display: a percentage must be between 0% and 100%")]
+    PositionOutOfRange {
+        /// The offending component, as it was written.
+        got: String,
+    },
+
+    /// A time to live was zero.
+    ///
+    /// Its own error rather than a silent clamp, because a zero here is a unit mistake
+    /// often enough that drawing a mark and removing it in the same breath is more likely
+    /// to be a bug than an intent.
+    #[error("ttl_ms must be greater than zero, or omitted to draw until cleared")]
+    ZeroTtl,
 }
 
 impl ValidationError {

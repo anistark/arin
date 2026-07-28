@@ -115,19 +115,51 @@ impl arin_core::Capture for MacCapture {
         // Derived from Core Graphics rather than AppKit. `NSScreen` needs the main
         // thread, capture never runs there, and a scale that silently differs by thread
         // is worse than one that is a little more work to obtain.
-        let scale = geometry(display.0).map_or(1.0, |g| g.scale);
+        let (logical_size, scale) = frame_geometry(shot.width, shot.height, geometry(display.0));
+
         Ok(Frame {
             display,
             scale,
-            logical_size: [
-                f64::from(shot.width) / scale,
-                f64::from(shot.height) / scale,
-            ],
+            logical_size,
             width: shot.width,
             height: shot.height,
             pixels: Arc::from(shot.pixels),
         })
     }
+}
+
+/// What area a shot covers, and at what resolution it recorded it.
+///
+/// `logical_size` is the *display's*, not the shot's. A downscaled frame still shows the
+/// whole display, so the area it covers in logical points is unchanged and only the
+/// detail differs. Dividing the shot's own dimensions by the backing scale instead
+/// describes a frame covering a fraction of the screen, and anything mapping a rect into
+/// that frame lands somewhere else entirely. That is not hypothetical: it is what sent
+/// the contrast picker to the bottom right corner of every downscaled capture.
+///
+/// `scale` is then the frame's own pixels per logical point, which is what the documented
+/// `width == logical_size[0] * scale` actually promises. For a full resolution capture it
+/// equals the backing scale. For a downscaled one it is smaller, and reporting the
+/// backing scale there would misplace anything converted through it.
+fn frame_geometry(shot_width: u32, shot_height: u32, display: Option<Geometry>) -> ([f64; 2], f64) {
+    let Some(geometry) = display else {
+        // Nothing to correct against, so the shot describes itself.
+        return ([f64::from(shot_width), f64::from(shot_height)], 1.0);
+    };
+    if geometry.scale <= 0.0 {
+        return ([f64::from(shot_width), f64::from(shot_height)], 1.0);
+    }
+
+    let logical_size = [
+        geometry.pixel_width as f64 / geometry.scale,
+        geometry.pixel_height as f64 / geometry.scale,
+    ];
+    let scale = if logical_size[0] > 0.0 {
+        f64::from(shot_width) / logical_size[0]
+    } else {
+        geometry.scale
+    };
+    (logical_size, scale)
 }
 
 /// Ask ScreenCaptureKit for one frame of a display.
@@ -386,6 +418,64 @@ fn permission_hint(message: String) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A 14 inch Retina panel: 1512 by 982 points at 2x.
+    const RETINA: super::Geometry = super::Geometry {
+        pixel_width: 3024,
+        pixel_height: 1964,
+        scale: 2.0,
+    };
+
+    /// A frame covers the whole display however few pixels it was recorded with.
+    ///
+    /// The regression: a downscaled shot used to report the area it covered as its own
+    /// pixel count over the backing scale, claiming a 512 wide capture of a 1512 point
+    /// display covered 256 points. Anything mapping a rect through that landed in the
+    /// corner.
+    #[test]
+    fn a_downscaled_frame_still_covers_the_whole_display() {
+        let (logical, scale) = super::frame_geometry(512, 332, Some(RETINA));
+        assert_eq!(logical, [1512.0, 982.0]);
+        // Its own pixels per point, not the panel's 2x.
+        assert!((scale - 512.0 / 1512.0).abs() < 1e-9, "got {scale}");
+    }
+
+    #[test]
+    fn a_full_resolution_frame_reports_the_backing_scale() {
+        let (logical, scale) = super::frame_geometry(3024, 1964, Some(RETINA));
+        assert_eq!(logical, [1512.0, 982.0]);
+        assert!((scale - 2.0).abs() < 1e-9, "got {scale}");
+    }
+
+    /// The invariant `Frame` documents, at both resolutions.
+    #[test]
+    fn width_is_always_the_logical_width_times_the_scale() {
+        for shot in [3024u32, 1024, 512, 256] {
+            let (logical, scale) = super::frame_geometry(shot, 332, Some(RETINA));
+            assert!(
+                (logical[0] * scale - f64::from(shot)).abs() < 1e-6,
+                "{shot} wide broke the invariant"
+            );
+        }
+    }
+
+    #[test]
+    fn a_display_that_cannot_be_measured_lets_the_shot_describe_itself() {
+        let (logical, scale) = super::frame_geometry(800, 600, None);
+        assert_eq!(logical, [800.0, 600.0]);
+        assert_eq!(scale, 1.0);
+    }
+
+    #[test]
+    fn a_nonsense_scale_does_not_divide_by_zero() {
+        let broken = super::Geometry {
+            pixel_width: 100,
+            pixel_height: 100,
+            scale: 0.0,
+        };
+        let (logical, scale) = super::frame_geometry(50, 50, Some(broken));
+        assert!(logical[0].is_finite() && scale.is_finite());
+    }
+
     use super::unpad;
 
     #[test]

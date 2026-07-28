@@ -12,10 +12,25 @@ pub struct Config {
     pub linger: Duration,
     /// How often to check whether content scrolled, during active sessions only.
     pub scroll_tick: Duration,
+    /// How often to sweep for annotations whose time to live has run out.
+    ///
+    /// This is the granularity of a TTL, not its accuracy: a mark asked to live 500ms
+    /// lives 500ms plus up to one tick. Separate from `scroll_tick` because a sweep is a
+    /// walk over a handful of annotations while a scroll check is a screen capture, so
+    /// there is no reason for the cheap one to run at the expensive one's rate.
+    pub expiry_tick: Duration,
     /// Default time to live for an annotation. `None` means it lives until cleared.
+    ///
+    /// A client's own `ttl_ms` overrides this. Set it to put a ceiling on how long any
+    /// mark can sit on screen regardless of what clients ask for.
     pub default_ttl: Option<Duration>,
     /// Reject peers whose effective uid differs from the daemon's.
     pub require_same_uid: bool,
+    /// Sample the target region and pick an annotation colour that contrasts with it.
+    ///
+    /// Costs one capture per positioned annotation. Turn it off to draw everything in the
+    /// default colour and never capture except for scroll detection.
+    pub adaptive_color: bool,
 }
 
 impl Default for Config {
@@ -28,8 +43,13 @@ impl Default for Config {
             // Fast enough that a scroll does not leave a stale mark visible for long,
             // slow enough to stay off the CPU graph.
             scroll_tick: Duration::from_millis(500),
+            // Fine enough that a short TTL is not visibly wrong, coarse enough to be
+            // free. A mark asked to live a second should not linger for a noticeable
+            // fraction of another one.
+            expiry_tick: Duration::from_millis(100),
             default_ttl: None,
             require_same_uid: true,
+            adaptive_color: true,
         }
     }
 }

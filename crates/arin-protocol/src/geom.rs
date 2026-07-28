@@ -12,6 +12,19 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct DisplayId(pub u32);
 
+impl DisplayId {
+    /// What a client uses when the user did not name a display.
+    ///
+    /// Not part of the wire contract, and the daemon never substitutes it: every
+    /// positioned message still carries an explicit `display_id`, because a mixed-DPI
+    /// setup makes an implicit display unrecoverable. This is only what a client fills in
+    /// on the way out, so it lives here rather than being spelled `1` in each of them.
+    ///
+    /// The id macOS gives the main display, which is `1` in practice rather than by
+    /// guarantee. `arin displays` lists what a machine actually has.
+    pub const DEFAULT: Self = Self(1);
+}
+
 impl std::fmt::Display for DisplayId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

@@ -196,6 +196,41 @@ mod compatibility {
         assert!(!msg.version.is_compatible_with(PROTOCOL_VERSION));
     }
 
+    /// A client built before ttl existed sends no such field, and its messages have to
+    /// keep parsing. The reverse matters too: a message with no ttl must not start
+    /// serialising one, or every pinned example above changes shape.
+    #[test]
+    fn a_ttl_is_optional_in_both_directions() {
+        let parsed: Envelope<ClientMessage> =
+            serde_json::from_str(r#"{"v":"0.1","type":"point","x":1,"y":2,"display_id":1}"#)
+                .expect("a point without a ttl must still parse");
+        let ClientMessage::Point(point) = parsed.body else {
+            panic!("expected a point");
+        };
+        assert_eq!(point.ttl_ms, None);
+
+        let json = serde_json::to_string(&Point::at(1.0, 2.0, DisplayId(1))).unwrap();
+        assert!(!json.contains("ttl_ms"), "got {json}");
+    }
+
+    /// A named position must go over the wire as a field, not be resolved client side,
+    /// since the client is exactly the party that does not know the display size.
+    #[test]
+    fn a_named_position_survives_the_wire() {
+        let json = serde_json::to_string(&Point::named("50%,30%", DisplayId(1))).unwrap();
+        assert!(json.contains(r#""at":"50%,30%""#), "got {json}");
+
+        let parsed: Envelope<ClientMessage> = serde_json::from_str(
+            r#"{"v":"0.1","type":"point","at":"bottom-right","display_id":1}"#,
+        )
+        .expect("a named position must parse");
+        let ClientMessage::Point(point) = parsed.body else {
+            panic!("expected a point");
+        };
+        assert_eq!(point.at.as_deref(), Some("bottom-right"));
+        assert_eq!(point.x, None);
+    }
+
     #[test]
     fn an_unknown_type_is_an_error_not_a_panic() {
         let parsed: Result<Envelope<ClientMessage>, _> =
@@ -212,9 +247,11 @@ mod validation {
         let neither = Point {
             x: None,
             y: None,
+            at: None,
             query: None,
             display_id: DisplayId(1),
             label: None,
+            ttl_ms: None,
         };
         assert!(matches!(
             neither.validate(),
@@ -224,9 +261,11 @@ mod validation {
         let both = Point {
             x: Some(1.0),
             y: Some(2.0),
+            at: None,
             query: Some("the Save button".into()),
             display_id: DisplayId(1),
             label: None,
+            ttl_ms: None,
         };
         assert!(matches!(
             both.validate(),
@@ -236,9 +275,11 @@ mod validation {
         let half = Point {
             x: Some(1.0),
             y: None,
+            at: None,
             query: None,
             display_id: DisplayId(1),
             label: None,
+            ttl_ms: None,
         };
         assert!(matches!(
             half.validate(),
@@ -287,5 +328,89 @@ mod validation {
     fn every_validation_failure_is_a_schema_error() {
         let err = Clear::default().validate().unwrap_err();
         assert_eq!(err.code(), ErrorCode::BadSchema);
+    }
+
+    /// A zero here is a unit mistake far more often than an intent, so it is refused
+    /// rather than drawn and swept away in the same breath.
+    #[test]
+    fn a_zero_ttl_is_refused_on_every_drawing_message() {
+        assert!(matches!(
+            Point::at(1.0, 2.0, DisplayId(1))
+                .with_ttl_ms(Some(0))
+                .validate(),
+            Err(ValidationError::ZeroTtl)
+        ));
+        assert!(matches!(
+            Highlight::over(LogicalRect::new(0.0, 0.0, 10.0, 10.0), DisplayId(1))
+                .with_ttl_ms(Some(0))
+                .validate(),
+            Err(ValidationError::ZeroTtl)
+        ));
+        assert!(matches!(
+            Textbox::new(
+                Anchor::new(LogicalRect::new(0.0, 0.0, 10.0, 10.0), DisplayId(1)),
+                "text"
+            )
+            .with_ttl_ms(Some(0))
+            .validate(),
+            Err(ValidationError::ZeroTtl)
+        ));
+        assert!(matches!(
+            Draw::new(DisplayId(1), vec![[0.0, 0.0], [1.0, 1.0]])
+                .with_ttl_ms(Some(0))
+                .validate(),
+            Err(ValidationError::ZeroTtl)
+        ));
+    }
+
+    /// The third target form, alongside coordinates and a query.
+    #[test]
+    fn a_named_position_is_a_target_in_its_own_right() {
+        let point = Point::named("top-left", DisplayId(1));
+        assert!(point.validate().is_ok());
+        let Ok(PointTarget::Named(position)) = point.target() else {
+            panic!("expected a named target");
+        };
+        // Resolved against a display, which is the daemon's job.
+        let at = position.resolve([1000.0, 500.0]);
+        assert!(at.x > 0.0 && at.x < 500.0 && at.y > 0.0 && at.y < 250.0);
+    }
+
+    #[test]
+    fn a_position_and_coordinates_together_are_refused() {
+        let mut point = Point::at(1.0, 2.0, DisplayId(1));
+        point.at = Some("top-left".into());
+        assert!(matches!(
+            point.validate(),
+            Err(ValidationError::AmbiguousTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn a_position_and_a_query_together_are_refused() {
+        let mut point = Point::named("top-left", DisplayId(1));
+        point.query = Some("the Save button".into());
+        assert!(matches!(
+            point.validate(),
+            Err(ValidationError::AmbiguousTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn an_unknown_position_is_a_schema_error_naming_what_was_sent() {
+        let point = Point::named("north-by-northwest", DisplayId(1));
+        let err = point.validate().unwrap_err();
+        assert_eq!(err.code(), ErrorCode::BadSchema);
+        assert!(err.to_string().contains("north-by-northwest"), "{err}");
+    }
+
+    #[test]
+    fn a_positive_ttl_is_accepted() {
+        assert!(
+            Point::at(1.0, 2.0, DisplayId(1))
+                .with_ttl_ms(Some(1))
+                .validate()
+                .is_ok()
+        );
     }
 }

@@ -69,7 +69,10 @@ mod color {
 }
 
 /// Diameter of the halo in logical points. Everything else is a fraction of this.
-const HALO: f64 = 72.0;
+///
+/// Visible to the crate because a caption has to clear the orb it labels, and the orb is
+/// the only thing that knows how big it is.
+pub(crate) const HALO: f64 = 72.0;
 const RING: f64 = 34.0;
 const CORE: f64 = 14.0;
 

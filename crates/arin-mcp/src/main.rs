@@ -4,6 +4,8 @@
 //! connects to the daemon's Unix socket and forwards.
 
 use anyhow::{Context, Result};
+use rmcp::ServiceExt;
+use rmcp::transport::stdio;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,9 +31,14 @@ async fn main() -> Result<()> {
 
     tracing::info!(%session, tools = ?arin_mcp::tools::ALL, "connected to the daemon");
 
-    anyhow::bail!(
-        "the MCP server binding is not implemented yet; it lands in 0.2 along with the \
-         {} tools listed above",
-        arin_mcp::tools::ALL.len()
-    )
+    // Runs until the client closes stdin, which is how an MCP client says it is done.
+    // Ending here drops the session, and the daemon clears whatever it drew shortly
+    // after, so a client going away does not leave marks on the user's screen.
+    let service = arin_mcp::Arin::new(client)
+        .serve(stdio())
+        .await
+        .context("could not start the MCP server on stdio")?;
+
+    service.waiting().await.context("the MCP server stopped")?;
+    Ok(())
 }

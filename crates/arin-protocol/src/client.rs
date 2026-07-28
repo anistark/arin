@@ -3,11 +3,24 @@
 use crate::anchor::Anchor;
 use crate::geom::{DisplayId, LogicalPoint, LogicalRect};
 use crate::ids::AnnotationId;
+use crate::position::Position;
 use crate::validate::{Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Check a time to live, which every drawing message carries in the same form.
+///
+/// Milliseconds rather than seconds so the wire never has to carry a fraction, and an
+/// integer so it never has to carry a NaN. Absent means the mark lives until it is
+/// cleared or invalidated, which is what the daemon does by default.
+fn validate_ttl(ttl_ms: Option<u64>) -> Result<(), ValidationError> {
+    match ttl_ms {
+        Some(0) => Err(ValidationError::ZeroTtl),
+        _ => Ok(()),
+    }
 }
 
 /// Anything a client can send.
@@ -74,14 +87,25 @@ pub struct Point {
     /// Vertical position in logical points. Paired with `x`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
+    /// A position named relative to the display, such as `top-left` or `50%,30%`.
+    ///
+    /// For clients that have not measured the screen and so cannot name a coordinate.
+    /// Resolved by the daemon, which is the only party that knows the geometry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
     /// Natural language description of the target, resolved by the daemon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
-    /// The display the coordinates or query apply to.
+    /// The display the coordinates, position, or query apply to.
     pub display_id: DisplayId,
     /// Short caption rendered next to the orb.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// How long the mark should live, in milliseconds.
+    ///
+    /// Omit to draw until cleared, invalidated, or the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
 }
 
 /// Which form of [`Point`] a client sent.
@@ -89,6 +113,8 @@ pub struct Point {
 pub enum PointTarget<'a> {
     /// The client did its own grounding.
     Coords(LogicalPoint),
+    /// A position relative to the display, which only the daemon can turn into a point.
+    Named(Position),
     /// The daemon must resolve this.
     Query(&'a str),
 }
@@ -99,9 +125,11 @@ impl Point {
         Self {
             x: Some(x),
             y: Some(y),
+            at: None,
             query: None,
             display_id,
             label: None,
+            ttl_ms: None,
         }
     }
 
@@ -110,9 +138,24 @@ impl Point {
         Self {
             x: None,
             y: None,
+            at: None,
             query: Some(query.into()),
             display_id,
             label: None,
+            ttl_ms: None,
+        }
+    }
+
+    /// At a position named relative to the display, such as `top-left` or `50%,30%`.
+    pub fn named(at: impl Into<String>, display_id: DisplayId) -> Self {
+        Self {
+            x: None,
+            y: None,
+            at: Some(at.into()),
+            query: None,
+            display_id,
+            label: None,
+            ttl_ms: None,
         }
     }
 
@@ -123,23 +166,64 @@ impl Point {
         self
     }
 
+    /// Set how long the mark lives, in milliseconds.
+    #[must_use]
+    pub fn with_ttl_ms(mut self, ttl_ms: Option<u64>) -> Self {
+        self.ttl_ms = ttl_ms;
+        self
+    }
+
     /// Which form was sent.
+    ///
+    /// Exactly one of the three. Half a coordinate pair, or two forms at once, is an
+    /// error rather than a guess: every one of those is a client bug, and drawing
+    /// somewhere plausible would hide it.
     pub fn target(&self) -> Result<PointTarget<'_>, ValidationError> {
-        const EXPECTED: &str = "x and y, or query";
-        match (self.x, self.y, self.query.as_deref()) {
-            (Some(x), Some(y), None) => {
+        const EXPECTED: &str = "x and y, or at, or query";
+
+        let coords = self.x.is_some() || self.y.is_some();
+        let named = self.at.is_some();
+        let queried = self.query.is_some();
+
+        match (coords, named, queried) {
+            (false, false, false) => {
+                return Err(ValidationError::MissingTarget {
+                    message: "point",
+                    expected: EXPECTED,
+                });
+            }
+            // More than one form supplied.
+            (true, true, _) | (true, _, true) | (_, true, true) => {
+                return Err(ValidationError::AmbiguousTarget {
+                    message: "point",
+                    expected: EXPECTED,
+                });
+            }
+            _ => {}
+        }
+
+        if let Some(at) = self.at.as_deref() {
+            return Position::parse(at).map(PointTarget::Named);
+        }
+
+        if let Some(query) = self.query.as_deref() {
+            return if query.trim().is_empty() {
+                Err(ValidationError::Empty { field: "query" })
+            } else {
+                Ok(PointTarget::Query(query))
+            };
+        }
+
+        match (self.x, self.y) {
+            (Some(x), Some(y)) => {
                 let p = LogicalPoint::new(x, y);
                 if !p.is_finite() {
                     return Err(ValidationError::NonFiniteCoordinate { field: "x, y" });
                 }
                 Ok(PointTarget::Coords(p))
             }
-            (None, None, Some(q)) if !q.trim().is_empty() => Ok(PointTarget::Query(q)),
-            (None, None, Some(_)) => Err(ValidationError::Empty { field: "query" }),
-            (None, None, None) => Err(ValidationError::MissingTarget {
-                message: "point",
-                expected: EXPECTED,
-            }),
+            // Half a pair. Guessing the other half would put the mark somewhere the
+            // client never asked for.
             _ => Err(ValidationError::AmbiguousTarget {
                 message: "point",
                 expected: EXPECTED,
@@ -150,6 +234,7 @@ impl Point {
 
 impl Validate for Point {
     fn validate(&self) -> Result<(), ValidationError> {
+        validate_ttl(self.ttl_ms)?;
         self.target().map(|_| ())
     }
 }
@@ -168,6 +253,11 @@ pub struct Highlight {
     /// Short caption rendered against the region.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// How long the mark should live, in milliseconds.
+    ///
+    /// Omit to draw until cleared, invalidated, or the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
 }
 
 /// Which form of [`Highlight`] a client sent.
@@ -187,6 +277,7 @@ impl Highlight {
             query: None,
             display_id,
             label: None,
+            ttl_ms: None,
         }
     }
 
@@ -197,6 +288,7 @@ impl Highlight {
             query: Some(query.into()),
             display_id,
             label: None,
+            ttl_ms: None,
         }
     }
 
@@ -204,6 +296,13 @@ impl Highlight {
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    /// Set how long the mark lives, in milliseconds.
+    #[must_use]
+    pub fn with_ttl_ms(mut self, ttl_ms: Option<u64>) -> Self {
+        self.ttl_ms = ttl_ms;
         self
     }
 
@@ -233,6 +332,7 @@ impl Highlight {
 
 impl Validate for Highlight {
     fn validate(&self) -> Result<(), ValidationError> {
+        validate_ttl(self.ttl_ms)?;
         self.target().map(|_| ())
     }
 }
@@ -254,6 +354,11 @@ pub struct Textbox {
     pub display_id: Option<DisplayId>,
     /// The text to render.
     pub text: String,
+    /// How long the box should live, in milliseconds.
+    ///
+    /// Omit to draw until cleared, invalidated, or the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
 }
 
 impl Textbox {
@@ -264,7 +369,15 @@ impl Textbox {
             rect: None,
             display_id: None,
             text: text.into(),
+            ttl_ms: None,
         }
+    }
+
+    /// Set how long the box lives, in milliseconds.
+    #[must_use]
+    pub fn with_ttl_ms(mut self, ttl_ms: Option<u64>) -> Self {
+        self.ttl_ms = ttl_ms;
+        self
     }
 
     /// The anchor, whichever form was sent.
@@ -299,6 +412,7 @@ impl Textbox {
 
 impl Validate for Textbox {
     fn validate(&self) -> Result<(), ValidationError> {
+        validate_ttl(self.ttl_ms)?;
         if self.text.trim().is_empty() {
             return Err(ValidationError::Empty { field: "text" });
         }
@@ -316,6 +430,11 @@ pub struct Draw {
     /// Stroke appearance. Daemon defaults apply when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<StrokeStyle>,
+    /// How long the path should live, in milliseconds.
+    ///
+    /// Omit to draw until cleared, invalidated, or the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
 }
 
 impl Draw {
@@ -325,7 +444,15 @@ impl Draw {
             display_id,
             path,
             style: None,
+            ttl_ms: None,
         }
+    }
+
+    /// Set how long the path lives, in milliseconds.
+    #[must_use]
+    pub fn with_ttl_ms(mut self, ttl_ms: Option<u64>) -> Self {
+        self.ttl_ms = ttl_ms;
+        self
     }
 
     /// The path as logical points.
@@ -336,6 +463,7 @@ impl Draw {
 
 impl Validate for Draw {
     fn validate(&self) -> Result<(), ValidationError> {
+        validate_ttl(self.ttl_ms)?;
         if self.path.len() < 2 {
             return Err(ValidationError::PathTooShort {
                 got: self.path.len(),
