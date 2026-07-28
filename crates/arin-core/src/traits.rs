@@ -8,7 +8,6 @@ use crate::error::Result;
 use crate::policy::OrbState;
 use arin_protocol::{AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect};
 use futures::future::BoxFuture;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Draws on the screen.
@@ -62,33 +61,11 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// A cheap fingerprint for scroll detection.
+    /// Summarise the frame for change detection.
     ///
-    /// Samples a coarse grid rather than hashing every pixel: this runs on a 500ms tick
-    /// for the whole duration of a session, so it has to stay close to free. It detects
-    /// that content moved, not what moved.
-    pub fn fingerprint(&self) -> u64 {
-        const GRID: u32 = 64;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.width.hash(&mut hasher);
-        self.height.hash(&mut hasher);
-
-        if self.width == 0 || self.height == 0 {
-            return hasher.finish();
-        }
-
-        let step_x = (self.width / GRID).max(1);
-        let step_y = (self.height / GRID).max(1);
-        for y in (0..self.height).step_by(step_y as usize) {
-            for x in (0..self.width).step_by(step_x as usize) {
-                let idx = ((y as usize * self.width as usize) + x as usize) * 4;
-                // A truncated frame is a capture bug, not a reason to panic on a timer.
-                if let Some(px) = self.pixels.get(idx..idx + 4) {
-                    px.hash(&mut hasher);
-                }
-            }
-        }
-        hasher.finish()
+    /// See [`crate::signature`] for why this is a tolerant summary rather than a hash.
+    pub fn signature(&self) -> crate::signature::Signature {
+        crate::signature::Signature::of(self)
     }
 }
 
@@ -135,42 +112,4 @@ pub struct Resolution {
     pub rect: Option<LogicalRect>,
     /// How sure the model was, in `0.0..=1.0`.
     pub confidence: f64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn frame(pixels: Vec<u8>, width: u32, height: u32) -> Frame {
-        Frame {
-            display: DisplayId(1),
-            scale: 2.0,
-            logical_size: [width as f64 / 2.0, height as f64 / 2.0],
-            width,
-            height,
-            pixels: pixels.into(),
-        }
-    }
-
-    #[test]
-    fn identical_frames_fingerprint_alike() {
-        let a = frame(vec![7; 128 * 128 * 4], 128, 128);
-        let b = frame(vec![7; 128 * 128 * 4], 128, 128);
-        assert_eq!(a.fingerprint(), b.fingerprint());
-    }
-
-    #[test]
-    fn changed_content_changes_the_fingerprint() {
-        let a = frame(vec![7; 128 * 128 * 4], 128, 128);
-        let mut shifted = vec![7u8; 128 * 128 * 4];
-        shifted[..128 * 40 * 4].fill(200);
-        let b = frame(shifted, 128, 128);
-        assert_ne!(a.fingerprint(), b.fingerprint());
-    }
-
-    #[test]
-    fn a_truncated_frame_does_not_panic() {
-        let short = frame(vec![0; 16], 128, 128);
-        let _ = short.fingerprint();
-    }
 }

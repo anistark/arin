@@ -59,7 +59,7 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
 | `arin-protocol` | Message types, schema validation, version negotiation. Pure types, no IO. | no | done for 0.1 |
 | `arin-core` | Daemon. Socket server, auth, session and annotation state machine, anchor model, scroll invalidation loop. Depends on traits only. | no | done for 0.1 |
 | `arin-resolve` | `Resolver` registry and adapters. Not built until 0.3. | no | registry only |
-| `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | scaffold |
+| `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | panel, orb, point and highlight draw. Capture pending. |
 | `arin-linux` | Renderer via wgpu on wlr layer shell. Capture via xdg desktop portal. 0.4. | Linux | empty |
 | `arin-win` | Layered window renderer, DXGI capture. 0.6. | Windows | empty |
 | `arin-mcp` | MCP server binary. Translates MCP tool calls into socket messages. 0.2. | no | tool names only |

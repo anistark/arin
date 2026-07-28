@@ -34,6 +34,7 @@ pub mod policy;
 pub mod scroll;
 pub mod server;
 pub mod session;
+pub mod signature;
 pub mod traits;
 
 pub use annotation::{Annotation, AnnotationKind};
@@ -46,6 +47,7 @@ pub use policy::{OrbState, Rendering};
 pub use scroll::ScrollWatcher;
 pub use server::Server;
 pub use session::Session;
+pub use signature::Signature;
 pub use traits::{Capture, Frame, Renderer, Resolution, Resolver};
 
 /// The product name, in the one place it is spelled.

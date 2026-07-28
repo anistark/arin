@@ -30,6 +30,8 @@ tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 arin-mac.workspace = true
+# For the MainThreadMarker that `arin displays` needs before touching AppKit.
+objc2.workspace = true
 
 [lints]
 workspace = true

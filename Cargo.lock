@@ -85,6 +85,7 @@ dependencies = [
  "arin-mac",
  "arin-protocol",
  "clap",
+ "objc2",
  "tokio",
  "tracing",
  "tracing-subscriber",

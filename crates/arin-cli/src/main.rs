@@ -78,17 +78,44 @@ enum Command {
 
     /// Report whether the daemon is reachable.
     Status,
+
+    /// List the displays the overlay covers, with the id to pass to `--display`.
+    #[cfg(target_os = "macos")]
+    Displays,
+
+    /// Take one frame and report what came back. Needs Screen Recording.
+    #[cfg(target_os = "macos")]
+    Capture {
+        /// The display to capture.
+        #[arg(long, default_value_t = 1)]
+        display: u32,
+        /// Report the pixel at a logical point, as `x,y`.
+        #[arg(long)]
+        probe: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
 struct Target {
-    /// The display to draw on.
+    /// The display to draw on. `arin displays` lists the ids.
     #[arg(long, default_value_t = 1)]
     display: u32,
+
+    /// Keep the mark on screen until interrupted.
+    ///
+    /// Annotations live as long as the session that made them, and a one-shot command
+    /// ends its session the moment it exits. Holding the connection open is what makes a
+    /// mark stay up long enough to look at.
+    #[arg(long)]
+    hold: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Not `#[tokio::main]` on purpose.
+///
+/// AppKit owns the main thread, so on macOS the daemon runs on a worker and the main
+/// thread belongs to the overlay's event loop. Every other path builds its own runtime
+/// here instead.
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     tracing_subscriber::fmt()
@@ -105,14 +132,58 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Command::Daemon { headless } => run_daemon(config, headless).await,
-        other => run_client(config, other).await,
+        Command::Daemon { headless } => start_daemon(config, headless),
+        #[cfg(target_os = "macos")]
+        Command::Displays => list_displays(),
+        #[cfg(target_os = "macos")]
+        Command::Capture { display, probe } => capture_once(display, probe),
+        other => block_on(run_client(config, other)),
     }
 }
 
+fn block_on<F: std::future::Future<Output = Result<()>>>(future: F) -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("could not start the async runtime")?
+        .block_on(future)
+}
+
 // daemon
-async fn run_daemon(config: Config, headless: bool) -> Result<()> {
+
+/// Start the daemon, taking over the main thread first where the platform demands it.
+fn start_daemon(config: Config, headless: bool) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if !headless {
+        // Diverges: the AppKit event loop runs until the process exits, so the daemon
+        // gets a thread of its own.
+        arin_mac::launch(move |renderer, _capture| {
+            // Scroll detection samples a coarse grid, so it asks for a small frame
+            // rather than twenty megabytes of Retina pixels twice a second.
+            let capture = arin_mac::MacCapture::downscaled(512);
+            std::thread::Builder::new()
+                .name("arin-daemon".into())
+                .spawn(move || {
+                    let outcome = block_on(serve(config, Arc::new(renderer), Arc::new(capture)));
+                    if let Err(e) = outcome {
+                        tracing::error!(error = %e, "daemon stopped");
+                        std::process::exit(1);
+                    }
+                    std::process::exit(0);
+                })
+                .expect("spawn the daemon thread");
+        });
+    }
+
     let (renderer, capture) = backends(headless)?;
+    block_on(serve(config, renderer, capture))
+}
+
+async fn serve(
+    config: Config,
+    renderer: Arc<dyn Renderer>,
+    capture: Arc<dyn Capture>,
+) -> Result<()> {
     let daemon = Arc::new(Daemon::new(config, renderer, capture));
     let server = Server::bind(Arc::clone(&daemon)).context("could not bind the socket")?;
 
@@ -129,30 +200,106 @@ async fn run_daemon(config: Config, headless: bool) -> Result<()> {
     Ok(())
 }
 
-/// Choose the platform backends, or the no-op ones.
+/// The no-op backends, plus a refusal for any platform without a renderer.
+///
+/// The macOS path never reaches here: it is handled in `start_daemon`, before the
+/// runtime exists, because AppKit has to claim the main thread first.
 fn backends(headless: bool) -> Result<(Arc<dyn Renderer>, Arc<dyn Capture>)> {
     if headless {
         tracing::warn!("running headless: the protocol works, nothing will be drawn");
         return Ok((Arc::new(NoopRenderer::new()), Arc::new(NoopCapture)));
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let renderer = arin_mac::MacRenderer::new()
-            .context("the macOS renderer is still a scaffold; try `arin daemon --headless`")?;
-        let capture = arin_mac::MacCapture::new().context(
-            "the macOS capture backend is still a scaffold; try `arin daemon --headless`",
-        )?;
-        Ok((Arc::new(renderer), Arc::new(capture)))
+    bail!(
+        "no renderer for this platform yet: Linux lands in 0.4 and Windows in 0.6. \
+         Run `arin daemon --headless` to exercise the protocol in the meantime."
+    )
+}
+
+/// Print the displays the overlay would cover.
+///
+/// Needs the main thread for AppKit, but not the event loop, so it enumerates and exits.
+/// This is how to find the id to pass to `--display`, since ids are the ones macOS
+/// assigns rather than a count from one.
+#[cfg(target_os = "macos")]
+fn list_displays() -> Result<()> {
+    let mtm = objc2::MainThreadMarker::new().context("must run on the main thread")?;
+    for screen in arin_mac::known_screens(mtm) {
+        let info = screen.info;
+        println!(
+            "{}\t{:.0}x{:.0} at {}x",
+            info.id, info.logical_size[0], info.logical_size[1], info.scale
+        );
+    }
+    Ok(())
+}
+
+/// Capture one frame and describe it.
+///
+/// Runs off the main thread on purpose. Capture blocks until ScreenCaptureKit answers,
+/// and its handlers want a thread that is not sitting in a join.
+#[cfg(target_os = "macos")]
+fn capture_once(display: u32, probe: Option<String>) -> Result<()> {
+    use arin_core::Capture as _;
+
+    // Two frames a moment apart, so the report says not just what one looks like but how
+    // much a still screen drifts between captures. That number is what scroll detection
+    // has to see past.
+    let (frame, second) = std::thread::spawn(move || {
+        let backend = arin_mac::MacCapture::default();
+        let first = backend.capture(DisplayId(display))?;
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let second = backend.capture(DisplayId(display))?;
+        Ok::<_, arin_core::Error>((first, second))
+    })
+    .join()
+    .map_err(|_| anyhow::anyhow!("the capture thread panicked"))??;
+
+    let expected = frame.width as usize * frame.height as usize * 4;
+    println!("display     {}", frame.display);
+    println!("physical    {}x{}", frame.width, frame.height);
+    println!(
+        "logical     {:.0}x{:.0} at {}x",
+        frame.logical_size[0], frame.logical_size[1], frame.scale
+    );
+    println!("bytes       {} (expected {})", frame.pixels.len(), expected);
+    let drift = frame.signature().drift(&second.signature());
+    println!(
+        "drift       {:.3}% of cells over 400ms on a still screen ({})",
+        drift * 100.0,
+        if second.signature().moved_from(&frame.signature()) {
+            "reads as movement"
+        } else {
+            "reads as still"
+        }
+    );
+
+    let non_zero = frame.pixels.iter().filter(|b| **b != 0).count();
+    println!(
+        "non zero    {non_zero} of {} bytes ({:.1}%)",
+        frame.pixels.len(),
+        100.0 * non_zero as f64 / frame.pixels.len().max(1) as f64
+    );
+
+    if let Some(probe) = probe {
+        let (x, y) = probe
+            .split_once(',')
+            .context("probe wants `x,y` in logical points")?;
+        let x: f64 = x.trim().parse().context("probe x")?;
+        let y: f64 = y.trim().parse().context("probe y")?;
+        let px = (x * frame.scale) as usize;
+        let py = (y * frame.scale) as usize;
+        let idx = (py * frame.width as usize + px) * 4;
+        match frame.pixels.get(idx..idx + 4) {
+            Some(p) => println!(
+                "probe       logical {x},{y} -> physical {px},{py} = [{}, {}, {}, {}]",
+                p[0], p[1], p[2], p[3]
+            ),
+            None => println!("probe       logical {x},{y} is outside the frame"),
+        }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        bail!(
-            "no renderer for this platform yet: Linux lands in 0.4 and Windows in 0.6. \
-             Run `arin daemon --headless` to exercise the protocol in the meantime."
-        )
-    }
+    Ok(())
 }
 
 /// Poll for content movement and drop annotations that no longer point at anything.
@@ -164,10 +311,26 @@ async fn watch_for_scrolling(daemon: Arc<Daemon>) {
 
     loop {
         ticker.tick().await;
-        // TODO(0.1): capture blocks, so this belongs on `spawn_blocking` once a real
-        // capture backend exists. With the no-op backend it returns immediately.
-        for invalidated in watcher.tick() {
-            tracing::debug!(?invalidated, "annotation invalidated");
+
+        // Capture blocks, and on the first call it blocks for as long as the permission
+        // dialog is up, so it cannot run on a runtime worker. The watcher moves onto a
+        // blocking thread and back again each tick.
+        let handle = tokio::task::spawn_blocking(move || {
+            let invalidated = watcher.tick();
+            (watcher, invalidated)
+        });
+
+        match handle.await {
+            Ok((returned, invalidated)) => {
+                watcher = returned;
+                for one in invalidated {
+                    tracing::debug!(?one, "annotation invalidated");
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "scroll watcher stopped");
+                return;
+            }
         }
     }
 }
@@ -190,6 +353,8 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
 
     client.start_session("arin-cli").await?;
 
+    let mut hold = false;
+
     let message = match command {
         Command::Point {
             x,
@@ -197,6 +362,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
             label,
             target,
         } => {
+            hold = target.hold;
             let mut point = Point::at(x, y, DisplayId(target.display));
             point.label = label;
             ClientMessage::Point(point)
@@ -210,6 +376,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
             label,
             target,
         } => {
+            hold = target.hold;
             let mut highlight = Highlight::over(
                 LogicalRect::new(x, y, width, height),
                 DisplayId(target.display),
@@ -223,10 +390,25 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
             None => Clear::all(),
         }),
 
+        #[cfg(target_os = "macos")]
+        Command::Displays | Command::Capture { .. } => unreachable!("handled above"),
         Command::Daemon { .. } | Command::Status => unreachable!("handled above"),
     };
 
-    match client.send(message).await? {
+    let reply = client.send(message).await?;
+
+    if hold {
+        if let DaemonMessage::Ack(ack) = &reply
+            && let Some(id) = &ack.annotation_id
+        {
+            println!("{id}");
+        }
+        eprintln!("holding the mark on screen, interrupt to clear");
+        tokio::signal::ctrl_c().await.ok();
+        return Ok(());
+    }
+
+    match reply {
         DaemonMessage::Ack(ack) => {
             if let Some(id) = ack.annotation_id {
                 println!("{id}");

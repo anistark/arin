@@ -15,16 +15,63 @@ tracing.workspace = true
 
 # Target-gated so the workspace still builds on Linux CI, where this crate compiles to
 # nothing. Core must never depend on it either way.
+#
+# objc2 gates every class behind a feature, so each one used here is listed.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
-objc2-app-kit.workspace = true
-objc2-core-foundation.workspace = true
-objc2-core-graphics.workspace = true
-objc2-foundation.workspace = true
-objc2-quartz-core.workspace = true
-objc2-screen-capture-kit.workspace = true
+objc2-app-kit = { workspace = true, features = [
+  "NSApplication",
+  "NSColor",
+  "NSGraphics",
+  "NSPanel",
+  "NSResponder",
+  "NSScreen",
+  "NSView",
+  "NSWindow",
+] }
+objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
+objc2-core-graphics = { workspace = true, features = [
+  "CGColor",
+  "CGDataProvider",
+  "CGDirectDisplay",
+  "CGDisplayConfiguration",
+  "CGImage",
+  "CGColorSpace",
+  "CGPath",
+] }
+objc2-foundation = { workspace = true, features = [
+  "NSArray",
+  "NSError",
+  "NSDictionary",
+  "NSGeometry",
+  "NSString",
+  "NSValue",
+] }
+objc2-quartz-core = { workspace = true, features = [
+  "CAAnimation",
+  "CABase",
+  "CAEmitterCell",
+  "CAEmitterLayer",
+  "CAGradientLayer",
+  "CALayer",
+  "CAMediaTiming",
+  "CAMediaTimingFunction",
+  "CATransaction",
+  "CATransform3D",
+  "objc2-core-graphics",
+] }
+
+objc2-screen-capture-kit = { workspace = true, features = [
+  "SCError",
+  "SCScreenshotManager",
+  "SCShareableContent",
+  "SCStream",
+  "block2",
+  "objc2-core-foundation",
+  "objc2-core-graphics",
+] }
 
 [lints]
 workspace = true

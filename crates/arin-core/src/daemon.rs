@@ -16,6 +16,7 @@ use arin_protocol::{
     PointTarget, SessionId, Validate,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// How large a region to highlight around a low-confidence resolution, in logical points.
@@ -31,6 +32,13 @@ pub struct Daemon {
     capture: Arc<dyn Capture>,
     resolver: Option<Arc<dyn Resolver>>,
     state: Mutex<State>,
+    /// Bumped every time the daemon changes what is on screen.
+    ///
+    /// Scroll detection compares one capture against the last. The overlay is part of
+    /// what gets captured, so the daemon's own drawing would otherwise read as the page
+    /// moving and invalidate the very annotation that just appeared. This lets the
+    /// watcher tell the two apart.
+    drawn: AtomicU64,
 }
 
 #[derive(Default)]
@@ -48,6 +56,7 @@ impl Daemon {
             capture,
             resolver: None,
             state: Mutex::new(State::default()),
+            drawn: AtomicU64::new(0),
         }
     }
 
@@ -73,9 +82,34 @@ impl Daemon {
         self.state.lock().expect("state lock").annotations.len()
     }
 
+    /// The displays that currently have something drawn on them.
+    ///
+    /// Scroll detection only needs to watch these. Capturing a display with no
+    /// annotation on it is work that can change nothing, and on a machine with virtual
+    /// displays attached it is most of the work.
+    pub fn displays_in_use(&self) -> Vec<DisplayId> {
+        let state = self.state.lock().expect("state lock");
+        let mut seen: Vec<DisplayId> = state.annotations.values().map(|a| a.display_id()).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    }
+
     /// How many sessions are open.
     pub fn session_count(&self) -> usize {
         self.state.lock().expect("state lock").sessions.len()
+    }
+
+    /// How many times the daemon has changed what is on screen.
+    ///
+    /// Compare across ticks: a change means the last capture cannot be trusted as a
+    /// baseline, because the difference is the daemon's own doing.
+    pub fn render_generation(&self) -> u64 {
+        self.drawn.load(Ordering::Relaxed)
+    }
+
+    fn mark_drawn(&self) {
+        self.drawn.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Every connected display.
@@ -111,6 +145,9 @@ impl Daemon {
         }
         drop(state);
 
+        if !doomed.is_empty() {
+            self.mark_drawn();
+        }
         for id in &doomed {
             if let Err(e) = self.renderer.clear(id) {
                 tracing::warn!(%id, error = %e, "renderer refused a clear");
@@ -140,6 +177,9 @@ impl Daemon {
         }
         drop(state);
 
+        if !doomed.is_empty() {
+            self.mark_drawn();
+        }
         doomed
             .into_iter()
             .map(|id| {
@@ -178,6 +218,7 @@ impl Daemon {
     fn store(&self, annotation: Annotation) -> Result<AnnotationId> {
         let id = annotation.id.clone();
         self.renderer.draw(&annotation)?;
+        self.mark_drawn();
         self.state
             .lock()
             .expect("state lock")
@@ -409,6 +450,9 @@ impl Connection {
                 state.annotations.remove(id);
             }
             drop(state);
+            if !doomed.is_empty() {
+                self.daemon.mark_drawn();
+            }
             for id in &doomed {
                 self.daemon.renderer.clear(id)?;
             }
@@ -428,6 +472,7 @@ impl Connection {
             Some(_) => {
                 state.annotations.remove(&id);
                 drop(state);
+                self.daemon.mark_drawn();
                 self.daemon.renderer.clear(&id)?;
                 Ok(Some(id))
             }

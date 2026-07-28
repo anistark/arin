@@ -33,25 +33,26 @@ should compose Arin with a separate actuator.
 
 ## Status
 
-Pre-release, and honest about it. The protocol, the daemon, the session and annotation
-state machine, and the socket server all work today. The macOS renderer does not exist
-yet, so nothing is drawn on screen.
-
-You can run the whole thing headless and drive it over the socket:
+Pre-release, and honest about it. On macOS the daemon draws: points put the orb on a
+target and highlights outline a region, on a click through overlay that never takes
+focus. Capture, the menu bar item, and the global hotkey are still to come, and the orb
+does not yet fly or trail embers.
 
 ```
 git clone https://github.com/your-org/arin && cd arin
-cargo run --bin arin -- daemon --headless
+cargo run --bin arin -- daemon
 ```
 
 Then from another shell:
 
 ```
-cargo run --bin arin -- point 412 88 --display 1 --label Save
+cargo run --bin arin -- displays
+cargo run --bin arin -- point 412 88 --display 1 --label Save --hold
 ```
 
-The annotation is created, acked, and cleared exactly as it will be once there is a
-renderer. See the roadmap for what ships when.
+`--hold` keeps the mark up until you interrupt it, since annotations live only as long as
+the session that made them. On platforms without a renderer, `daemon --headless` runs the
+whole protocol and draws nothing.
 
 ## Use from an agent
 
@@ -74,7 +75,7 @@ scale reported in the ack.
 
 | Platform | Status |
 |---|---|
-| macOS 14.2+ | in progress, 0.1 |
+| macOS 14.2+ | draws, 0.1 in progress |
 | Linux, KDE and wlroots | 0.4 |
 | Windows | 0.6 |
 | Linux, GNOME | not supported, no layer shell |
