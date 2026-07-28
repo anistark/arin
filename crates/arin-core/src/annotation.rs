@@ -1,7 +1,9 @@
 //! What the daemon is currently showing.
 
 use crate::contrast::{self, Rgb};
+use crate::fingerprint::Fingerprint;
 use crate::policy::Rendering;
+use crate::signature::Shift;
 use arin_protocol::{Anchor, AnnotationId, DisplayId, LogicalPoint, SessionId, StrokeStyle};
 use std::time::{Duration, Instant};
 
@@ -54,6 +56,61 @@ impl Annotation {
     pub fn with_ttl(mut self, ttl: Option<Duration>) -> Self {
         self.ttl = ttl;
         self
+    }
+
+    /// Record what was under this mark when it was drawn.
+    ///
+    /// Read back after the daemon follows a scroll, to check the mark landed on the same
+    /// content rather than being carried somewhere arbitrary. See [`crate::fingerprint`].
+    #[must_use]
+    pub fn with_fingerprint(mut self, fingerprint: Option<Fingerprint>) -> Self {
+        self.anchor.content_hash = fingerprint.map(|f| f.encode());
+        self
+    }
+
+    /// What was under this mark when it was drawn, if it was recorded.
+    pub fn fingerprint(&self) -> Option<Fingerprint> {
+        self.anchor
+            .content_hash
+            .as_deref()
+            .and_then(Fingerprint::parse)
+    }
+
+    /// Move by a logical offset, following content that shifted underneath.
+    ///
+    /// Everything the mark draws moves, not just the anchor. A point carries its target
+    /// and a path carries every vertex, and leaving either behind would slide the anchor
+    /// out from under the ink it describes.
+    pub fn translate(&mut self, shift: Shift) {
+        self.anchor.screen_rect.x += shift.dx;
+        self.anchor.screen_rect.y += shift.dy;
+        match &mut self.kind {
+            AnnotationKind::Point { at, .. } => {
+                at.x += shift.dx;
+                at.y += shift.dy;
+            }
+            AnnotationKind::Path { points, .. } => {
+                for point in points {
+                    point.x += shift.dx;
+                    point.y += shift.dy;
+                }
+            }
+            // Both are drawn from the anchor alone, which has already moved.
+            AnnotationKind::Highlight { .. } | AnnotationKind::Textbox { .. } => {}
+        }
+    }
+
+    /// Whether any of this is still on a display of the given size.
+    ///
+    /// A mark carried entirely off the edge by a scroll is not a mark any more. Clearing
+    /// it is both tidier than drawing into nothing and truthful: the thing it pointed at
+    /// has left the screen.
+    pub fn is_on_screen(&self, logical_size: [f64; 2]) -> bool {
+        let rect = self.anchor.screen_rect;
+        rect.x < logical_size[0]
+            && rect.y < logical_size[1]
+            && rect.x + rect.width > 0.0
+            && rect.y + rect.height > 0.0
     }
 
     /// The display this is drawn on.
@@ -144,6 +201,88 @@ mod tests {
             AnnotationKind::Highlight { label: None },
         );
         assert!(!annotation.is_expired(annotation.created + Duration::from_secs(86_400)));
+    }
+
+    /// A point's target is separate from its anchor, so moving one without the other
+    /// puts the orb somewhere the anchor no longer describes.
+    #[test]
+    fn moving_a_point_moves_what_it_points_at() {
+        let mut annotation = Annotation::new(
+            next_session_id(),
+            Anchor::new(LogicalRect::new(100.0, 200.0, 40.0, 40.0), DisplayId(1)),
+            AnnotationKind::Point {
+                at: LogicalPoint::new(120.0, 220.0),
+                label: None,
+                rendering: Rendering::Point,
+            },
+        );
+
+        annotation.translate(Shift { dx: 5.0, dy: -30.0 });
+
+        assert_eq!(annotation.anchor.screen_rect.x, 105.0);
+        assert_eq!(annotation.anchor.screen_rect.y, 170.0);
+        let AnnotationKind::Point { at, .. } = annotation.kind else {
+            panic!("expected a point");
+        };
+        assert_eq!(at, LogicalPoint::new(125.0, 190.0));
+    }
+
+    /// A path draws from its vertices, not its bounding box, so every vertex travels.
+    #[test]
+    fn moving_a_path_moves_every_vertex() {
+        let points = vec![LogicalPoint::new(10.0, 10.0), LogicalPoint::new(50.0, 30.0)];
+        let mut annotation = Annotation::new(
+            next_session_id(),
+            Anchor::new(LogicalRect::new(10.0, 10.0, 40.0, 20.0), DisplayId(1)),
+            AnnotationKind::Path {
+                points,
+                style: None,
+            },
+        );
+
+        annotation.translate(Shift { dx: -4.0, dy: 6.0 });
+
+        let AnnotationKind::Path { points, .. } = annotation.kind else {
+            panic!("expected a path");
+        };
+        assert_eq!(
+            points,
+            vec![LogicalPoint::new(6.0, 16.0), LogicalPoint::new(46.0, 36.0)]
+        );
+    }
+
+    #[test]
+    fn a_mark_carried_off_the_edge_is_no_longer_on_screen() {
+        const DISPLAY: [f64; 2] = [1728.0, 1117.0];
+        let mut annotation = Annotation::new(
+            next_session_id(),
+            Anchor::new(LogicalRect::new(100.0, 40.0, 200.0, 60.0), DisplayId(1)),
+            AnnotationKind::Highlight { label: None },
+        );
+        assert!(annotation.is_on_screen(DISPLAY));
+
+        // Still hanging over the top edge by most of its height.
+        annotation.translate(Shift { dx: 0.0, dy: -80.0 });
+        assert!(annotation.is_on_screen(DISPLAY));
+
+        // And now entirely above it.
+        annotation.translate(Shift { dx: 0.0, dy: -40.0 });
+        assert!(!annotation.is_on_screen(DISPLAY));
+    }
+
+    #[test]
+    fn a_fingerprint_survives_the_anchor_it_rides_on() {
+        let annotation = Annotation::new(
+            next_session_id(),
+            anchor(),
+            AnnotationKind::Highlight { label: None },
+        );
+        assert_eq!(annotation.fingerprint(), None);
+
+        let recorded = Fingerprint::parse(&"7f".repeat(16)).expect("a well formed fingerprint");
+        let annotation = annotation.with_fingerprint(Some(recorded.clone()));
+        assert_eq!(annotation.fingerprint(), Some(recorded));
+        assert!(annotation.anchor.content_hash.is_some());
     }
 
     #[test]

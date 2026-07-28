@@ -96,6 +96,16 @@ impl LogicalRect {
     pub fn center(&self) -> LogicalPoint {
         LogicalPoint::new(self.x + self.width / 2.0, self.y + self.height / 2.0)
     }
+
+    /// This rectangle if it is drawable, `None` if it is not.
+    ///
+    /// For the callers that treat a region as an optional refinement rather than the
+    /// answer. Something derived from a measurement, a model's guess, or arithmetic on
+    /// either can come out degenerate, and dropping it is better than propagating a rect
+    /// that renders as nothing.
+    pub fn into_valid(self) -> Option<Self> {
+        self.is_valid().then_some(self)
+    }
 }
 
 impl From<[f64; 4]> for LogicalRect {

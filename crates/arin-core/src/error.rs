@@ -52,6 +52,15 @@ pub enum Error {
         reason: String,
     },
 
+    /// A resolver adapter failed on its own terms.
+    ///
+    /// Separate from [`Self::ResolveFailed`], which is the daemon reporting that a resolve
+    /// did not produce coordinates. This is the adapter saying why, in its own words: a
+    /// rejected key, an unreachable host, an answer that did not parse. The daemon wraps
+    /// it, so both the query and the cause reach the client.
+    #[error("resolver: {0}")]
+    Resolver(String),
+
     /// The `display_id` does not name a connected display.
     #[error("no display with id {0}")]
     UnknownDisplay(DisplayId),
@@ -85,7 +94,7 @@ impl Error {
             Self::PayloadTooLarge => ErrorCode::PayloadTooLarge,
             Self::VersionUnsupported(_) => ErrorCode::VersionUnsupported,
             Self::NoResolver => ErrorCode::NoResolver,
-            Self::ResolveFailed { .. } => ErrorCode::ResolveFailed,
+            Self::ResolveFailed { .. } | Self::Resolver(_) => ErrorCode::ResolveFailed,
             Self::UnknownDisplay(_) => ErrorCode::UnknownDisplay,
             Self::NotOwner => ErrorCode::NotOwner,
             // Internal faults are not the client's fault, but there is no wire code for

@@ -5,7 +5,7 @@
 
 use arin_core::{
     Annotation, Capture, Config, Connection, Daemon, Error, Frame, OrbState, Renderer, Rendering,
-    Resolution, Resolver, Result, Rgb,
+    Resolution, Resolver, Result, Rgb, ScrollWatcher, Shift,
 };
 use arin_protocol::*;
 use futures::future::BoxFuture;
@@ -372,8 +372,10 @@ async fn dropping_a_connection_ends_the_session() {
     assert_eq!(daemon.session_count(), 0);
 }
 
+/// The fallback path, exercised directly. A scroll only reaches this when no single
+/// movement accounts for what changed, which the tests at the bottom of this file cover.
 #[tokio::test]
-async fn a_scroll_invalidates_everything_on_that_display() {
+async fn invalidating_a_display_takes_everything_on_it() {
     let (daemon, _) = daemon();
     let mut conn = started(daemon.clone()).await;
 
@@ -917,4 +919,362 @@ async fn clearing_your_own_mark_announces_nothing() {
         .unwrap();
 
     assert!(listener.try_recv().is_err(), "a self clear is not news");
+}
+
+// following content that scrolls
+
+/// A page the test can scroll, for the marks that have to keep up with it.
+///
+/// Physical pixels are a quarter of logical points, which is what the daemon's own
+/// downscaled capture looks like and keeps the arithmetic legible: eighty points of
+/// scroll is twenty rows of frame.
+struct PageCapture {
+    /// How far the content has moved, in logical points. Positive is down.
+    scrolled: Mutex<f64>,
+    /// Logical points at the top of the display that never move, as a toolbar would not.
+    frozen: f64,
+    /// Changing this replaces the page outright rather than moving it.
+    edition: Mutex<i32>,
+}
+
+const PAGE_SCALE: f64 = 0.25;
+
+impl PageCapture {
+    fn new() -> Self {
+        Self {
+            scrolled: Mutex::new(0.0),
+            frozen: 0.0,
+            edition: Mutex::new(0),
+        }
+    }
+
+    /// A page whose top band stays put while the rest of it moves.
+    fn with_frozen_band(points: f64) -> Self {
+        Self {
+            frozen: points,
+            ..Self::new()
+        }
+    }
+
+    fn scroll_to(&self, points: f64) {
+        *self.scrolled.lock().unwrap() = points;
+    }
+
+    fn replace_page(&self) {
+        *self.edition.lock().unwrap() += 1;
+    }
+
+    /// Aperiodic in both axes, so an offset can be measured and two regions told apart.
+    fn ink(x: i32, y: i32, edition: i32) -> u8 {
+        let mut v = (x as u32)
+            .wrapping_mul(0x85EB_CA6B)
+            .wrapping_add((y as u32).wrapping_mul(0xC2B2_AE35))
+            .wrapping_add((edition as u32).wrapping_mul(0x27D4_EB2F));
+        v ^= v >> 15;
+        v = v.wrapping_mul(0x2545_F491);
+        v ^= v >> 13;
+        (v & 0xFF) as u8
+    }
+}
+
+impl Capture for PageCapture {
+    fn capture(&self, display: DisplayId) -> Result<Frame> {
+        let width = (1728.0 * PAGE_SCALE) as usize;
+        let height = (1117.0 * PAGE_SCALE) as usize;
+        let shift = (*self.scrolled.lock().unwrap() * PAGE_SCALE).round() as i32;
+        let frozen = (self.frozen * PAGE_SCALE).round() as i32;
+        let edition = *self.edition.lock().unwrap();
+
+        let mut pixels = vec![0u8; width * height * 4];
+        for y in 0..height {
+            // A row inside the frozen band always shows the same content. Everywhere else
+            // shows whatever scrolled into it.
+            let source = if (y as i32) < frozen {
+                y as i32
+            } else {
+                y as i32 - shift
+            };
+            for x in 0..width {
+                let v = Self::ink(x as i32, source, edition);
+                let idx = (y * width + x) * 4;
+                pixels[idx] = v;
+                pixels[idx + 1] = v;
+                pixels[idx + 2] = v;
+                pixels[idx + 3] = 255;
+            }
+        }
+
+        Ok(Frame {
+            display,
+            scale: 2.0,
+            logical_size: [1728.0, 1117.0],
+            width: width as u32,
+            height: height as u32,
+            pixels: pixels.into(),
+        })
+    }
+}
+
+fn daemon_on(page: Arc<PageCapture>) -> (Arc<Daemon>, Arc<FakeRenderer>) {
+    let renderer = Arc::new(FakeRenderer::default());
+    let daemon = Daemon::new(
+        Config::with_socket_path("/tmp/arin-test.sock"),
+        renderer.clone(),
+        page,
+    );
+    (Arc::new(daemon), renderer)
+}
+
+/// Settle the watcher past the re-baselining it does after the daemon draws.
+fn settle(watcher: &mut ScrollWatcher) {
+    for _ in 0..3 {
+        assert!(
+            watcher.tick().is_empty(),
+            "settling must not invalidate anything"
+        );
+    }
+}
+
+/// The acceptance criterion for the whole feature, driven through the real watcher.
+#[tokio::test]
+async fn a_scroll_carries_a_mark_with_it() {
+    let page = Arc::new(PageCapture::new());
+    let (daemon, renderer) = daemon_on(page.clone());
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(200.0, 400.0, 340.0, 90.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    let mut watcher = ScrollWatcher::new(Arc::clone(&daemon));
+    settle(&mut watcher);
+
+    // The page moves up by eighty points, as a scroll wheel would move it.
+    page.scroll_to(-80.0);
+    let invalidated = watcher.tick();
+
+    assert!(
+        invalidated.is_empty(),
+        "a mark that can follow the content must not be thrown away"
+    );
+    assert_eq!(
+        daemon.annotation_count(),
+        1,
+        "the mark is still on screen, just somewhere else"
+    );
+    // Drawn twice: once when asked for, once to follow the page.
+    assert_eq!(renderer.drawn.lock().unwrap().len(), 2);
+    assert!(
+        renderer.cleared.lock().unwrap().is_empty(),
+        "following a scroll is a redraw, not a clear and a new mark"
+    );
+}
+
+/// The check that stops a display-wide answer from being applied where it is wrong. A
+/// mark over a band that did not move is dragged off its target by any shift at all, and
+/// its own fingerprint is the only thing that knows.
+#[tokio::test]
+async fn a_mark_over_content_that_did_not_move_is_dropped() {
+    let page = Arc::new(PageCapture::with_frozen_band(200.0));
+    let (daemon, _) = daemon_on(page.clone());
+    let mut conn = started(daemon.clone()).await;
+
+    // One in the frozen band at the top, one in the part of the page that scrolls.
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(200.0, 40.0, 340.0, 90.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(200.0, 600.0, 340.0, 90.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    page.scroll_to(-80.0);
+    let frame = daemon.capture_backend().capture(DISPLAY).unwrap();
+    let followed = daemon.follow_scroll(DISPLAY, Shift { dx: 0.0, dy: -80.0 }, Some(&frame));
+
+    assert_eq!(
+        followed.moved.len(),
+        1,
+        "the mark on the part that scrolled should have followed it"
+    );
+    assert_eq!(
+        followed.invalidated.len(),
+        1,
+        "the mark on the part that did not should have gone"
+    );
+    assert_eq!(
+        followed.invalidated[0].reason,
+        InvalidationReason::Scroll,
+        "a mark dropped because it could not follow a scroll says so"
+    );
+    assert_eq!(daemon.annotation_count(), 1);
+}
+
+#[tokio::test]
+async fn a_mark_carried_off_the_display_is_dropped() {
+    let page = Arc::new(PageCapture::new());
+    let (daemon, _) = daemon_on(page.clone());
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(200.0, 40.0, 340.0, 90.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    let frame = daemon.capture_backend().capture(DISPLAY).unwrap();
+    let followed = daemon.follow_scroll(
+        DISPLAY,
+        Shift {
+            dx: 0.0,
+            dy: -400.0,
+        },
+        Some(&frame),
+    );
+
+    assert!(followed.moved.is_empty());
+    assert_eq!(followed.invalidated.len(), 1);
+    assert_eq!(daemon.annotation_count(), 0);
+}
+
+/// When nothing explains what changed, the 0.1 behaviour is what is left.
+#[tokio::test]
+async fn a_page_replaced_outright_still_invalidates_everything() {
+    let page = Arc::new(PageCapture::new());
+    let (daemon, _) = daemon_on(page.clone());
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(412.0, 88.0, DISPLAY))))
+        .await
+        .unwrap();
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(200.0, 600.0, 340.0, 90.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    let mut watcher = ScrollWatcher::new(Arc::clone(&daemon));
+    settle(&mut watcher);
+
+    page.replace_page();
+    let invalidated = watcher.tick();
+
+    assert_eq!(
+        invalidated.len(),
+        2,
+        "content that changed without moving leaves nowhere honest to put a mark"
+    );
+    assert_eq!(daemon.annotation_count(), 0);
+}
+
+/// A mark records what it was drawn over, which is what makes the check above possible.
+#[tokio::test]
+async fn a_positioned_mark_records_what_it_was_drawn_over() {
+    let page = Arc::new(PageCapture::new());
+    let (daemon, _) = daemon_on(page);
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(200.0, 400.0, 340.0, 90.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    assert_eq!(daemon.annotation_count(), 1);
+    // Nothing else can see inside the store, so the check is that following a scroll with
+    // a frame that disagrees drops the mark. A mark with no fingerprint would survive.
+    let elsewhere = PageCapture::new();
+    elsewhere.replace_page();
+    let frame = elsewhere.capture(DISPLAY).unwrap();
+    let followed = daemon.follow_scroll(DISPLAY, Shift { dx: 0.0, dy: -40.0 }, Some(&frame));
+
+    assert_eq!(
+        followed.invalidated.len(),
+        1,
+        "a recorded fingerprint must be compared against, not ignored"
+    );
+}
+
+/// Turning the colour picker off is also what turns the capture off, so there is no
+/// fingerprint to check against and marks are followed on the display-wide answer alone.
+#[tokio::test]
+async fn without_a_capture_marks_are_followed_unverified() {
+    let renderer = Arc::new(FakeRenderer::default());
+    let daemon = Arc::new(Daemon::new(
+        Config {
+            adaptive_color: false,
+            ..Config::with_socket_path("/tmp/arin-test.sock")
+        },
+        renderer.clone(),
+        Arc::new(PageCapture::new()),
+    ));
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        LogicalRect::new(200.0, 400.0, 340.0, 90.0),
+        DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    let elsewhere = PageCapture::new();
+    elsewhere.replace_page();
+    let frame = elsewhere.capture(DISPLAY).unwrap();
+    let followed = daemon.follow_scroll(DISPLAY, Shift { dx: 0.0, dy: -40.0 }, Some(&frame));
+
+    assert_eq!(followed.moved.len(), 1);
+    assert!(followed.invalidated.is_empty());
+}
+
+/// The overflow path has been there since 0.1 and had never been reached. A client that
+/// stops reading has to lose the oldest notifications and be told that it did, rather
+/// than backing the daemon up behind it.
+#[tokio::test]
+async fn a_client_that_stops_reading_loses_the_oldest_and_is_told() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon.clone()).await;
+    // Subscribed and then deliberately never drained.
+    let mut listener = daemon.subscribe();
+
+    // Comfortably past the backlog, which is 256.
+    const MARKS: usize = 300;
+    for i in 0..MARKS {
+        conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+            LogicalRect::new(i as f64, 1.0, 10.0, 10.0),
+            DISPLAY,
+        ))))
+        .await
+        .unwrap();
+    }
+    assert_eq!(daemon.annotation_count(), MARKS);
+
+    // One announcement per mark, all of them with nobody listening.
+    daemon.clear_everything();
+
+    let missed = match listener.try_recv() {
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(missed)) => missed,
+        other => panic!("a receiver past the backlog must be told it overran, got {other:?}"),
+    };
+    assert!(
+        missed > 0,
+        "the overflow has to say how much went past, not merely that some did"
+    );
+
+    // And the subscription still works afterwards. Losing the oldest is the documented
+    // behaviour; going permanently deaf is not.
+    assert!(
+        listener.try_recv().is_ok(),
+        "a lagged receiver keeps receiving from wherever it caught up to"
+    );
 }

@@ -26,10 +26,20 @@ pub struct Config {
     pub default_ttl: Option<Duration>,
     /// Reject peers whose effective uid differs from the daemon's.
     pub require_same_uid: bool,
-    /// Sample the target region and pick an annotation colour that contrasts with it.
+    /// Which registered resolver grounds the query form of `point` and `highlight`.
     ///
-    /// Costs one capture per positioned annotation. Turn it off to draw everything in the
-    /// default colour and never capture except for scroll detection.
+    /// `None` leaves the query form refused with `no_resolver`, which is the default and
+    /// the only state in which nothing Arin does can reach the network. Naming one is a
+    /// deliberate act: a resolver may send screenshots off the machine, so it is never
+    /// inferred from a key being present in the environment.
+    pub resolver: Option<String>,
+    /// Look at the target region before marking it.
+    ///
+    /// Costs one capture per positioned annotation, and buys two things from it: a colour
+    /// that contrasts with what is already there, and a record of that content so a mark
+    /// following a scroll can be checked against where it landed. Turn it off to draw
+    /// everything in the default colour and never capture except for scroll detection,
+    /// accepting that marks are then followed on the display-wide movement alone.
     pub adaptive_color: bool,
 }
 
@@ -49,6 +59,8 @@ impl Default for Config {
             expiry_tick: Duration::from_millis(100),
             default_ttl: None,
             require_same_uid: true,
+            // Nothing grounds and nothing leaves the machine until someone says so.
+            resolver: None,
             adaptive_color: true,
         }
     }
@@ -107,5 +119,9 @@ mod tests {
         let config = Config::default();
         assert!(config.require_same_uid);
         assert_eq!(config.default_ttl, None);
+        assert_eq!(
+            config.resolver, None,
+            "a default daemon must not be able to send anything off the machine"
+        );
     }
 }

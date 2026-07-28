@@ -115,6 +115,12 @@ pub struct PointAtArgs {
     /// "bottom", "bottom-right", or a pair like "50%,30%". Use instead of x and y.
     #[serde(default)]
     pub at: Option<String>,
+    /// What to point at, described in words, for example "the Submit button". Use this
+    /// instead of x and y when you cannot see the screen. The daemon takes a screenshot
+    /// and locates it, which needs a resolver to have been configured and takes a second
+    /// or two. It fails rather than guessing when the thing is not on screen.
+    #[serde(default)]
+    pub query: Option<String>,
     /// Short caption drawn beside the orb, for example "Save".
     #[serde(default)]
     pub label: Option<String>,
@@ -130,14 +136,24 @@ pub struct PointAtArgs {
 /// Arguments to `highlight`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct HighlightArgs {
-    /// Left edge in logical points.
-    pub x: f64,
+    /// Left edge in logical points. Give all four of x, y, width and height, or use
+    /// `query` instead.
+    #[serde(default)]
+    pub x: Option<f64>,
     /// Top edge in logical points.
-    pub y: f64,
+    #[serde(default)]
+    pub y: Option<f64>,
     /// Width in logical points.
-    pub width: f64,
+    #[serde(default)]
+    pub width: Option<f64>,
     /// Height in logical points.
-    pub height: f64,
+    #[serde(default)]
+    pub height: Option<f64>,
+    /// What to outline, described in words, for example "the error message". Use this
+    /// instead of the coordinates when you cannot see the screen. The daemon takes a
+    /// screenshot and locates it, which needs a resolver to have been configured.
+    #[serde(default)]
+    pub query: Option<String>,
     /// Short caption drawn against the region.
     #[serde(default)]
     pub label: Option<String>,
@@ -206,22 +222,25 @@ impl Arin {
     #[tool(
         name = "point_at",
         description = "Point at something on the user's screen. Puts a glowing orb on the \
-                       given position with an optional caption. Give either x and y in \
-                       logical points from the top-left of the display, which is \
-                       screenshot pixels divided by the display scale, or `at` with a \
-                       named position like \"top-right\" or \"50%,30%\" when you have \
-                       not measured the screen."
+                       given position with an optional caption. Three ways to say where, \
+                       and exactly one per call: x and y in logical points from the \
+                       top-left of the display, which is screenshot pixels divided by the \
+                       display scale; `at` with a named position like \"top-right\" or \
+                       \"50%,30%\" when you have not measured the screen; or `query` \
+                       describing the target in words, like \"the Submit button\", when \
+                       you cannot see the screen at all."
     )]
     async fn point_at(
         &self,
         Parameters(args): Parameters<PointAtArgs>,
     ) -> Result<Json<Drawn>, ErrorData> {
-        let mut point = match (args.x, args.y, args.at) {
-            (Some(x), Some(y), None) => Point::at(x, y, display(args.display)),
-            (None, None, Some(at)) => Point::named(at, display(args.display)),
+        let mut point = match (args.x, args.y, args.at, args.query) {
+            (Some(x), Some(y), None, None) => Point::at(x, y, display(args.display)),
+            (None, None, Some(at), None) => Point::named(at, display(args.display)),
+            (None, None, None, Some(query)) => Point::query(query, display(args.display)),
             _ => {
                 return Err(ErrorData::invalid_params(
-                    "point_at wants either x and y together, or at on its own",
+                    "point_at wants exactly one of: x and y together, at, or query",
                     None,
                 ));
             }
@@ -236,16 +255,28 @@ impl Arin {
         name = "highlight",
         description = "Outline a rectangular region of the user's screen, with an \
                        optional caption. Use this for an area and point_at for a spot. \
-                       Coordinates are logical points from the top-left of the display."
+                       Give either all four of x, y, width and height in logical points \
+                       from the top-left of the display, or `query` describing the region \
+                       in words, like \"the error message\", when you cannot see the \
+                       screen."
     )]
     async fn highlight(
         &self,
         Parameters(args): Parameters<HighlightArgs>,
     ) -> Result<Json<Drawn>, ErrorData> {
-        let mut highlight = Highlight::over(
-            LogicalRect::new(args.x, args.y, args.width, args.height),
-            display(args.display),
-        );
+        let mut highlight = match (args.x, args.y, args.width, args.height, args.query) {
+            (Some(x), Some(y), Some(width), Some(height), None) => {
+                Highlight::over(LogicalRect::new(x, y, width, height), display(args.display))
+            }
+            (None, None, None, None, Some(query)) => Highlight::query(query, display(args.display)),
+            _ => {
+                return Err(ErrorData::invalid_params(
+                    "highlight wants either x, y, width and height together, or query on \
+                     its own",
+                    None,
+                ));
+            }
+        };
         highlight.label = args.label;
         highlight.ttl_ms = ttl_ms(args.ttl_seconds)?;
         self.draw(ClientMessage::Highlight(highlight)).await
@@ -435,6 +466,57 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), tools::ALL.len());
+    }
+
+    /// What an agent actually sends is JSON against the generated schema, so the query
+    /// form is only real if it survives deserialisation under that name.
+    #[test]
+    fn a_query_reaches_the_tools_that_take_one() {
+        let point: PointAtArgs =
+            serde_json::from_value(serde_json::json!({ "query": "the Submit button" }))
+                .expect("point_at accepts a described target");
+        assert_eq!(point.query.as_deref(), Some("the Submit button"));
+        assert_eq!((point.x, point.y), (None, None));
+
+        let region: HighlightArgs =
+            serde_json::from_value(serde_json::json!({ "query": "the error message" }))
+                .expect("highlight accepts a described region");
+        assert_eq!(region.query.as_deref(), Some("the error message"));
+        assert_eq!(region.width, None);
+    }
+
+    /// Making the rectangle optional so a query can replace it must not make a partial
+    /// rectangle acceptable. Three of four numbers is a caller bug, not a region.
+    #[test]
+    fn coordinates_still_come_as_a_complete_set() {
+        let partial: HighlightArgs =
+            serde_json::from_value(serde_json::json!({ "x": 10.0, "y": 20.0, "width": 30.0 }))
+                .expect("it parses, and the handler is what refuses it");
+        assert_eq!(partial.height, None);
+        assert!(
+            matches!(
+                (
+                    partial.x,
+                    partial.y,
+                    partial.width,
+                    partial.height,
+                    partial.query
+                ),
+                (Some(_), Some(_), Some(_), None, None)
+            ),
+            "the handler's match arms are what turn this into an error"
+        );
+    }
+
+    /// Coordinates and a description are two answers to the same question.
+    #[test]
+    fn a_query_alongside_coordinates_is_still_expressible_and_refused_later() {
+        let both: PointAtArgs = serde_json::from_value(
+            serde_json::json!({ "x": 1.0, "y": 2.0, "query": "the Submit button" }),
+        )
+        .expect("nothing stops a client sending both");
+        // No arm of the handler's match accepts this shape, which is where it is caught.
+        assert!(both.x.is_some() && both.query.is_some());
     }
 
     #[test]

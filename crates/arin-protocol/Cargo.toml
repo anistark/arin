@@ -6,8 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-keywords.workspace = true
-categories.workspace = true
+readme = "README.md"
+# Not the workspace lists. This crate is types on a wire, so it is looked for under
+# different words than the binary is, and the workspace categories describe a tool rather
+# than a library. `accessibility` in particular would be actively misleading: Arin is
+# built to avoid the Accessibility APIs, not to use them.
+keywords = ["annotation", "protocol", "overlay", "agent", "mcp"]
+categories = ["encoding", "data-structures", "api-bindings"]
 
 [dependencies]
 serde.workspace = true

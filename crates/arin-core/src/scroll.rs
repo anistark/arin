@@ -5,8 +5,13 @@
 //! to observe scroll events, and that permission is exactly what Arin promises not to
 //! need. Screen Recording alone is the whole ask.
 //!
-//! In 0.1 a detected change invalidates every annotation on that display. Translating
-//! annotations with the scroll instead needs the reserved anchor content hash.
+//! In 0.1 a detected change invalidated every annotation on that display. From 0.3 the
+//! watcher asks a second question first: not only whether the content moved but how far.
+//! When that has an answer, the marks move with it and stay useful. When it does not, the
+//! old behaviour is what is left, and every mark on the display goes.
+//!
+//! The measurement lives in [`crate::signature`] and the per-annotation check that keeps
+//! it honest lives in [`crate::fingerprint`].
 
 use crate::daemon::Daemon;
 use crate::signature::Signature;
@@ -122,11 +127,30 @@ impl ScrollWatcher {
                 // First sighting of this display. Nothing to compare against yet.
                 None => {}
                 Some(previous) if current.moved_from(&previous) => {
-                    tracing::debug!(%id, "content moved, invalidating");
-                    invalidated.extend(
-                        self.daemon
-                            .invalidate_display(id, InvalidationReason::Scroll),
-                    );
+                    match current.shift_from(&previous) {
+                        Some(shift) => {
+                            let followed = self.daemon.follow_scroll(id, shift, Some(&frame));
+                            tracing::debug!(
+                                %id,
+                                dx = shift.dx,
+                                dy = shift.dy,
+                                moved = followed.moved.len(),
+                                dropped = followed.invalidated.len(),
+                                "content moved, following it"
+                            );
+                            invalidated.extend(followed.invalidated);
+                        }
+                        // No single movement accounts for what changed, so there is
+                        // nowhere honest to put the marks. This is what 0.1 did for every
+                        // change, and it is now the fallback rather than the rule.
+                        None => {
+                            tracing::debug!(%id, "content changed unaccountably, invalidating");
+                            invalidated.extend(
+                                self.daemon
+                                    .invalidate_display(id, InvalidationReason::Scroll),
+                            );
+                        }
+                    }
                 }
                 Some(_) => {}
             }

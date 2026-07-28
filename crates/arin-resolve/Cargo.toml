@@ -12,9 +12,19 @@ categories.workspace = true
 [dependencies]
 arin-core.workspace = true
 arin-protocol.workspace = true
+base64.workspace = true
 # Adapters implement `Resolver`, whose `resolve` returns a `BoxFuture`.
 futures.workspace = true
+png.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# `net` and `io-util` are for the loopback server the round trip test speaks to. Nothing
+# in this crate listens on a socket outside of that test.
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
 
 [lints]
 workspace = true

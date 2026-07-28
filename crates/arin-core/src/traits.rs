@@ -41,6 +41,22 @@ pub trait Renderer: Send + Sync + 'static {
 pub trait Capture: Send + Sync + 'static {
     /// Grab the current contents of a display.
     fn capture(&self, display: DisplayId) -> Result<Frame>;
+
+    /// Grab a display with at least this many pixels along its longest edge.
+    ///
+    /// Two callers want very different things from a capture. Scroll detection and the
+    /// contrast picker are reading coarse statistics and are happy with a thumbnail, which
+    /// is why the daemon's backend is configured to downscale. A resolver grounding a
+    /// query has to read the interface, and a mark placed from a 512 pixel thumbnail is
+    /// off by however much that thumbnail rounded.
+    ///
+    /// A backend that cannot vary its resolution may ignore the request. Callers check the
+    /// dimensions of what came back rather than assuming they got what they asked for, and
+    /// nothing here promises more than the display itself has.
+    fn capture_detailed(&self, display: DisplayId, min_long_edge: u32) -> Result<Frame> {
+        let _ = min_long_edge;
+        self.capture(display)
+    }
 }
 
 /// A captured display.
@@ -96,10 +112,25 @@ pub trait Resolver: Send + Sync + 'static {
     /// Surfaced to the user before anything leaves. A local model returns `false`.
     fn is_remote(&self) -> bool;
 
+    /// How much detail this resolver wants, in pixels along the longest edge.
+    ///
+    /// The daemon captures, so the resolver has to say what it needs rather than take
+    /// what it is given. Larger is more accurate and more expensive, in tokens for a
+    /// hosted model and in time for any of them.
+    fn detail(&self) -> u32 {
+        DEFAULT_DETAIL
+    }
+
     /// Ground `query` against `frame`.
     fn resolve<'a>(&'a self, query: &'a str, frame: &'a Frame)
     -> BoxFuture<'a, Result<Resolution>>;
 }
+
+/// Pixels on the long edge a resolver gets when it does not ask for a number.
+///
+/// Roughly 1080p, which is enough to read interface text without paying for a Retina
+/// panel's full pixel count on every resolve.
+pub const DEFAULT_DETAIL: u32 = 1920;
 
 /// What a resolver produced.
 #[derive(Debug, Clone, PartialEq)]

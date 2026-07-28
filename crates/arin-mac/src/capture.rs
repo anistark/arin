@@ -111,9 +111,10 @@ impl MacCapture {
     }
 }
 
-impl arin_core::Capture for MacCapture {
-    fn capture(&self, display: DisplayId) -> Result<Frame> {
-        let shot = capture_display(display, self.max_edge)?;
+impl MacCapture {
+    /// Take one frame, downscaling to `max_edge` when asked to.
+    fn shoot(display: DisplayId, max_edge: Option<u32>) -> Result<Frame> {
+        let shot = capture_display(display, max_edge)?;
 
         // Derived from Core Graphics rather than AppKit. `NSScreen` needs the main
         // thread, capture never runs there, and a scale that silently differs by thread
@@ -128,6 +129,24 @@ impl arin_core::Capture for MacCapture {
             height: shot.height,
             pixels: Arc::from(shot.pixels),
         })
+    }
+}
+
+impl arin_core::Capture for MacCapture {
+    fn capture(&self, display: DisplayId) -> Result<Frame> {
+        Self::shoot(display, self.max_edge)
+    }
+
+    fn capture_detailed(&self, display: DisplayId, min_long_edge: u32) -> Result<Frame> {
+        // The configured ceiling is what keeps routine captures cheap, and raising it for
+        // one caller is the whole point of the request. ScreenCaptureKit will not invent
+        // pixels the display does not have, so asking for more than it is wide simply
+        // returns full resolution, and `None` was already that.
+        Self::shoot(
+            display,
+            self.max_edge
+                .map(|configured| configured.max(min_long_edge)),
+        )
     }
 }
 

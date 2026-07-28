@@ -48,6 +48,15 @@ pub use position::Position;
 pub use validate::{Validate, ValidationError};
 pub use version::{PROTOCOL_VERSION, Version, VersionParseError};
 
+/// Compiles the README's examples as doctests.
+///
+/// The README is what someone reads on crates.io before they read anything else, so its
+/// code is held to the same standard as the code in this file rather than being prose
+/// that happens to be fenced.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;
+
 /// Maximum accepted payload for a single line, in bytes.
 ///
 /// Anything larger is rejected with [`ErrorCode::PayloadTooLarge`] rather than buffered.

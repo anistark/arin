@@ -58,7 +58,7 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
 |---|---|---|---|
 | `arin-protocol` | Message types, schema validation, version negotiation. Pure types, no IO. | no | done for 0.1 |
 | `arin-core` | Daemon. Socket server, auth, session and annotation state machine, anchor model, scroll invalidation loop. Depends on traits only. | no | done for 0.1 |
-| `arin-resolve` | `Resolver` registry and adapters. Not built until 0.3. | no | registry only |
+| `arin-resolve` | `Resolver` registry and adapters. The only crate that reaches the network. | no | registry plus the Claude adapter |
 | `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | done for 0.1 |
 | `arin-linux` | Renderer via wgpu on wlr layer shell. Capture via xdg desktop portal. 0.4. | Linux | empty |
 | `arin-win` | Layered window renderer, DXGI capture. 0.6. | Windows | empty |
@@ -127,7 +127,9 @@ invalidated  {reason: scroll | display_change | session_end | ttl}
 error        {code, msg}
 ```
 
-Every annotation carries an anchor descriptor `{screen_rect, display_id, content_hash?}`. In 0.1 only `screen_rect` and `display_id` are used. `content_hash` is reserved so scroll tracking in 0.3 does not break clients.
+Every annotation carries an anchor descriptor `{screen_rect, display_id, content_hash?}`. From 0.3 all three are used: `content_hash` holds a coarse record of what the mark was drawn over, and the daemon re-reads it after following a scroll to check the mark landed on the same content. It is opaque and clients must not construct or interpret one.
+
+Marks are moved silently. A scroll that the daemon can follow produces no wire traffic at all, because nothing the client asked for has stopped being true. Only a mark that could not be followed is announced, with `invalidated`.
 
 Unknown fields are ignored and unknown message types return an error rather than closing the connection, so a client from a future minor version keeps working.
 
@@ -183,9 +185,13 @@ Do not relitigate these without asking.
 | Platform order | macOS, then Linux KDE and wlroots, then Windows. GNOME is out of scope: it does not support layer shell. |
 | Teaching mode | Freeze frame. Capture once, annotate, valid until scroll. |
 | Scroll detection | Screenshot diff on a 500ms tick during active sessions only. Keeps permissions at Screen Recording alone, no Accessibility TCC. |
+| Scroll response | Follow the content where the movement can be measured, invalidate where it cannot. Never guess: a mark that vanishes is a failure the client can see, and a mark confidently pointing at the wrong thing is one it cannot. |
 | Annotation lifetime | Session scoped. Clear 5 seconds after `session_end` or socket disconnect. |
 | Clear affordance | Menu bar item plus global hotkey. No overlay button. |
 | Grounding | CUA class models only. Raw coordinates from the client in 0.1. Resolver plugin registry from 0.3. |
+| Grounding shape | Ask a vision model where something is and constrain the answer to a schema, rather than handing it the computer use tool and reading the coordinate out of a click it wants to make. A tool call carries no confidence, and Arin does not actuate, so a request shaped like "click this" asks for something that will never happen. |
+| Resolver consent | Off unless named. An API key in the environment is not consent, so no adapter is selected by inference, and a daemon told to use a remote one says so at startup. Provisional until the security model is settled. |
+| Who captures | The daemon, never the adapter. A resolver declares how much detail it needs through `Resolver::detail` and is handed a frame, so an adapter never touches the screen and a fake one in a test never has to. |
 | Textboxes | Display only through all of 0.x. No input widgets. |
 | Sequencing | Brain side. The daemon has no concept of step 2 of 7. |
 | Audio | Never in the daemon. TTS belongs to the client. |

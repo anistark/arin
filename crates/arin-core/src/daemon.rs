@@ -8,9 +8,11 @@ use crate::annotation::{Annotation, AnnotationKind};
 use crate::config::Config;
 use crate::contrast::{self, Footprint, Rgb};
 use crate::error::{Error, Result};
+use crate::fingerprint::Fingerprint;
 use crate::policy::{OrbState, Rendering};
 use crate::session::Session;
-use crate::traits::{Capture, Renderer, Resolver};
+use crate::signature::Shift;
+use crate::traits::{Capture, Frame, Renderer, Resolver};
 use arin_protocol::{
     Ack, Anchor, AnnotationId, ClientMessage, DaemonMessage, DisplayId, DisplayInfo, Envelope,
     Highlight, HighlightTarget, Invalidated, InvalidationReason, LogicalPoint, LogicalRect, Point,
@@ -64,6 +66,23 @@ pub struct Announcement {
     pub session: SessionId,
     /// What to tell them.
     pub event: Invalidated,
+}
+
+/// What the daemon learned from one look at the region it is about to mark.
+struct Appearance {
+    /// The colour to draw in.
+    color: Rgb,
+    /// What is under the mark, for checking it later. `None` when nothing was captured.
+    fingerprint: Option<Fingerprint>,
+}
+
+/// What became of a display's annotations when its content moved.
+#[derive(Debug, Default)]
+pub struct Followed {
+    /// Marks that kept up with the content and were redrawn.
+    pub moved: Vec<AnnotationId>,
+    /// Marks that could not be followed, and the invalidations sent for them.
+    pub invalidated: Vec<Invalidated>,
 }
 
 #[derive(Default)]
@@ -310,47 +329,169 @@ impl Daemon {
             .collect()
     }
 
-    /// The colour to draw a region in.
+    /// What one look at the screen tells the daemon about a mark it is about to draw.
     ///
-    /// A colour the client named wins outright: it asked for something specific and
-    /// second-guessing it would make the field a suggestion. Otherwise the daemon samples
-    /// what is already on screen there and picks something that will show up against it.
-    ///
-    /// A capture that fails is not an error. Screen Recording may not be granted yet, and
-    /// a mark in the default colour is a far better outcome than a refused request, so
-    /// this falls back quietly and says so once at debug level.
-    fn color_for(&self, asked: Option<&str>, screen: DisplayId, footprint: &Footprint) -> Rgb {
-        if let Some(named) = asked {
-            match Rgb::parse(named) {
-                Some(color) => return color,
-                // Falls through to the adaptive pick rather than to the default, since a
-                // client that cared enough to name a colour is better served by a legible
-                // one than by whatever the palette starts with.
-                None => tracing::debug!(color = named, "unparseable colour, choosing one"),
+    /// Two answers from one capture: the colour to draw in, and a record of the content
+    /// being marked so a later scroll can check the mark stayed on it. The capture used
+    /// to buy only the colour, which made it hard to justify at around 100ms per
+    /// positioned annotation. It now also buys the only per-annotation evidence the
+    /// daemon has that following a scroll put the mark somewhere sensible.
+    fn appearance(
+        &self,
+        asked: Option<&str>,
+        screen: DisplayId,
+        footprint: &Footprint,
+        region: LogicalRect,
+    ) -> Appearance {
+        // A colour the client named wins outright: it asked for something specific and
+        // second-guessing it would make the field a suggestion. An unparseable one falls
+        // through to the adaptive pick rather than to the default, since a client that
+        // cared enough to name a colour is better served by a legible one than by
+        // whatever the palette starts with.
+        let named = asked.and_then(|name| {
+            let parsed = Rgb::parse(name);
+            if parsed.is_none() {
+                tracing::debug!(color = name, "unparseable colour, choosing one");
             }
-        }
+            parsed
+        });
 
         if !self.config.adaptive_color {
-            return contrast::DEFAULT;
+            return Appearance {
+                color: named.unwrap_or(contrast::DEFAULT),
+                fingerprint: None,
+            };
         }
 
+        // A capture that fails is not an error. Screen Recording may not be granted yet,
+        // and a mark in the default colour is a far better outcome than a refused
+        // request, so this falls back quietly and says so once at debug level.
         match self.capture.capture(screen) {
-            Ok(frame) => {
-                let picked = contrast::pick(&frame, footprint);
-                // Logged because it is otherwise unobservable. A screenshot goes through
-                // colour management on the way out, so the pixels that come back are not
-                // the ones asked for and cannot be compared against the palette.
-                tracing::debug!(
-                    color = %picked,
-                    adapted = picked != contrast::DEFAULT,
-                    "chose an annotation colour"
-                );
-                picked
-            }
+            Ok(frame) => Appearance {
+                color: named.unwrap_or_else(|| {
+                    let picked = contrast::pick(&frame, footprint);
+                    // Logged because it is otherwise unobservable. A screenshot goes
+                    // through colour management on the way out, so the pixels that come
+                    // back are not the ones asked for and cannot be compared against the
+                    // palette.
+                    tracing::debug!(
+                        color = %picked,
+                        adapted = picked != contrast::DEFAULT,
+                        "chose an annotation colour"
+                    );
+                    picked
+                }),
+                fingerprint: Fingerprint::of(&frame, region),
+            },
             Err(e) => {
                 tracing::debug!(%screen, error = %e, "no frame to sample, using the default colour");
-                contrast::DEFAULT
+                Appearance {
+                    color: named.unwrap_or(contrast::DEFAULT),
+                    fingerprint: None,
+                }
             }
+        }
+    }
+
+    /// Follow content that moved, and drop whatever could not be followed.
+    ///
+    /// Two things have to hold for a mark to survive. It has to still be on the display,
+    /// and where it landed has to still look like what it was pointing at. The second is
+    /// the one that matters: a display-wide shift is right for most of the screen and
+    /// wrong for any part that did not move with the rest, and the anchor's fingerprint is
+    /// the only evidence the daemon has about which of those a given mark is.
+    ///
+    /// `frame` is the capture the movement was detected from. Without it, and without a
+    /// fingerprint recorded when the mark was made, a mark is followed on the display-wide
+    /// estimate alone.
+    pub fn follow_scroll(
+        &self,
+        display: DisplayId,
+        shift: Shift,
+        frame: Option<&Frame>,
+    ) -> Followed {
+        let Ok(info) = self.display(display) else {
+            // The display went away between the capture and here. Nothing to follow it on.
+            return Followed {
+                moved: Vec::new(),
+                invalidated: self.invalidate_display(display, InvalidationReason::Scroll),
+            };
+        };
+
+        // A movement too small to see is not worth redrawing for, but it is still worth
+        // checking: content can change in place without going anywhere.
+        let moving = !shift.is_negligible();
+
+        let mut state = self.state.lock().expect("state lock");
+        let mut moved = Vec::new();
+        let mut doomed: Vec<(AnnotationId, SessionId)> = Vec::new();
+        for (id, annotation) in state.annotations.iter_mut() {
+            if annotation.display_id() != display {
+                continue;
+            }
+
+            let mut candidate = annotation.clone();
+            if moving {
+                candidate.translate(shift);
+            }
+
+            let followed = candidate.is_on_screen(info.logical_size)
+                && match (candidate.fingerprint(), frame) {
+                    (Some(recorded), Some(frame)) => {
+                        Fingerprint::of(frame, candidate.anchor.screen_rect)
+                            .is_none_or(|now| recorded.matches(&now))
+                    }
+                    // Nothing to check against. The display-wide estimate is all there is.
+                    _ => true,
+                };
+
+            if followed {
+                if moving {
+                    *annotation = candidate;
+                    moved.push(id.clone());
+                }
+            } else {
+                doomed.push((id.clone(), annotation.session.clone()));
+            }
+        }
+        for (id, _) in &doomed {
+            state.annotations.remove(id);
+        }
+        drop(state);
+
+        if moved.is_empty() && doomed.is_empty() {
+            return Followed::default();
+        }
+        self.mark_drawn();
+
+        // Redrawing in place rather than clearing first: a clear would fade the orb out
+        // and fly it back in, which reads as the mark leaving and a new one arriving
+        // rather than as one mark keeping up with the page.
+        let drawn: Vec<Annotation> = {
+            let state = self.state.lock().expect("state lock");
+            moved
+                .iter()
+                .filter_map(|id| state.annotations.get(id).cloned())
+                .collect()
+        };
+        for annotation in &drawn {
+            if let Err(e) = self.renderer.draw(annotation) {
+                tracing::warn!(id = %annotation.id, error = %e, "renderer refused a redraw");
+            }
+        }
+        for (id, _) in &doomed {
+            if let Err(e) = self.renderer.clear(id) {
+                tracing::warn!(%id, error = %e, "renderer refused a clear");
+            }
+        }
+        self.announce(doomed.clone(), &InvalidationReason::Scroll);
+
+        Followed {
+            moved,
+            invalidated: doomed
+                .into_iter()
+                .map(|(id, _)| Invalidated::one(id, InvalidationReason::Scroll))
+                .collect(),
         }
     }
 
@@ -438,18 +579,21 @@ impl Connection {
                 let anchor = textbox.resolved_anchor()?;
                 let display = self.daemon.display(anchor.display_id)?;
                 let (anchor_display, anchor_rect) = (anchor.display_id, anchor.screen_rect);
+                // A text box is a filled panel, so every pixel of it is ink.
+                let look = self.daemon.appearance(
+                    None,
+                    anchor_display,
+                    &Footprint::Area(anchor_rect),
+                    anchor_rect,
+                );
                 let annotation = Annotation::new(
                     session,
                     anchor,
                     AnnotationKind::Textbox { text: textbox.text },
                 )
                 .with_ttl(self.daemon.ttl_for(textbox.ttl_ms))
-                // A text box is a filled panel, so every pixel of it is ink.
-                .with_color(self.daemon.color_for(
-                    None,
-                    anchor_display,
-                    &Footprint::Area(anchor_rect),
-                ));
+                .with_color(look.color)
+                .with_fingerprint(look.fingerprint);
                 let id = self.daemon.store(annotation)?;
                 Ok(DaemonMessage::Ack(
                     Ack::annotation(id).with_display(display),
@@ -470,6 +614,17 @@ impl Connection {
                     .unwrap_or(contrast::STROKE_WIDTH);
                 let asked = draw.style.as_ref().and_then(|s| s.color.clone());
                 let anchor = Anchor::new(bounds, draw.display_id);
+                // Along the stroke, not over the bounding box. The box of a diagonal line
+                // is mostly pixels the stroke never touches.
+                let look = self.daemon.appearance(
+                    asked.as_deref(),
+                    display_id,
+                    &Footprint::Path {
+                        points: path,
+                        width: stroke_width,
+                    },
+                    bounds,
+                );
                 let annotation = Annotation::new(
                     session,
                     anchor,
@@ -479,16 +634,8 @@ impl Connection {
                     },
                 )
                 .with_ttl(self.daemon.ttl_for(draw.ttl_ms))
-                // Along the stroke, not over the bounding box. The box of a diagonal line
-                // is mostly pixels the stroke never touches.
-                .with_color(self.daemon.color_for(
-                    asked.as_deref(),
-                    display_id,
-                    &Footprint::Path {
-                        points: path,
-                        width: stroke_width,
-                    },
-                ));
+                .with_color(look.color)
+                .with_fingerprint(look.fingerprint);
                 let id = self.daemon.store(annotation)?;
                 Ok(DaemonMessage::Ack(
                     Ack::annotation(id).with_display(display),
@@ -542,6 +689,12 @@ impl Connection {
         let anchor_rect = rect.unwrap_or_else(|| region_around(at, UNCERTAIN_REGION));
         let anchor = Anchor::new(anchor_rect, point.display_id);
 
+        let look = self.daemon.appearance(
+            None,
+            point.display_id,
+            &Footprint::Area(anchor_rect),
+            anchor_rect,
+        );
         let annotation = Annotation::new(
             session,
             anchor,
@@ -552,11 +705,8 @@ impl Connection {
             },
         )
         .with_ttl(self.daemon.ttl_for(point.ttl_ms))
-        .with_color(self.daemon.color_for(
-            None,
-            point.display_id,
-            &Footprint::Area(anchor_rect),
-        ));
+        .with_color(look.color)
+        .with_fingerprint(look.fingerprint);
 
         let id = self.daemon.store(annotation)?;
         self.daemon.renderer.set_orb_state(OrbState::Pointing)?;
@@ -583,6 +733,15 @@ impl Connection {
             }
         };
 
+        let look = self.daemon.appearance(
+            None,
+            highlight.display_id,
+            &Footprint::Outline {
+                rect,
+                width: contrast::STROKE_WIDTH,
+            },
+            rect,
+        );
         let annotation = Annotation::new(
             session,
             Anchor::new(rect, highlight.display_id),
@@ -591,14 +750,8 @@ impl Connection {
             },
         )
         .with_ttl(self.daemon.ttl_for(highlight.ttl_ms))
-        .with_color(self.daemon.color_for(
-            None,
-            highlight.display_id,
-            &Footprint::Outline {
-                rect,
-                width: contrast::STROKE_WIDTH,
-            },
-        ));
+        .with_color(look.color)
+        .with_fingerprint(look.fingerprint);
 
         let id = self.daemon.store(annotation)?;
 
@@ -610,9 +763,16 @@ impl Connection {
     }
 
     /// Capture the display and ask the resolver to ground a query against it.
+    ///
+    /// Captured here rather than inside the resolver, so an adapter never touches the
+    /// screen itself and a fake one in a test never has to. The resolver says how much
+    /// detail it needs and the daemon is what decides how to get it.
     async fn resolve(&self, query: &str, display: DisplayId) -> Result<crate::traits::Resolution> {
         let resolver = self.daemon.resolver.clone().ok_or(Error::NoResolver)?;
-        let frame = self.daemon.capture.capture(display)?;
+        let frame = self
+            .daemon
+            .capture
+            .capture_detailed(display, resolver.detail())?;
 
         self.daemon.renderer.set_orb_state(OrbState::Thinking)?;
         let outcome = resolver.resolve(query, &frame).await;

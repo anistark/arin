@@ -170,6 +170,13 @@ impl Renderer for MacRenderer {
         let color = annotation.color;
 
         on_main(move |host, _mtm| {
+            // Drawing the same id twice is a redraw, which is how a mark follows content
+            // that scrolled. Replacing the map entry alone would leave the old layer on
+            // screen with nothing left holding a reference to remove it: a mark that
+            // multiplies every time the page moves, and only the newest one clearable.
+            if let Some(stale) = host.layers.remove(&id) {
+                stale.removeFromSuperlayer();
+            }
             let Some(panel) = host.panel_for(screen_id) else {
                 tracing::warn!(%screen_id, "no panel for display, dropping annotation");
                 return;

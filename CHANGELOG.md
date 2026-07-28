@@ -135,6 +135,40 @@ protocol freeze, after which protocol changes are additive only.
   Placement has a preferred side and a fallback, so a mark near an edge puts its caption
   on the side with room rather than half off the display, and a label too long to be one
   truncates instead of running the width of the screen.
+- Scroll tracking. Annotations now move with content that scrolled instead of being
+  thrown away by it. The watcher already noticed movement; it now also measures how far,
+  by keeping one brightness value per horizontal and per vertical band of the frame and
+  sliding each profile against the previous tick's to find the offset that lines them up.
+  Marks are translated by that offset and redrawn in place, so an orb keeps up with the
+  page rather than disappearing off it.
+- Grounding. `arin point "the Submit button"` and `arin highlight "the error message"`
+  now work with no coordinates, as do `query` on the `point_at` and `highlight` MCP tools.
+  The daemon captures the display, a resolver says where the thing is, and the mark goes
+  there. This is what lets a client that cannot see the screen point at something on it.
+- `arin-resolve`: the Claude adapter, grounding against a hosted model with the user's own
+  API key. It sends a screenshot and a description and gets back a position, a bounding
+  box, and a confidence, with the answer constrained to a schema. Deliberately not the
+  computer use tool: that reports an action to take and carries no confidence, and
+  confidence is what decides between a precise mark and a cautious one. Arin also does not
+  actuate, so a request shaped like "click this" asks for something that will never happen.
+  A model that cannot find the thing says so and nothing is drawn, because a mark on the
+  wrong element is worse than no mark.
+- `arin resolvers`, which lists what this build can ground with and whether each one
+  leaves the machine. It builds each rather than describing it, so a resolver that is not
+  going to work says why there rather than at first use.
+- `Capture::capture_detailed`, so one backend can serve two callers that want very
+  different things. Scroll detection and the colour picker read coarse statistics from a
+  thumbnail, which is why the daemon captures downscaled. A resolver has to read the
+  interface, and a mark placed from a 512 pixel thumbnail is off by however much that
+  thumbnail rounded.
+- Content fingerprints, which fill in the `content_hash` the anchor has carried as null
+  since 0.1. Each positioned mark records a small grid of brightnesses from the region it
+  was drawn over. After the daemon follows a movement it looks again at where the mark
+  landed, and a mark now sitting on unrelated content is invalidated rather than left
+  pointing at the wrong thing. This is what covers the case a display-wide answer cannot:
+  a page that scrolls under a toolbar that does not has one honest answer for most of the
+  screen and a different one for the rest, and only the mark's own anchor knows which
+  side of that line it is on.
 
 ### Changed
 
@@ -153,6 +187,29 @@ protocol freeze, after which protocol changes are additive only.
   while a mark is small and local.
 - The scroll watcher only captures displays that have something drawn on them, and
   re-baselines around the daemon's own drawing.
+- A detected scroll no longer invalidates everything on the display as a matter of
+  course. That is now the fallback, taken when no single movement accounts for what
+  changed: a partial scroll, a window appearing, a page replaced outright. Three
+  conditions have to hold before the daemon believes an offset instead. The profiles must
+  line up at it, which is what stops a window scrolling inside a still screen from
+  dragging every other mark along with it. No distant offset may score nearly as well,
+  which is what stops evenly spaced lines of text from producing a confident answer one
+  line pitch out. And a mark's own fingerprint must still match where it landed.
+- The resolver registry holds builders rather than live resolvers. Configuration names
+  one, and constructing any of them can fail, so a registry of instances would have to
+  build every adapter it knows about in order to offer a choice between them. Someone who
+  configured a local model would have needed an API key for the hosted one they did not
+  ask for.
+- Confidence now drives what gets drawn, which it could not before because nothing
+  produced a confidence. The policy and its threshold have been in `arin-core` since 0.2
+  with no resolver to feed them. A confident answer puts the orb on the target and an
+  unsure one outlines the region instead.
+- The capture the colour picker takes per positioned annotation now also records that
+  annotation's fingerprint. It was hard to justify at around 100ms when it bought one
+  thing; it buys two now, and the second is the only per-annotation evidence the daemon
+  has that following a scroll put the mark somewhere sensible. Turning `adaptive_color`
+  off still turns the capture off, so marks made that way are followed on the
+  display-wide answer alone.
 - The README is rewritten around what Arin now is rather than what it was mid-0.1. It
   gained an install line, the one-line MCP setup, the four tools, and a protocol summary,
   and lost a status section claiming that capture, the menu bar, the hotkey, and the orb's
@@ -171,6 +228,12 @@ protocol freeze, after which protocol changes are additive only.
 
 ### Fixed
 
+- The macOS renderer left a layer on screen when an annotation was drawn twice under the
+  same id. `Renderer::draw` has always been documented as "draw or redraw", but the host
+  only replaced its map entry, so the previous layer stayed in the tree with nothing left
+  holding a reference that could remove it. Nothing redrew before now, so nothing had hit
+  it. Following a scroll redraws constantly, and would have left a trail of every place
+  a mark had ever been, only the newest of them clearable.
 - `LineReader::next_line` was not cancellation safe, which the socket server now depends
   on: it reads inside a `select!` against the invalidations it pushes, so the read future
   is dropped whenever an announcement wins the race. Bytes are consumed from the reader as
@@ -216,6 +279,39 @@ protocol freeze, after which protocol changes are additive only.
   spends only a small fraction of its length over a different background, an eighth say,
   which is a minority of its own chunk and stays outvoted. It comes out legible where most
   of it is drawn and dim for the rest.
+- **Grounding accuracy is unmeasured.** The adapter is verified as far as a socket: the
+  request shape, the required headers, the coordinate conversion, and every failure path
+  are covered against a loopback server. None of that says whether it puts the orb on the
+  right button, and it has never been run against the real API or a real screen. The
+  effort level, the detail sent, and the confidence threshold are all starting points. The
+  eval set the roadmap owes for this is still owed, and nobody should sign off the 0.3
+  acceptance criterion until it exists.
+- Grounding sends a screenshot of the whole display to a third party on every query. It is
+  off unless named, an API key alone does not turn it on, and the daemon says so at
+  startup, but that is the extent of the consent story. Whether consent belongs at the
+  daemon, in the handshake, or per request is part of the security model that has to be
+  settled before the protocol freezes.
+- A resolve blocks the client that asked for it, for as long as the model takes. There is
+  no progress on the wire while it runs, which is the open question about whether `ack`
+  should stream. The orb sits in its thinking state, so the person watching sees
+  something, and the agent does not.
+- A diagonal scroll is followed vertically and not horizontally when its horizontal
+  component is not decisive on its own. The two axes are measured independently, and one
+  of them naming a movement is allowed to account for the other being unreadable, because
+  a vertical scroll genuinely scrambles the horizontal profile as new content arrives.
+  Requiring both to agree refuses every real scroll, which is what a first attempt did.
+  The mark ends up sideways of its target, and the fingerprint check is what catches it.
+- Every threshold in the shift estimator is a starting number rather than a measured one.
+  They separate the cases in the tests and on the screens they were written against, and
+  they want a real corpus of scrolls behind them before anyone should trust the specific
+  values. The one most likely to be wrong is how well the profiles must line up before an
+  offset is believed, which is what decides how large a static region has to be before a
+  partial scroll is refused.
+- The fingerprint check passes on a bare majority of samples agreeing, which is a low bar
+  set for an honest reason: the overlay is in the frame, so a mark recorded before it was
+  drawn is compared against a capture containing it, and a text box covers its whole
+  anchor. It reliably catches a mark stranded on unrelated content and is not being asked
+  to tell a button from the same button one line lower.
 
 ### Notes
 

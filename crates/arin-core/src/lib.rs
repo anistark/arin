@@ -29,6 +29,7 @@ pub mod config;
 pub mod contrast;
 pub mod daemon;
 pub mod error;
+pub mod fingerprint;
 pub mod noop;
 pub mod peer;
 pub mod policy;
@@ -44,13 +45,14 @@ pub use config::Config;
 pub use contrast::Rgb;
 pub use daemon::{Connection, Daemon};
 pub use error::{Error, Result};
+pub use fingerprint::Fingerprint;
 pub use noop::{NoopCapture, NoopRenderer};
 pub use policy::{OrbState, Rendering};
 pub use scroll::ScrollWatcher;
 pub use server::Server;
 pub use session::Session;
-pub use signature::Signature;
-pub use traits::{Capture, Frame, Renderer, Resolution, Resolver};
+pub use signature::{Shift, Signature};
+pub use traits::{Capture, DEFAULT_DETAIL, Frame, Renderer, Resolution, Resolver};
 
 /// The product name, in the one place it is spelled.
 ///

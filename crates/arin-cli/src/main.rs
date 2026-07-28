@@ -42,19 +42,38 @@ enum Command {
         /// platforms that do not have one yet.
         #[arg(long)]
         headless: bool,
+
+        /// Ground natural language targets with this resolver. `arin resolvers` lists them.
+        ///
+        /// Off unless named. A resolver may send screenshots of your screen to a third
+        /// party, so it is never turned on by inference: having an API key in your
+        /// environment is not the same as asking for one to be used.
+        #[arg(long, value_name = "NAME", env = "ARIN_RESOLVER")]
+        resolver: Option<String>,
     },
 
+    /// List the resolvers this build can ground queries with.
+    Resolvers,
+
     /// Put the orb on a point.
+    ///
+    /// Three ways to say where. `arin point 412 88` gives coordinates, `arin point "the
+    /// Submit button"` describes the target and needs a resolver, and `--at top-left`
+    /// names a position on the display.
     Point {
-        /// Horizontal position in logical points. Omit when using `--at`.
-        x: Option<f64>,
-        /// Vertical position in logical points. Omit when using `--at`.
+        /// Horizontal position in logical points, or a description of the target.
+        ///
+        /// A number here wants a `y` after it. Anything else is read as a description and
+        /// grounded by the daemon's resolver, which has to have been configured.
+        #[arg(value_name = "X | DESCRIPTION")]
+        position: Option<String>,
+        /// Vertical position in logical points. Omit when describing a target or using `--at`.
         y: Option<f64>,
         /// A position named relative to the display instead of `x y`.
         ///
         /// One of `top-left`, `top`, `top-right`, `left`, `center`, `right`,
         /// `bottom-left`, `bottom`, `bottom-right`, or a pair like `50%,30%`.
-        #[arg(long, value_name = "POSITION", conflicts_with_all = ["x", "y"])]
+        #[arg(long, value_name = "POSITION", conflicts_with_all = ["position", "y"])]
         at: Option<String>,
         /// Short caption to render next to the orb.
         #[arg(long)]
@@ -64,15 +83,19 @@ enum Command {
     },
 
     /// Outline a region.
+    ///
+    /// `arin highlight 100 200 340 90` gives the rectangle. `arin highlight "the error
+    /// message"` describes it and needs a resolver.
     Highlight {
-        /// Left edge in logical points.
-        x: f64,
+        /// Left edge in logical points, or a description of the region.
+        #[arg(value_name = "X | DESCRIPTION")]
+        region: Option<String>,
         /// Top edge in logical points.
-        y: f64,
+        y: Option<f64>,
         /// Width in logical points.
-        width: f64,
+        width: Option<f64>,
         /// Height in logical points.
-        height: f64,
+        height: Option<f64>,
         /// Short caption to render against the region.
         #[arg(long)]
         label: Option<String>,
@@ -207,7 +230,11 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Command::Daemon { headless } => start_daemon(config, headless),
+        Command::Daemon { headless, resolver } => {
+            config.resolver = resolver;
+            start_daemon(config, headless)
+        }
+        Command::Resolvers => list_resolvers(),
         #[cfg(target_os = "macos")]
         Command::Displays => list_displays(),
         #[cfg(target_os = "macos")]
@@ -291,12 +318,74 @@ fn start_daemon(config: Config, headless: bool) -> Result<()> {
     block_on(serve(config, renderer, capture))
 }
 
+/// Print what this build can ground queries with.
+///
+/// A separate command rather than a line in `--help`, because the set is a property of the
+/// binary rather than of the invocation, and because whether a resolver leaves the machine
+/// is the thing worth reading before choosing one.
+fn list_resolvers() -> Result<()> {
+    let registry = arin_resolve::Registry::with_builtins();
+    if registry.is_empty() {
+        println!("no resolvers are built into this binary");
+        return Ok(());
+    }
+    println!("Pass one to `arin daemon --resolver <NAME>`. None is used unless you name it.\n");
+    for name in registry.names() {
+        // Built rather than described, so what is printed is what would actually run.
+        // A resolver that cannot be constructed says why here rather than at first use.
+        match registry.build(name) {
+            Ok(resolver) if resolver.is_remote() => {
+                println!("{name}\tready, and SENDS SCREENSHOTS OFF THIS MACHINE");
+            }
+            Ok(_) => println!("{name}\tready, and runs entirely on this machine"),
+            Err(e) => println!("{name}\tunavailable: {e}"),
+        }
+    }
+    Ok(())
+}
+
+/// Build the configured resolver, and say plainly what enabling it means.
+///
+/// The security model is unresolved and consent is one of the open questions in it. Until
+/// that is settled, the honest minimum is that the daemon cannot be made to send anything
+/// off the machine without someone having named the thing that does it, and that it says
+/// so where the person who started it will see it.
+fn wire_resolver(config: &Config) -> Result<Option<Arc<dyn arin_core::Resolver>>> {
+    let Some(name) = config.resolver.as_deref() else {
+        return Ok(None);
+    };
+
+    let resolver = arin_resolve::Registry::with_builtins()
+        .build(name)
+        .with_context(|| format!("could not start the {name:?} resolver"))?;
+
+    if resolver.is_remote() {
+        tracing::warn!(
+            resolver = name,
+            "grounding is on, and this resolver sends screenshots of your screen to a \
+             third party. Every `point` or `highlight` carrying a query captures the \
+             display and uploads it. Stop the daemon or drop --resolver to turn this off."
+        );
+    } else {
+        tracing::info!(
+            resolver = name,
+            "grounding is on, and stays on this machine"
+        );
+    }
+    Ok(Some(resolver))
+}
+
 async fn serve(
     config: Config,
     renderer: Arc<dyn Renderer>,
     capture: Arc<dyn Capture>,
 ) -> Result<()> {
-    let daemon = Arc::new(Daemon::new(config, renderer, capture));
+    let resolver = wire_resolver(&config)?;
+    let daemon = Daemon::new(config, renderer, capture);
+    let daemon = Arc::new(match resolver {
+        Some(resolver) => daemon.with_resolver(resolver),
+        None => daemon,
+    });
 
     // The menu bar is built before the daemon exists, so the actions arrive now rather
     // than at construction.
@@ -639,7 +728,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
 
     let message = match command {
         Command::Point {
-            x,
+            position,
             y,
             at,
             label,
@@ -647,12 +736,24 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
         } => {
             hold = target.hold;
             let display = DisplayId(target.display);
-            let mut point = match (x, y, at) {
-                (Some(x), Some(y), None) => Point::at(x, y, display),
+            let mut point = match (position, y, at) {
+                (Some(x), Some(y), None) => match x.parse::<f64>() {
+                    Ok(x) => Point::at(x, y, display),
+                    Err(_) => bail!(
+                        "{x:?} is not a coordinate. A description goes on its own: \
+                         `arin point \"the Submit button\"`"
+                    ),
+                },
+                // One argument. A number is half a pair, anything else is a description.
+                (Some(query), None, None) => {
+                    if query.parse::<f64>().is_ok() {
+                        bail!("point wants both `x` and `y`, or a description in quotes");
+                    }
+                    Point::query(query, display)
+                }
                 (None, None, Some(at)) => Point::named(at, display),
-                // Clap rejects `x` alongside `--at`, so what is left is half a pair or
-                // nothing at all.
-                _ => bail!("point wants `x y`, or `--at <POSITION>`"),
+                // Clap rejects a target alongside `--at`, so what is left is a stray `y`.
+                _ => bail!("point wants `x y`, a description in quotes, or `--at <POSITION>`"),
             };
             point.label = label;
             point.ttl_ms = target.ttl_ms()?;
@@ -660,7 +761,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
         }
 
         Command::Highlight {
-            x,
+            region,
             y,
             width,
             height,
@@ -668,10 +769,23 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
             target,
         } => {
             hold = target.hold;
-            let mut highlight = Highlight::over(
-                LogicalRect::new(x, y, width, height),
-                DisplayId(target.display),
-            );
+            let display = DisplayId(target.display);
+            let mut highlight = match (region, y, width, height) {
+                (Some(x), Some(y), Some(width), Some(height)) => match x.parse::<f64>() {
+                    Ok(x) => Highlight::over(LogicalRect::new(x, y, width, height), display),
+                    Err(_) => bail!(
+                        "{x:?} is not a coordinate. A description goes on its own: \
+                         `arin highlight \"the error message\"`"
+                    ),
+                },
+                (Some(query), None, None, None) => {
+                    if query.parse::<f64>().is_ok() {
+                        bail!("highlight wants `x y width height`, or a description in quotes");
+                    }
+                    Highlight::query(query, display)
+                }
+                _ => bail!("highlight wants `x y width height`, or a description in quotes"),
+            };
             highlight.label = label;
             highlight.ttl_ms = target.ttl_ms()?;
             ClientMessage::Highlight(highlight)
@@ -725,7 +839,9 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
         Command::Displays | Command::Capture { .. } | Command::Permissions { .. } => {
             unreachable!("handled above")
         }
-        Command::Daemon { .. } | Command::Status => unreachable!("handled above"),
+        Command::Daemon { .. } | Command::Resolvers | Command::Status => {
+            unreachable!("handled above")
+        }
     };
 
     let reply = client.send(message).await?;
@@ -798,7 +914,7 @@ mod tests {
             "Save",
         ]);
         let Command::Point {
-            x,
+            position,
             y,
             at,
             label,
@@ -807,7 +923,7 @@ mod tests {
         else {
             panic!("expected point");
         };
-        assert_eq!((x, y), (Some(412.0), Some(88.0)));
+        assert_eq!((position.as_deref(), y), (Some("412"), Some(88.0)));
         assert_eq!(at, None);
         assert_eq!(target.display, 1);
         assert_eq!(label.as_deref(), Some("Save"));
@@ -816,11 +932,87 @@ mod tests {
     #[test]
     fn a_named_position_replaces_the_coordinates() {
         let cli = Cli::parse_from(["arin", "point", "--at", "top-left"]);
-        let Command::Point { x, y, at, .. } = cli.command else {
+        let Command::Point {
+            position, y, at, ..
+        } = cli.command
+        else {
             panic!("expected point");
         };
-        assert_eq!((x, y), (None, None));
+        assert_eq!((position, y), (None, None));
         assert_eq!(at.as_deref(), Some("top-left"));
+    }
+
+    /// The acceptance criterion for 0.3, as it is actually typed.
+    #[test]
+    fn a_description_is_accepted_where_coordinates_go() {
+        let cli = Cli::parse_from(["arin", "point", "the Submit button"]);
+        let Command::Point {
+            position, y, at, ..
+        } = cli.command
+        else {
+            panic!("expected point");
+        };
+        assert_eq!(position.as_deref(), Some("the Submit button"));
+        assert_eq!(y, None);
+        assert_eq!(at, None);
+    }
+
+    #[test]
+    fn a_description_is_accepted_for_a_region_too() {
+        let cli = Cli::parse_from(["arin", "highlight", "the error message"]);
+        let Command::Highlight {
+            region,
+            y,
+            width,
+            height,
+            ..
+        } = cli.command
+        else {
+            panic!("expected highlight");
+        };
+        assert_eq!(region.as_deref(), Some("the error message"));
+        assert_eq!((y, width, height), (None, None, None));
+    }
+
+    /// One number is the ambiguous case: it could be half a coordinate pair or a very
+    /// strange description. It is read as the former and refused, because a client that
+    /// meant the latter can always add a word and one that dropped a `y` gets told.
+    #[test]
+    fn half_a_coordinate_pair_is_refused_rather_than_grounded() {
+        let cli = Cli::parse_from(["arin", "point", "412"]);
+        let Command::Point { position, .. } = cli.command else {
+            panic!("expected point");
+        };
+        // Clap accepts it. The refusal is the client's, where the message can explain.
+        assert_eq!(position.as_deref(), Some("412"));
+    }
+
+    #[test]
+    fn a_description_and_a_named_position_cannot_both_be_given() {
+        assert!(
+            Cli::try_parse_from(["arin", "point", "the Submit button", "--at", "top-left"])
+                .is_err()
+        );
+    }
+
+    /// The daemon has to be told to ground, and the flag reads as a switch rather than as
+    /// a model name so that turning it on is a decision about egress rather than a tweak.
+    #[test]
+    fn the_daemon_takes_a_named_resolver_and_defaults_to_none() {
+        let cli = Cli::parse_from(["arin", "daemon"]);
+        let Command::Daemon { resolver, .. } = cli.command else {
+            panic!("expected daemon");
+        };
+        assert_eq!(
+            resolver, None,
+            "a daemon started with no argument must not ground anything"
+        );
+
+        let cli = Cli::parse_from(["arin", "daemon", "--resolver", "claude"]);
+        let Command::Daemon { resolver, .. } = cli.command else {
+            panic!("expected daemon");
+        };
+        assert_eq!(resolver.as_deref(), Some("claude"));
     }
 
     /// Coordinates and a name are two answers to the same question, so clap refuses them

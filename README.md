@@ -100,6 +100,34 @@ the session that made them and a one-shot command ends its session on the way ou
 `--ttl` takes seconds. On a platform with no renderer yet, `arin daemon --headless` runs
 the whole protocol and draws nothing.
 
+## Pointing without coordinates
+
+Describe the target instead of measuring it, and the daemon works out where it is.
+
+```
+arin point "the Submit button"
+arin highlight "the error message"
+```
+
+This needs a resolver, which is off by default and never turned on by inference. Start the
+daemon with one by name:
+
+```
+arin resolvers
+ANTHROPIC_API_KEY=... arin daemon --resolver claude
+```
+
+`arin resolvers` says which are available and, for each, whether it leaves the machine.
+The one that ships takes a screenshot of the display and sends it to Anthropic's API on
+every query, so it is worth being deliberate about: having a key in your environment does
+not switch it on, and the daemon warns on startup when a resolver that sends anything
+anywhere is in use.
+
+How the mark is drawn follows how sure the model was. A confident answer puts the orb on
+the target. An unsure one outlines the region instead, because a slightly large highlight
+reads as intentional and a confident mark on the wrong button reads as broken. A model
+that cannot find the thing at all says so, and nothing is drawn.
+
 ## The protocol
 
 Newline-delimited JSON over a Unix domain socket. The socket is mode 0600 inside a
@@ -146,8 +174,12 @@ model. That lands in 0.3.
 
 Pre-release, and honest about it. On macOS everything below works: the overlay is click
 through and never takes focus, all four annotation kinds draw, the orb flies to its
-target and trails embers, capture drives scroll invalidation, and marks can be cleared
-from the menu bar or with `Cmd+Shift+K`.
+target and trails embers, marks follow content that scrolls and are dropped when they
+cannot, and marks can be cleared from the menu bar or with `Cmd+Shift+K`.
+
+Grounding is the newest part and the least proven. Every failure path is covered by tests
+and its accuracy is not measured at all: there is no eval set behind it yet, so treat
+`arin point "the Submit button"` as something to try rather than something to rely on.
 
 | Platform | Status |
 |---|---|
@@ -161,11 +193,19 @@ Nothing is tagged before 1.0. The 0.x line ships from `main`.
 ## Privacy
 
 Arin has no analytics, no accounts, and no network listener. The daemon binds a Unix
-domain socket and nothing else. The only egress will be an optional grounding model call,
-which is explicit and off by default. Local grounding lands in 0.5.
+domain socket and nothing else.
 
-Screen Recording is the only permission Arin asks for, and it is used to notice when
-content moves under a mark. Frames are compared in memory and never leave the machine.
+There is exactly one thing that sends anything off the machine: a grounding resolver, and
+only while one is configured. `arin daemon` on its own reaches nothing, an API key in your
+environment does not enable anything, and `arin resolvers` tells you which of them leave
+the machine before you pick one. With the Claude resolver on, every `point` or `highlight`
+carrying a description uploads a screenshot of that display to Anthropic's API. Nothing
+else does, and marks made from coordinates never trigger it. Local grounding lands in 0.5
+and removes the requirement entirely.
+
+Screen Recording is the only permission Arin asks for. It is used to notice when content
+moves under a mark and to choose a colour that can be seen against what is under it. Those
+frames are compared in memory and never leave the machine.
 
 ## License
 

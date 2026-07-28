@@ -25,8 +25,15 @@ arin-win = { path = "crates/arin-win", version = "0.1.0" }
 
 # Shared third party.
 anyhow = "1.0.104"
+base64 = "0.23.0"
 clap = { version = "4.6.4", features = ["derive", "env"] }
 futures = "0.3.33"
+# Encoding only, and only in `arin-resolve`. A resolver has to hand a model an image, and
+# a screenshot is the one thing in this repo that leaves the machine.
+png = { version = "0.18.1", default-features = false }
+# Defaults carry rustls, so a distributed binary does not depend on whatever OpenSSL the
+# machine happens to have, and the system proxy settings are honoured.
+reqwest = { version = "0.13.4", features = ["json"] }
 global-hotkey = "0.8.0"
 libc = "0.2.189"
 rmcp = "2.2.0"
