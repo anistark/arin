@@ -313,7 +313,8 @@ fn highlight_layer(rect: LogicalRect, color: Rgb, panel_height: f64) -> Retained
     let layer = CALayer::new();
     layer.setFrame(to_layer_rect(rect, panel_height));
     layer.setBorderColor(Some(&annotation_color(color, 1.0)));
-    layer.setBorderWidth(3.0);
+    // The same width the daemon sampled under when it chose this colour.
+    layer.setBorderWidth(arin_core::contrast::STROKE_WIDTH);
     layer.setCornerRadius(4.0);
     layer
 }
@@ -413,7 +414,11 @@ fn path_layer(
     // A stroked path, not a filled shape. Without this the path closes itself and fills,
     // which turns a gesture into a blob.
     layer.setFillColor(None);
-    layer.setLineWidth(style.and_then(|s| s.width).unwrap_or(3.0));
+    layer.setLineWidth(
+        style
+            .and_then(|s| s.width)
+            .unwrap_or(arin_core::contrast::STROKE_WIDTH),
+    );
     layer.setLineCap(unsafe { objc2_quartz_core::kCALineCapRound });
     layer.setLineJoin(unsafe { objc2_quartz_core::kCALineJoinRound });
     Retained::into_super(layer)

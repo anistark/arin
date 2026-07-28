@@ -3,19 +3,22 @@
 //! Screen Recording is the only permission Arin asks for, and this is the only thing
 //! that needs it. The first capture triggers the system prompt.
 //!
-//! # Excluding ourselves, which does not work
+//! # Excluding ourselves
 //!
 //! The filter asks ScreenCaptureKit to leave Arin's own windows out of the frame, so a
-//! capture would show the screen as it would look with Arin not running.
+//! capture shows the screen as it would look with Arin not running.
 //!
-//! Measured, it does not hold. Both forms were tried, `excludingWindows` with our panel
-//! and `excludingApplications` with our process. Both identify us correctly and neither
-//! keeps the overlay out of the capture.
+//! This was documented here as not working, on a measurement taken before the frame
+//! geometry below was correct. Re-measured on macOS 15: it does hold. A textbox was drawn
+//! over a white background, covering a third of the display's width, and a colour picked
+//! for that same region afterwards came back with the answer for white rather than for
+//! the near black panel sitting on it. Had the overlay been in the frame the two would
+//! have differed, since the palette moves a long way between those backgrounds.
 //!
-//! It is left in because it is the right request to make and costs nothing if it starts
-//! working. Nothing depends on it: `crate::signature` tells an annotation apart from a
-//! scroll by how much of the screen changed, which does not care whether the overlay is
-//! in the frame.
+//! Nothing depends on it either way, which is why the wrong note survived so long.
+//! `crate::signature` tells an annotation apart from a scroll by how much of the screen
+//! changed, and the daemon re-baselines around its own drawing regardless. Both remain as
+//! insurance rather than as load bearing machinery.
 //!
 //! # One capturing process at a time
 //!

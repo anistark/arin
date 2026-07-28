@@ -6,7 +6,7 @@
 
 use crate::annotation::{Annotation, AnnotationKind};
 use crate::config::Config;
-use crate::contrast::{self, Rgb};
+use crate::contrast::{self, Footprint, Rgb};
 use crate::error::{Error, Result};
 use crate::policy::{OrbState, Rendering};
 use crate::session::Session;
@@ -19,6 +19,14 @@ use arin_protocol::{
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
+
+/// How many pending announcements a connection may fall behind by.
+///
+/// Generous: an invalidation is a handful of bytes and a connection that is not reading
+/// is already in trouble. A receiver that overruns this loses the oldest and is told, so
+/// the daemon is never blocked by a client that stopped listening.
+const ANNOUNCEMENT_BACKLOG: usize = 256;
 
 /// How large a region to highlight around a low-confidence resolution, in logical points.
 ///
@@ -40,6 +48,22 @@ pub struct Daemon {
     /// moving and invalidate the very annotation that just appeared. This lets the
     /// watcher tell the two apart.
     drawn: AtomicU64,
+    /// Invalidations nobody asked for, on their way to whoever owns them.
+    announcements: broadcast::Sender<Announcement>,
+}
+
+/// An invalidation, and the session whose annotation it concerns.
+///
+/// The session travels alongside rather than inside [`Invalidated`], because the wire
+/// message must not carry it: a client learning that some *other* session's annotation
+/// went away would be told something it has no business knowing. Connections filter on
+/// this before writing anything out.
+#[derive(Debug, Clone)]
+pub struct Announcement {
+    /// Who owns the annotation this concerns.
+    pub session: SessionId,
+    /// What to tell them.
+    pub event: Invalidated,
 }
 
 #[derive(Default)]
@@ -58,6 +82,29 @@ impl Daemon {
             resolver: None,
             state: Mutex::new(State::default()),
             drawn: AtomicU64::new(0),
+            announcements: broadcast::channel(ANNOUNCEMENT_BACKLOG).0,
+        }
+    }
+
+    /// Listen for invalidations the daemon raises on its own.
+    ///
+    /// One per connection. Everything sent here is unsolicited: a scroll, a time to live
+    /// running out, or the user clearing the screen. Replies to requests never come this
+    /// way, which is what keeps the two apart on the socket.
+    pub fn subscribe(&self) -> broadcast::Receiver<Announcement> {
+        self.announcements.subscribe()
+    }
+
+    /// Tell whoever owns these annotations that they went away.
+    ///
+    /// Failure means nothing is listening, which is the normal state for a daemon with no
+    /// clients connected and not worth reporting.
+    fn announce(&self, owners: Vec<(AnnotationId, SessionId)>, reason: &InvalidationReason) {
+        for (id, session) in owners {
+            let _ = self.announcements.send(Announcement {
+                session,
+                event: Invalidated::one(id, reason.clone()),
+            });
         }
     }
 
@@ -167,13 +214,13 @@ impl Daemon {
         reason: InvalidationReason,
     ) -> Vec<Invalidated> {
         let mut state = self.state.lock().expect("state lock");
-        let doomed: Vec<AnnotationId> = state
+        let doomed: Vec<(AnnotationId, SessionId)> = state
             .annotations
             .iter()
             .filter(|(_, a)| a.display_id() == display)
-            .map(|(id, _)| id.clone())
+            .map(|(id, a)| (id.clone(), a.session.clone()))
             .collect();
-        for id in &doomed {
+        for (id, _) in &doomed {
             state.annotations.remove(id);
         }
         drop(state);
@@ -181,14 +228,15 @@ impl Daemon {
         if !doomed.is_empty() {
             self.mark_drawn();
         }
+        for (id, _) in &doomed {
+            if let Err(e) = self.renderer.clear(id) {
+                tracing::warn!(%id, error = %e, "renderer refused a clear");
+            }
+        }
+        self.announce(doomed.clone(), &reason);
         doomed
             .into_iter()
-            .map(|id| {
-                if let Err(e) = self.renderer.clear(&id) {
-                    tracing::warn!(%id, error = %e, "renderer refused a clear");
-                }
-                Invalidated::one(id, reason.clone())
-            })
+            .map(|(id, _)| Invalidated::one(id, reason.clone()))
             .collect()
     }
 
@@ -200,7 +248,11 @@ impl Daemon {
     /// this is it.
     pub fn clear_everything(&self) -> Vec<Invalidated> {
         let mut state = self.state.lock().expect("state lock");
-        let doomed: Vec<AnnotationId> = state.annotations.keys().cloned().collect();
+        let doomed: Vec<(AnnotationId, SessionId)> = state
+            .annotations
+            .iter()
+            .map(|(id, a)| (id.clone(), a.session.clone()))
+            .collect();
         state.annotations.clear();
         drop(state);
 
@@ -212,9 +264,10 @@ impl Daemon {
         if let Err(e) = self.renderer.clear_all() {
             tracing::warn!(error = %e, "renderer refused a clear");
         }
+        self.announce(doomed.clone(), &InvalidationReason::Cleared);
         doomed
             .into_iter()
-            .map(|id| Invalidated::one(id, InvalidationReason::Cleared))
+            .map(|(id, _)| Invalidated::one(id, InvalidationReason::Cleared))
             .collect()
     }
 
@@ -226,13 +279,13 @@ impl Daemon {
     pub fn expire_annotations(&self) -> Vec<Invalidated> {
         let now = std::time::Instant::now();
         let mut state = self.state.lock().expect("state lock");
-        let doomed: Vec<AnnotationId> = state
+        let doomed: Vec<(AnnotationId, SessionId)> = state
             .annotations
             .iter()
             .filter(|(_, a)| a.is_expired(now))
-            .map(|(id, _)| id.clone())
+            .map(|(id, a)| (id.clone(), a.session.clone()))
             .collect();
-        for id in &doomed {
+        for (id, _) in &doomed {
             state.annotations.remove(id);
         }
         drop(state);
@@ -245,14 +298,15 @@ impl Daemon {
         // page moving and takes every other annotation on that display with it.
         self.mark_drawn();
 
+        for (id, _) in &doomed {
+            if let Err(e) = self.renderer.clear(id) {
+                tracing::warn!(%id, error = %e, "renderer refused a clear");
+            }
+        }
+        self.announce(doomed.clone(), &InvalidationReason::Ttl);
         doomed
             .into_iter()
-            .map(|id| {
-                if let Err(e) = self.renderer.clear(&id) {
-                    tracing::warn!(%id, error = %e, "renderer refused a clear");
-                }
-                Invalidated::one(id, InvalidationReason::Ttl)
-            })
+            .map(|(id, _)| Invalidated::one(id, InvalidationReason::Ttl))
             .collect()
     }
 
@@ -265,7 +319,7 @@ impl Daemon {
     /// A capture that fails is not an error. Screen Recording may not be granted yet, and
     /// a mark in the default colour is a far better outcome than a refused request, so
     /// this falls back quietly and says so once at debug level.
-    fn color_for(&self, asked: Option<&str>, screen: DisplayId, rect: LogicalRect) -> Rgb {
+    fn color_for(&self, asked: Option<&str>, screen: DisplayId, footprint: &Footprint) -> Rgb {
         if let Some(named) = asked {
             match Rgb::parse(named) {
                 Some(color) => return color,
@@ -282,7 +336,7 @@ impl Daemon {
 
         match self.capture.capture(screen) {
             Ok(frame) => {
-                let picked = contrast::pick(&frame, rect);
+                let picked = contrast::pick(&frame, footprint);
                 // Logged because it is otherwise unobservable. A screenshot goes through
                 // colour management on the way out, so the pixels that come back are not
                 // the ones asked for and cannot be compared against the palette.
@@ -390,10 +444,11 @@ impl Connection {
                     AnnotationKind::Textbox { text: textbox.text },
                 )
                 .with_ttl(self.daemon.ttl_for(textbox.ttl_ms))
+                // A text box is a filled panel, so every pixel of it is ink.
                 .with_color(self.daemon.color_for(
                     None,
                     anchor_display,
-                    anchor_rect,
+                    &Footprint::Area(anchor_rect),
                 ));
                 let id = self.daemon.store(annotation)?;
                 Ok(DaemonMessage::Ack(
@@ -407,6 +462,12 @@ impl Connection {
                 let points: Vec<LogicalPoint> = draw.points().collect();
                 let bounds = bounding_rect(&points);
                 let display_id = draw.display_id;
+                let path = points.clone();
+                let stroke_width = draw
+                    .style
+                    .as_ref()
+                    .and_then(|s| s.width)
+                    .unwrap_or(contrast::STROKE_WIDTH);
                 let asked = draw.style.as_ref().and_then(|s| s.color.clone());
                 let anchor = Anchor::new(bounds, draw.display_id);
                 let annotation = Annotation::new(
@@ -418,10 +479,15 @@ impl Connection {
                     },
                 )
                 .with_ttl(self.daemon.ttl_for(draw.ttl_ms))
+                // Along the stroke, not over the bounding box. The box of a diagonal line
+                // is mostly pixels the stroke never touches.
                 .with_color(self.daemon.color_for(
                     asked.as_deref(),
                     display_id,
-                    bounds,
+                    &Footprint::Path {
+                        points: path,
+                        width: stroke_width,
+                    },
                 ));
                 let id = self.daemon.store(annotation)?;
                 Ok(DaemonMessage::Ack(
@@ -443,10 +509,11 @@ impl Connection {
                 self.daemon.drop_session(&session);
                 self.session = None;
                 self.daemon.renderer.set_orb_state(OrbState::Ending)?;
-                Ok(DaemonMessage::Invalidated(Invalidated {
-                    annotation_id: None,
-                    reason: InvalidationReason::SessionEnd,
-                }))
+                // Acked rather than answered with an `invalidated`. Every request gets an
+                // ack or an error, which leaves `invalidated` to mean one thing only:
+                // something happened that the client did not ask for. A reply that shared
+                // a type with a push could not be told apart from one.
+                Ok(DaemonMessage::Ack(Ack::default()))
             }
         }
     }
@@ -485,7 +552,11 @@ impl Connection {
             },
         )
         .with_ttl(self.daemon.ttl_for(point.ttl_ms))
-        .with_color(self.daemon.color_for(None, point.display_id, anchor_rect));
+        .with_color(self.daemon.color_for(
+            None,
+            point.display_id,
+            &Footprint::Area(anchor_rect),
+        ));
 
         let id = self.daemon.store(annotation)?;
         self.daemon.renderer.set_orb_state(OrbState::Pointing)?;
@@ -520,7 +591,14 @@ impl Connection {
             },
         )
         .with_ttl(self.daemon.ttl_for(highlight.ttl_ms))
-        .with_color(self.daemon.color_for(None, highlight.display_id, rect));
+        .with_color(self.daemon.color_for(
+            None,
+            highlight.display_id,
+            &Footprint::Outline {
+                rect,
+                width: contrast::STROKE_WIDTH,
+            },
+        ));
 
         let id = self.daemon.store(annotation)?;
 

@@ -12,17 +12,18 @@
 //! image file would be one more thing to keep in step with the palette.
 
 use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength,
+    NSApplication, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar,
+    NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_core_foundation::{CFData, CGSize};
 use objc2_core_graphics::{
     CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
 };
-use objc2_foundation::{NSObject, NSString};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use std::sync::OnceLock;
 
 /// What the menu bar calls when the user asks for a clear.
@@ -31,6 +32,35 @@ use std::sync::OnceLock;
 /// before the daemon exists, so the handler arrives afterwards rather than being passed
 /// in at construction.
 static CLEAR: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// What the menu bar calls when the user asks to quit.
+///
+/// Sending `terminate:` straight to the application is the obvious wiring and it is
+/// wrong: it ends the process without unwinding the daemon, so the socket file survives
+/// and the next start has to notice and clear it. The daemon is asked to stop instead,
+/// and it exits once it has let go of the socket.
+static QUIT: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// What the menu bar asks for the status line when the menu opens.
+///
+/// Returns a line of text and nothing more. The menu has no business knowing what a
+/// session or an annotation is, and the daemon has no business knowing about menus.
+static STATUS: OnceLock<Box<dyn Fn() -> String + Send + Sync>> = OnceLock::new();
+
+/// Where the two live lines sit in the menu, so the delegate can find them again.
+///
+/// Positions rather than retained handles, because `menuNeedsUpdate:` is handed the menu
+/// and nothing else. Keep these in step with `MenuBar::install`.
+const STATUS_INDEX: isize = 1;
+const PERMISSION_INDEX: isize = 2;
+
+/// Retitle a menu item, doing nothing if the menu has been rearranged underneath us.
+fn set_title(menu: &NSMenu, index: isize, title: &str) {
+    // An out of range index returns nil rather than trapping.
+    if let Some(item) = menu.itemAtIndex(index) {
+        item.setTitle(&NSString::from_str(title));
+    }
+}
 
 /// Register the action behind the Clear menu item.
 ///
@@ -41,12 +71,63 @@ pub fn on_clear(handler: impl Fn() + Send + Sync + 'static) {
     }
 }
 
+/// Register the action behind the Quit menu item.
+pub fn on_quit(handler: impl Fn() + Send + Sync + 'static) {
+    if QUIT.set(Box::new(handler)).is_err() {
+        tracing::warn!("a quit handler was already registered");
+    }
+}
+
+/// Register what the status line should say.
+///
+/// Called on the main thread each time the menu is opened, so it must be quick and must
+/// not block. Reading a couple of counters is fine; taking a screenshot is not.
+pub fn on_status(handler: impl Fn() -> String + Send + Sync + 'static) {
+    if STATUS.set(Box::new(handler)).is_err() {
+        tracing::warn!("a status handler was already registered");
+    }
+}
+
 define_class!(
     // SAFETY: NSObject has no subclassing requirements, and this type has no Drop.
     #[unsafe(super(NSObject))]
     #[name = "ArinMenuActions"]
     #[thread_kind = MainThreadOnly]
     struct Actions;
+
+    // Required by `NSMenuDelegate`, and free: `NSObject` already answers all of it.
+    unsafe impl NSObjectProtocol for Actions {}
+
+    /// Refreshes the live lines when the menu opens.
+    ///
+    /// A status shown once at install would be a status from startup, which is exactly
+    /// when nothing has happened yet and the permission has most likely not been granted.
+    unsafe impl NSMenuDelegate for Actions {
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            let status = STATUS
+                .get()
+                .map_or_else(|| "starting up".to_owned(), |status| status());
+            set_title(menu, STATUS_INDEX, &status);
+
+            // Cheap: reads the TCC answer rather than proving it with a frame, which is
+            // what `arin permissions` is for and is far too slow for a menu opening.
+            let granted = crate::permission::screen_recording_granted();
+            set_title(
+                menu,
+                PERMISSION_INDEX,
+                if granted {
+                    "Screen Recording: granted"
+                } else {
+                    "Screen Recording: needed, open Settings"
+                },
+            );
+            if let Some(item) = menu.itemAtIndex(PERMISSION_INDEX) {
+                // Only actionable when there is something to fix.
+                item.setEnabled(!granted);
+            }
+        }
+    }
 
     impl Actions {
         #[unsafe(method(clearAnnotations:))]
@@ -56,6 +137,29 @@ define_class!(
                 // The menu is built before the daemon, so this is reachable only if the
                 // daemon failed to start. Saying so beats a menu item that does nothing.
                 None => tracing::warn!("clear requested before the daemon was ready"),
+            }
+        }
+
+        #[unsafe(method(openScreenRecording:))]
+        fn open_screen_recording(&self, _sender: Option<&AnyObject>) {
+            if !crate::permission::open_screen_recording_settings() {
+                tracing::warn!("could not open System Settings");
+            }
+        }
+
+        #[unsafe(method(quitArin:))]
+        fn quit_arin(&self, _sender: Option<&AnyObject>) {
+            match QUIT.get() {
+                Some(quit) => quit(),
+                // No daemon to unwind, so there is no socket to let go of and nothing to
+                // wait for. Terminating directly is the right answer rather than leaving
+                // the user with a Quit item that does nothing.
+                None => {
+                    tracing::warn!("quit requested before the daemon was ready");
+                    if let Some(mtm) = MainThreadMarker::new() {
+                        NSApplication::sharedApplication(mtm).terminate(None);
+                    }
+                }
             }
         }
     }
@@ -91,11 +195,26 @@ impl MenuBar {
         let actions = Actions::new(mtm);
         let menu = NSMenu::new(mtm);
 
-        // A label rather than a control. There is nothing to configure here yet, and a
-        // menu that only clears should say what it belongs to.
+        // Index 0. A label rather than a control: there is nothing to configure here.
         let title = menu_item(mtm, "Arin", None, "");
         title.setEnabled(false);
         menu.addItem(&title);
+
+        // Index 1 and 2, both rewritten by the delegate every time the menu opens. The
+        // placeholder text is only ever seen if that fails to fire.
+        let status = menu_item(mtm, "starting up", None, "");
+        status.setEnabled(false);
+        menu.addItem(&status);
+
+        let permission = menu_item(
+            mtm,
+            "Screen Recording",
+            Some(sel!(openScreenRecording:)),
+            "",
+        );
+        unsafe { permission.setTarget(Some(&actions)) };
+        menu.addItem(&permission);
+
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
         let clear = menu_item(mtm, "Clear annotations", Some(sel!(clearAnnotations:)), "k");
@@ -110,10 +229,15 @@ impl MenuBar {
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-        // Quit goes to the application itself, which already knows how to stop.
-        let quit = menu_item(mtm, "Quit Arin", Some(sel!(terminate:)), "q");
-        unsafe { quit.setTarget(Some(&NSApplication::sharedApplication(mtm))) };
+        // Deliberately not `terminate:`. See `QUIT`.
+        let quit = menu_item(mtm, "Quit Arin", Some(sel!(quitArin:)), "q");
+        unsafe { quit.setTarget(Some(&actions)) };
         menu.addItem(&quit);
+
+        // The delegate is what keeps the two lines above from being a snapshot of
+        // startup, which is the one moment when nothing has happened and the permission
+        // is most likely still missing.
+        menu.setDelegate(Some(ProtocolObject::from_ref(&*actions)));
 
         item.setMenu(Some(&menu));
         tracing::info!("menu bar item installed");

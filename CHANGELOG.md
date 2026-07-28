@@ -60,6 +60,27 @@ protocol freeze, after which protocol changes are additive only.
   that reach them. A text box is a rounded panel with a tinted border, sized in points so
   it stays legible on a Retina display. A path is stroked with round caps and joins, and
   takes an optional colour and width.
+- Invalidations now reach the client that owns them. The daemon has always worked out
+  that a mark went away because content scrolled, a time to live ran out, or the user
+  cleared the screen, and then had nowhere to send it: the socket answered requests and
+  nothing else, so an agent could carry on describing something that was no longer on the
+  screen. Each connection now subscribes, and a session is only ever told about its own
+  marks, since learning that another client's annotation went away would leak that it
+  existed. `--hold` prints them as they arrive, and the MCP tools carry them on the next
+  result as `gone`, MCP having no way for a server to interrupt a model.
+- `session_end` is answered with an `ack` rather than an `invalidated`. Every request now
+  gets an ack or an error, which leaves `invalidated` to mean one thing only: something
+  the client did not ask for. A reply that shared a type with a push could not be told
+  apart from one.
+- The menu bar reports what the daemon is holding and whether Screen Recording is
+  granted, both refreshed each time the menu opens rather than fixed at startup, which is
+  the one moment when nothing has happened and the permission is most likely missing. The
+  permission line opens System Settings and is only enabled when there is something to
+  fix.
+- The daemon shuts down on `SIGTERM` and `SIGHUP` as well as Ctrl-C, and quitting from
+  the menu bar goes through the same path. All four now unlink the socket on the way out;
+  previously only Ctrl-C did, and `terminate:` from the menu ended the process without
+  unwinding the daemon at all.
 - Named positions on `point`, as a third target form beside coordinates and a query.
   `at` takes one of nine names, `top-left` through `bottom-right`, or a percentage pair
   like `50%,30%`, and the daemon resolves it against the display it was sent to, which is
@@ -69,6 +90,14 @@ protocol freeze, after which protocol changes are additive only.
   literal corner is clipped by the edge. `"50,30"` without the signs is refused rather
   than read as percentages, because it is indistinguishable from the coordinates `x` and
   `y` take and would be wrong by a factor of the display size.
+- The contrast picker scores where a mark puts ink rather than the region it was asked
+  for. A highlight is an outline, so its interior is never painted and sampling the whole
+  rectangle answered a question nobody asked; the four edges are now scored separately and
+  the worst one decides, which is what catches a coloured band running under one edge. A
+  freehand path is scored along its stroke, in four chunks of equal length, rather than
+  over a bounding box that for a diagonal line is mostly pixels the stroke never touches.
+  The number of parts is bounded on purpose: scoring every segment would be the worst-case
+  statistic again, and that has no signal in it.
 - Contrast adaptive annotation colour. The daemon samples the region it is about to draw
   over and keeps the usual amber unless amber genuinely cannot be seen there, at which
   point it picks from a small palette that never includes blue, since blue belongs to the
@@ -142,6 +171,17 @@ protocol freeze, after which protocol changes are additive only.
 
 ### Fixed
 
+- `LineReader::next_line` was not cancellation safe, which the socket server now depends
+  on: it reads inside a `select!` against the invalidations it pushes, so the read future
+  is dropped whenever an announcement wins the race. Bytes are consumed from the reader as
+  they are seen and the buffer was cleared on entry, so a message split across two reads
+  lost its first half and arrived truncated. It parsed as a schema error rather than as
+  anything alarming, which is how it would have gone unnoticed. The buffer now survives
+  between calls and is cleared once a line has been handed out.
+- Excluding Arin's own windows from a capture was documented as not working, on a
+  measurement taken before the frame geometry was right. Re-measured, it does work: a
+  textbox covering a third of the display did not reach a colour picked for that same
+  region afterwards. The note was wrong rather than the code.
 - A downscaled capture reported the area it covered as its own pixel count over the
   display's backing scale, so a 512 wide frame of a 1512 point display claimed to cover
   256 points. Anything mapping a rect into that frame landed in the corner, which is where
@@ -163,10 +203,19 @@ protocol freeze, after which protocol changes are additive only.
   ScreenCaptureKit for a screenshot has its request dropped without an error, so
   `arin capture` does not work alongside a live daemon. The daemon is unaffected, and
   `arin permissions` defers to it rather than reading the failure as a denied permission.
-- A macOS capture contains Arin's own overlay. Both documented ways to exclude it were
-  tried, by window and by application, and neither keeps it out of the frame. Change
-  detection tolerates this rather than depending on the exclusion working, so it is not
-  blocking, but a capture is not a clean shot of the screen underneath.
+- Thin content still cannot decide a colour on its own, and this is the design rather
+  than a limitation of the capture. A five point bar reaches about a fifth of the samples
+  even at 512 pixels, and the median the picker scores by comes out at 9.12 against it at
+  512, at 1024, and at full resolution alike. Capturing larger changes nothing and costs
+  memory on every annotation. A minority of a region is meant to be outvoted; that is the
+  property that made the picker usable when scoring the worst pixel turned out to give
+  every candidate about 1.0.
+
+  The case where a small share of the region is nonetheless most of the *ink* is now
+  handled, by scoring the footprint rather than the region. What remains is a stroke that
+  spends only a small fraction of its length over a different background, an eighth say,
+  which is a minority of its own chunk and stays outvoted. It comes out legible where most
+  of it is drawn and dim for the rest.
 
 ### Notes
 

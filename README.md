@@ -118,9 +118,14 @@ before a byte is read, and there is no network listener.
 ```
 
 The daemon replies to each with an `ack` carrying the annotation's id and the display it
-landed on, or an `error` naming a machine-readable code. A mark that stops being valid
-comes back as an `invalidated` with a reason: `scroll`, `ttl`, `session_end`, `cleared`,
-or `display_change`.
+landed on, or an `error` naming a machine-readable code.
+
+Separately, it pushes an `invalidated` whenever one of your marks goes away for a reason
+you did not ask for: `scroll`, `ttl`, `cleared`, or `display_change`. These arrive when
+they happen rather than in answer to anything, so read until you see your own reply and
+set aside any `invalidated` you pass. You are only ever told about your own marks. Over
+MCP this arrives as a `gone` field on the next tool result, since there is no way for a
+server to interrupt a model mid-thought.
 
 Every coordinate is a logical point paired with an explicit display. Never physical
 pixels: a Retina screenshot is 2x the logical size, and mixed-DPI multi-monitor setups

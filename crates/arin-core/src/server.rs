@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::broadcast;
 
 /// Accepts client connections and drives the daemon.
 pub struct Server {
@@ -91,39 +92,81 @@ impl Drop for Server {
     }
 }
 
-/// Read messages from one client until it goes away.
+/// Read messages from one client until it goes away, and push what it should know.
+///
+/// Two things arrive on this connection from opposite directions: requests from the
+/// client, and invalidations the daemon raised on its own because content scrolled, a
+/// time to live ran out, or the user cleared the screen. Both are handled in one select
+/// so there is only ever a single writer, and so a client sitting idle still hears that
+/// its marks went away.
 async fn serve(daemon: Arc<Daemon>, stream: UnixStream) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = LineReader::new(BufReader::new(read_half));
+    let mut announcements = daemon.subscribe();
 
     // Dropping this at the end of the function ends the session and clears its
     // annotations, so a client that dies mid-explanation cannot leave marks behind.
     let mut connection = Connection::new(daemon);
 
     loop {
-        let line = match reader.next_line().await {
-            Ok(Some(line)) => line.to_owned(),
-            Ok(None) => break,
-            // An oversized line desynchronises the stream: there is no safe point to
-            // resume from, so say why and hang up.
-            Err(e @ Error::PayloadTooLarge) => {
-                let _ = write(&mut write_half, &DaemonMessage::Error(e.to_wire())).await;
-                break;
+        tokio::select! {
+            // Biased so a request already on the wire is answered before a push goes out.
+            // Without it a busy daemon could interleave the two in a different order on
+            // every run, which makes a failing test a coin toss.
+            biased;
+
+            incoming = reader.next_line() => {
+                let line = match incoming {
+                    Ok(Some(line)) => line.to_owned(),
+                    Ok(None) => break,
+                    // An oversized line desynchronises the stream: there is no safe point
+                    // to resume from, so say why and hang up.
+                    Err(e @ Error::PayloadTooLarge) => {
+                        let _ = write(&mut write_half, &DaemonMessage::Error(e.to_wire())).await;
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                };
+
+                let reply = match serde_json::from_str::<Envelope<ClientMessage>>(&line) {
+                    Ok(envelope) => match connection.handle(envelope).await {
+                        Ok(reply) => reply,
+                        Err(e) => DaemonMessage::Error(e.to_wire()),
+                    },
+                    // A malformed or unknown message is answered, not fatal. Closing the
+                    // connection would punish a client for a single typo mid-session.
+                    Err(e) => DaemonMessage::Error(Error::from(e).to_wire()),
+                };
+
+                write(&mut write_half, &reply).await?;
             }
-            Err(e) => return Err(e),
-        };
 
-        let reply = match serde_json::from_str::<Envelope<ClientMessage>>(&line) {
-            Ok(envelope) => match connection.handle(envelope).await {
-                Ok(reply) => reply,
-                Err(e) => DaemonMessage::Error(e.to_wire()),
-            },
-            // A malformed or unknown message is answered, not fatal. Closing the
-            // connection would punish a client for a single typo mid-session.
-            Err(e) => DaemonMessage::Error(Error::from(e).to_wire()),
-        };
-
-        write(&mut write_half, &reply).await?;
+            announced = announcements.recv() => {
+                match announced {
+                    Ok(announcement) => {
+                        // Only ever the owner's own marks. A session must not learn that
+                        // another session's annotation went away, for the same reason
+                        // `clear` answers `not_owner` to both a missing annotation and
+                        // someone else's.
+                        if connection.session() == Some(&announcement.session) {
+                            write(
+                                &mut write_half,
+                                &DaemonMessage::Invalidated(announcement.event),
+                            )
+                            .await?;
+                        }
+                    }
+                    // This client stopped reading for long enough to fall behind. The
+                    // marks are gone either way, so carry on rather than hang up: a
+                    // missed notification is a smaller failure than a dropped session.
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        tracing::warn!(missed, "a client fell behind on invalidations");
+                    }
+                    // The daemon is gone, so there is nothing left to serve.
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
     }
 
     Ok(())

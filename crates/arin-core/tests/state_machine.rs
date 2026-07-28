@@ -348,14 +348,10 @@ async fn session_end_clears_that_sessions_annotations() {
     .unwrap();
     assert_eq!(daemon.annotation_count(), 2);
 
+    // Acked, not answered with an `invalidated`. Every request gets an ack or an error,
+    // which is what leaves `invalidated` free to mean "unsolicited" and nothing else.
     let reply = conn.handle(wrap(ClientMessage::SessionEnd)).await.unwrap();
-    assert!(matches!(
-        reply,
-        DaemonMessage::Invalidated(Invalidated {
-            reason: InvalidationReason::SessionEnd,
-            ..
-        })
-    ));
+    assert!(matches!(reply, DaemonMessage::Ack(_)), "got {reply:?}");
     assert_eq!(daemon.annotation_count(), 0);
     assert_eq!(daemon.session_count(), 0);
     assert_eq!(renderer.cleared.lock().unwrap().len(), 2);
@@ -812,4 +808,113 @@ async fn a_name_resolves_against_the_display_it_was_sent_to() {
         .unwrap()
         .resolve([3840.0, 2160.0]);
     assert!(large.x > small.x && large.y > small.y);
+}
+
+// pushed invalidations
+
+/// Everything that goes away without the client asking has to reach the client. Before
+/// this the daemon computed each one and dropped it on the floor, so an agent's mark
+/// could expire or scroll away and it would carry on describing something that was no
+/// longer on screen.
+#[tokio::test]
+async fn a_ttl_expiry_is_announced_to_its_owner() {
+    let (daemon, _) = daemon();
+    let mut listener = daemon.subscribe();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(
+        Point::at(1.0, 1.0, DISPLAY).with_ttl_ms(Some(1)),
+    )))
+    .await
+    .unwrap();
+    let_it_expire().await;
+    daemon.expire_annotations();
+
+    let announced = listener.try_recv().expect("an expiry should be announced");
+    assert_eq!(announced.event.reason, InvalidationReason::Ttl);
+    assert_eq!(Some(&announced.session), conn.session());
+}
+
+#[tokio::test]
+async fn a_scroll_is_announced_to_its_owner() {
+    let (daemon, _) = daemon();
+    let mut listener = daemon.subscribe();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+    daemon.invalidate_display(DISPLAY, InvalidationReason::Scroll);
+
+    let announced = listener.try_recv().expect("a scroll should be announced");
+    assert_eq!(announced.event.reason, InvalidationReason::Scroll);
+    assert_eq!(Some(&announced.session), conn.session());
+}
+
+#[tokio::test]
+async fn a_user_clear_is_announced_to_its_owner() {
+    let (daemon, _) = daemon();
+    let mut listener = daemon.subscribe();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+    daemon.clear_everything();
+
+    let announced = listener.try_recv().expect("a clear should be announced");
+    assert_eq!(announced.event.reason, InvalidationReason::Cleared);
+    assert_eq!(Some(&announced.session), conn.session());
+}
+
+/// The privacy rule, carried into the push path. A session must not learn that another
+/// session's annotation went away, for the same reason `clear` answers `not_owner` to
+/// both a missing annotation and someone else's. The announcement carries the owner so
+/// connections can filter, and the wire message never does.
+#[tokio::test]
+async fn an_announcement_names_the_owner_so_it_can_be_filtered() {
+    let (daemon, _) = daemon();
+    let mut listener = daemon.subscribe();
+
+    let mut mine = started(daemon.clone()).await;
+    let mut theirs = started(daemon.clone()).await;
+    assert_ne!(mine.session(), theirs.session());
+
+    mine.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+    theirs
+        .handle(wrap(ClientMessage::Point(Point::at(2.0, 2.0, DISPLAY))))
+        .await
+        .unwrap();
+
+    daemon.clear_everything();
+
+    let first = listener.try_recv().expect("two marks, two announcements");
+    let second = listener.try_recv().expect("two marks, two announcements");
+    let owners = [&first.session, &second.session];
+
+    assert!(owners.contains(&mine.session().unwrap()));
+    assert!(owners.contains(&theirs.session().unwrap()));
+    // And the wire message itself says nothing about who owns it.
+    assert!(first.event.annotation_id.is_some());
+}
+
+/// Nothing to announce when the client asked for it. A `clear` the session sent is a
+/// reply, not news, and telling it twice would have an agent believe the daemon undid
+/// something behind its back.
+#[tokio::test]
+async fn clearing_your_own_mark_announces_nothing() {
+    let (daemon, _) = daemon();
+    let mut listener = daemon.subscribe();
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap();
+    conn.handle(wrap(ClientMessage::Clear(Clear::all())))
+        .await
+        .unwrap();
+
+    assert!(listener.try_recv().is_err(), "a self clear is not news");
 }

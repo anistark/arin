@@ -71,6 +71,22 @@ pub struct Drawn {
     pub display_height: Option<f64>,
     /// Backing scale. Divide screenshot pixels by this to get logical points.
     pub display_scale: Option<f64>,
+    /// Marks of yours that went away since your last call, and why.
+    ///
+    /// Empty almost always. A non-empty list means the screen moved on without you: the
+    /// user scrolled, a time to live ran out, or they cleared the overlay themselves.
+    /// Anything you were relying on being visible is not.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gone: Vec<Gone>,
+}
+
+/// A mark that is no longer on screen.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Gone {
+    /// The annotation that went away, if it was a single one.
+    pub annotation_id: Option<String>,
+    /// Why: `scroll`, `ttl`, `cleared`, `display_change`, or `session_end`.
+    pub reason: String,
 }
 
 /// What `clear` hands back.
@@ -78,6 +94,9 @@ pub struct Drawn {
 pub struct Cleared {
     /// Whether the daemon accepted the request.
     pub cleared: bool,
+    /// Marks of yours that had already gone away on their own. See [`Drawn::gone`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gone: Vec<Gone>,
 }
 
 /// Arguments to `point_at`.
@@ -268,9 +287,30 @@ impl Arin {
         };
 
         match self.round_trip(ClientMessage::Clear(clear)).await? {
-            DaemonMessage::Ack(_) => Ok(Json(Cleared { cleared: true })),
+            DaemonMessage::Ack(_) => Ok(Json(Cleared {
+                cleared: true,
+                gone: self.gone().await,
+            })),
             other => Err(refused(other)),
         }
+    }
+
+    /// Drain whatever the daemon pushed while we were not looking.
+    ///
+    /// MCP has no way for a server to interrupt a model, so an invalidation cannot be
+    /// delivered when it happens. It rides along with the next tool result instead, which
+    /// is the first moment the model is listening anyway.
+    async fn gone(&self) -> Vec<Gone> {
+        self.client
+            .lock()
+            .await
+            .take_invalidations()
+            .into_iter()
+            .map(|event| Gone {
+                annotation_id: event.annotation_id.map(|id| id.to_string()),
+                reason: format!("{:?}", event.reason).to_lowercase(),
+            })
+            .collect()
     }
 
     /// Send a drawing message and describe what landed.
@@ -278,6 +318,7 @@ impl Arin {
         match self.round_trip(message).await? {
             DaemonMessage::Ack(ack) => {
                 let display = ack.display;
+                let gone = self.gone().await;
                 Ok(Json(Drawn {
                     // A drawing ack always carries an id. Reporting an empty one beats
                     // failing a call whose mark is already on screen.
@@ -288,6 +329,7 @@ impl Arin {
                     display_width: display.map(|d| d.logical_size[0]),
                     display_height: display.map(|d| d.logical_size[1]),
                     display_scale: display.map(|d| d.scale),
+                    gone,
                 }))
             }
             other => Err(refused(other)),

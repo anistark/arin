@@ -218,6 +218,26 @@ fn main() -> Result<()> {
     }
 }
 
+/// An `s` when there is not exactly one of something.
+#[cfg(target_os = "macos")]
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
+}
+
+/// What the menu bar says the daemon is doing.
+///
+/// Counts rather than a health check. Whether the daemon is running is answered by the
+/// icon being in the menu bar at all, so the useful thing to report is what it is holding
+/// on the user's behalf, which is also what tells them whether Clear will do anything.
+#[cfg(target_os = "macos")]
+fn status_line(marks: usize, sessions: usize) -> String {
+    match (marks, sessions) {
+        (0, 0) => "idle, no clients".to_owned(),
+        (0, s) => format!("{s} client{}, nothing drawn", plural(s)),
+        (m, s) => format!("{m} mark{} from {s} client{}", plural(m), plural(s)),
+    }
+}
+
 /// Parse an `x,y` pair from the command line.
 fn parse_point(raw: &str) -> Result<[f64; 2]> {
     let (x, y) = raw
@@ -278,17 +298,33 @@ async fn serve(
 ) -> Result<()> {
     let daemon = Arc::new(Daemon::new(config, renderer, capture));
 
-    // The menu bar is built before the daemon exists, so the action arrives now rather
+    // The menu bar is built before the daemon exists, so the actions arrive now rather
     // than at construction.
     #[cfg(target_os = "macos")]
     {
-        let daemon = Arc::clone(&daemon);
+        let clearing = Arc::clone(&daemon);
         arin_mac::on_clear(move || {
-            let cleared = daemon.clear_everything();
+            let cleared = clearing.clear_everything();
             if !cleared.is_empty() {
                 tracing::info!(count = cleared.len(), "cleared from the menu bar");
             }
         });
+
+        // Runs on the main thread while the menu is opening, so it only reads counters.
+        let reporting = Arc::clone(&daemon);
+        arin_mac::on_status(move || {
+            status_line(reporting.annotation_count(), reporting.session_count())
+        });
+    }
+
+    // Quitting from the menu bar used to go straight to `NSApplication terminate:`, which
+    // ends the process without unwinding this function and so without unlinking the
+    // socket. It now asks the daemon to stop the same way a signal does.
+    let quit = Arc::new(tokio::sync::Notify::new());
+    #[cfg(target_os = "macos")]
+    {
+        let quit = Arc::clone(&quit);
+        arin_mac::on_quit(move || quit.notify_one());
     }
 
     let server = Server::bind(Arc::clone(&daemon)).context("could not bind the socket")?;
@@ -313,12 +349,68 @@ async fn serve(
 
     tokio::select! {
         result = server.run() => result.context("the socket server stopped")?,
-        _ = tokio::signal::ctrl_c() => tracing::info!("interrupted, shutting down"),
+        reason = stop_requested(Arc::clone(&quit)) => tracing::info!(%reason, "shutting down"),
     }
 
+    // Dropping the server here is what unlinks the socket, so every path out of the
+    // select above has to return rather than exit the process.
     watcher.abort();
     expiry.abort();
     Ok(())
+}
+
+/// Resolve when something asks the daemon to stop, naming what did.
+///
+/// Ctrl-C alone is not enough. A `SIGTERM` from a service manager or a `SIGHUP` when the
+/// terminal goes away would otherwise kill the process where it stands, leaving the
+/// socket file behind for the next start to notice and clear. That is untidy rather than
+/// broken, but it is untidy every single time.
+async fn stop_requested(quit: Arc<tokio::sync::Notify>) -> &'static str {
+    let menu = async move {
+        quit.notified().await;
+        "quit"
+    };
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        // A handler that will not register is not worth refusing to start over: Ctrl-C
+        // still works, and the socket is still recovered on the next run.
+        let mut terminate = signal(SignalKind::terminate())
+            .inspect_err(|e| tracing::warn!(error = %e, "no SIGTERM handler"))
+            .ok();
+        let mut hangup = signal(SignalKind::hangup())
+            .inspect_err(|e| tracing::warn!(error = %e, "no SIGHUP handler"))
+            .ok();
+
+        // A signal that could not be registered simply never arrives.
+        let sigterm = async {
+            match terminate.as_mut() {
+                Some(signal) => signal.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+        let sighup = async {
+            match hangup.as_mut() {
+                Some(signal) => signal.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => "interrupt",
+            _ = sigterm => "SIGTERM",
+            _ = sighup => "SIGHUP",
+            reason = menu => reason,
+        }
+    }
+
+    #[cfg(not(unix))]
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => "interrupt",
+        reason = menu => reason,
+    }
 }
 
 /// Sweep away annotations whose time to live has run out.
@@ -645,8 +737,25 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
             println!("{id}");
         }
         eprintln!("holding the mark on screen, interrupt to clear");
-        tokio::signal::ctrl_c().await.ok();
-        return Ok(());
+        // Reporting what the daemon pushes is most of what `--hold` is for: it is how you
+        // watch a time to live run out, or see a scroll take a mark away, without reading
+        // the daemon's own log.
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+                event = client.next_invalidation() => match event {
+                    Ok(event) => match event.annotation_id {
+                        Some(id) => eprintln!("{id} went away: {:?}", event.reason),
+                        None => eprintln!("marks went away: {:?}", event.reason),
+                    },
+                    // The daemon hung up. Nothing left to hold.
+                    Err(e) => {
+                        eprintln!("daemon closed the connection: {e}");
+                        return Ok(());
+                    }
+                },
+            }
+        }
     }
 
     match reply {
@@ -719,6 +828,19 @@ mod tests {
     #[test]
     fn coordinates_and_a_name_cannot_both_be_given() {
         assert!(Cli::try_parse_from(["arin", "point", "412", "88", "--at", "top-left"]).is_err());
+    }
+
+    /// The menu line is the only place the daemon reports itself to the user, and it
+    /// cannot be checked by opening the menu from a script: driving the menu bar needs
+    /// Accessibility, which is the one permission Arin promises never to require.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_status_line_reads_as_a_sentence() {
+        assert_eq!(super::status_line(0, 0), "idle, no clients");
+        assert_eq!(super::status_line(0, 1), "1 client, nothing drawn");
+        assert_eq!(super::status_line(0, 3), "3 clients, nothing drawn");
+        assert_eq!(super::status_line(1, 1), "1 mark from 1 client");
+        assert_eq!(super::status_line(4, 2), "4 marks from 2 clients");
     }
 
     #[test]
