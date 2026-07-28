@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo-animated.svg" width="150" alt="Arin">
+<img src="assets/logo.png" width="150" alt="Arin">
 
 # arin
 

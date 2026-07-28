@@ -77,6 +77,9 @@ only.
   while a mark is small and local.
 - The scroll watcher only captures displays that have something drawn on them, and
   re-baselines around the daemon's own drawing.
+- The phoenix logo is a new mark: a flat silhouette in a single blue with a soft glow,
+  shipped as a transparent PNG. It replaces the gradient SVG pair, so the README header
+  no longer animates. The orb is unchanged and stays the on screen primitive.
 - Protocol coordinates are converted to AppKit's orientation in one tested function
   rather than by asking Core Animation to flip the panel's layer. `setGeometryFlipped`
   did not take on the overlay's content view, which drew every annotation at the wrong
