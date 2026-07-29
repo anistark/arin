@@ -740,7 +740,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
         return Ok(());
     }
 
-    client.start_session("arin-cli").await?;
+    client.start_session("arin").await?;
 
     let mut hold = false;
 

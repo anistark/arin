@@ -9,6 +9,13 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Not published. Only `arin-protocol` goes to crates.io today, because it is the only
+# crate with readers outside this repo. This is a safety catch rather than a policy: a
+# stray `cargo publish` here would burn the name at 0.1.0 on a crate with no README, and
+# crates.io versions can be yanked but never reused. Lift it per crate as each one is
+# actually packaged. See the distribution row in `AGENTS.md`.
+publish = false
+
 [dependencies]
 arin-protocol.workspace = true
 futures.workspace = true

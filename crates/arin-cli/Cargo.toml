@@ -9,8 +9,17 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-# The published binary is `arin`; the crate is `arin-cli` so the name matches the rest of
-# the workspace. Only this binary is published at 0.1.
+# Not published. Only `arin-protocol` goes to crates.io today, because it is the only
+# crate with readers outside this repo. This is a safety catch rather than a policy: a
+# stray `cargo publish` here would burn the name at 0.1.0 on a crate with no README, and
+# crates.io versions can be yanked but never reused. Lift it per crate as each one is
+# actually packaged. See the distribution row in `AGENTS.md`.
+publish = false
+
+# The package is `arin-cli` and the binary is `arin`, which is what users type. The names
+# differ because the workspace already has a crate called `arin`: the published facade
+# that reserves the name on crates.io. Package names are unique per workspace, so this one
+# takes the qualified spelling and the binary keeps the plain one.
 [[bin]]
 name = "arin"
 path = "src/main.rs"

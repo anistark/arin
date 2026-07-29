@@ -14,6 +14,7 @@ categories = ["visualization", "command-line-utilities"]
 
 [workspace.dependencies]
 # Local crates.
+arin = { path = "crates/arin", version = "0.1.0" }
 arin-cli = { path = "crates/arin-cli", version = "0.1.0" }
 arin-core = { path = "crates/arin-core", version = "0.1.0" }
 arin-linux = { path = "crates/arin-linux", version = "0.1.0" }

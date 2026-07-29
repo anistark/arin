@@ -1,0 +1,24 @@
+[package]
+name = "arin"
+description = "The Rust API for Arin, an annotation layer any agent can draw on."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+# Matching `arin-protocol`, and for the same reason: this is a library about a wire
+# format, looked for under different words than the tool is. The workspace lists describe
+# the binary.
+keywords = ["annotation", "protocol", "overlay", "agent", "mcp"]
+categories = ["encoding", "data-structures", "api-bindings"]
+
+[dependencies]
+# A compatible range rather than an exact version, so a patch or minor release of the
+# protocol reaches users of this crate without republishing it. This is what keeps the
+# facade close to free: it needs a release of its own only when the protocol breaks, which
+# after 1.0 is never, since the protocol goes additive only at the freeze.
+arin-protocol = { workspace = true }
+
+[lints]
+workspace = true
