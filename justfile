@@ -44,6 +44,38 @@ lint:
     cargo fmt --all --check
     RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
 
+# versioning
+# Every crate already inherits `version.workspace`, so the only literals that can drift
+# are the path dependencies in `[workspace.dependencies]`, which need a version alongside
+# the path to be publishable. Bump `[workspace.package]` and run this.
+
+# Point every local dependency at the workspace version.
+sync-version:
+    #!/usr/bin/env sh
+    set -eu
+    version=$(awk '/^\[workspace.package\]/{f=1} f&&/^version = /{gsub(/[",]/,"",$3); print $3; exit}' Cargo.toml)
+    if [ -z "$version" ]; then
+        echo "no version under [workspace.package]" >&2
+        exit 1
+    fi
+
+    # A crate that names its own version instead of inheriting is a drift this cannot fix.
+    stray=$(grep -L '^version.workspace = true' crates/*/Cargo.toml || true)
+    if [ -n "$stray" ]; then
+        echo "these do not inherit the workspace version, so syncing would not reach them:" >&2
+        echo "$stray" >&2
+        exit 1
+    fi
+
+    before=$(grep -cE '^arin[a-z-]* = \{ path = "crates/[a-z-]+", version = "'"$version"'" \}' Cargo.toml || true)
+    sed -E 's|^(arin[a-z-]* = \{ path = "crates/[a-z-]+", version = )"[^"]*"|\1"'"$version"'"|' \
+        Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+    total=$(grep -cE '^arin[a-z-]* = \{ path = "crates/' Cargo.toml)
+
+    # Proves the manifest still parses and that every crate now reports the same version.
+    cargo metadata --no-deps --format-version 1 >/dev/null
+    echo "workspace version $version, $total local dependencies in sync ($((total - before)) rewritten)"
+
 # invariants
 # CI runs this on Linux, where a platform crate in the tree would fail to build.
 # Locally it still catches a platform dependency leaking into core.
