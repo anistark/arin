@@ -33,7 +33,7 @@
 //! small grid of brightnesses compared with a tolerance, and `content_hash` is the name
 //! the field was reserved under rather than a claim about what is in it.
 
-use crate::traits::Frame;
+use crate::traits::{Frame, luminance};
 use arin_protocol::LogicalRect;
 
 /// Samples per side of the region. Thirty six values, one per cell of a 6x6 grid.
@@ -83,11 +83,8 @@ impl Fingerprint {
         let mut samples = [0u8; GRID * GRID];
         for row in 0..GRID {
             for col in 0..GRID {
-                // The mean of the cell, not a pixel from the middle of it. Captures are
-                // downscaled, so one pixel spans about three logical points and a single
-                // sample of downscaled text is noise: it swings further between two
-                // captures of the same content than it does between different content.
-                // Averaging the cell is what makes the comparison mean anything.
+                // The mean of the cell, not one pixel from it. Captures are downscaled,
+                // so a single sample of text is noise.
                 let x0 = rect.x + rect.width * col as f64 / GRID as f64;
                 let x1 = rect.x + rect.width * (col + 1) as f64 / GRID as f64;
                 let y0 = rect.y + rect.height * row as f64 / GRID as f64;
@@ -165,14 +162,6 @@ impl Fingerprint {
             .count();
         agreed as f64 / self.samples.len() as f64 >= AGREEMENT
     }
-}
-
-/// Perceived brightness of one BGRA pixel.
-fn luminance(bgra: &[u8]) -> u8 {
-    let b = u32::from(bgra[0]);
-    let g = u32::from(bgra[1]);
-    let r = u32::from(bgra[2]);
-    ((r * 77 + g * 150 + b * 29) >> 8) as u8
 }
 
 #[cfg(test)]

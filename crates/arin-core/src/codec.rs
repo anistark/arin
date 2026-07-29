@@ -92,7 +92,6 @@ impl<R: AsyncBufRead + Unpin> LineReader<R> {
                 }
                 self.buf.extend_from_slice(&available[..take]);
 
-                // Step over the newline as well when there was one.
                 consumed = if complete { take + 1 } else { take };
             }
 

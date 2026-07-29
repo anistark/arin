@@ -324,7 +324,6 @@ fn band(from: LogicalPoint, to: LogicalPoint, width: f64) -> Vec<LogicalPoint> {
         let t = (step as f64 + 0.5) / ALONG as f64;
         let (x, y) = (from.x + dx * t, from.y + dy * t);
         for lane in 0..ACROSS {
-            // Spread across the stroke, from one edge to the other.
             let offset = (lane as f64 / (ACROSS - 1).max(1) as f64 - 0.5) * width;
             points.push(LogicalPoint::new(x + nx * offset, y + ny * offset));
         }
@@ -366,7 +365,6 @@ fn stroke(points: &[LogicalPoint], width: f64) -> Vec<Vec<LogicalPoint>> {
         let fraction = (step as f64 + 0.5) / ALONG as f64;
         let part = ((fraction * PATH_PARTS as f64) as usize).min(PATH_PARTS - 1);
         let target = fraction * total;
-        // Walk to the segment this distance falls in.
         let mut travelled = 0.0;
         let mut index = 0;
         while index + 1 < lengths.len() && travelled + lengths[index] < target {
@@ -735,7 +733,7 @@ mod tests {
         let frame = banded(Rgb::new(0x1E, 0x1E, 0x1E), DEFAULT, 40, 6);
         let rect = LogicalRect::new(20.0, 40.0, 200.0, 160.0);
 
-        // Sampling the region, which is what it used to do, sees mostly dark and stays.
+        // Sampling the whole region sees mostly dark and stays.
         assert_eq!(pick(&frame, &Footprint::Area(rect)), DEFAULT);
 
         // Sampling the four edges separately notices that the top one has gone.

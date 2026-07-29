@@ -144,3 +144,19 @@ pub struct Resolution {
     /// How sure the model was, in `0.0..=1.0`.
     pub confidence: f64,
 }
+
+/// Perceived brightness of one BGRA pixel.
+///
+/// Integer weights rather than floats: this runs over every pixel of every capture, and
+/// the answer only has to be consistent, not colorimetrically exact.
+///
+/// Not the same thing as [`crate::contrast`]'s luminance, which is the gamma corrected
+/// sRGB relative luminance the WCAG contrast ratio is defined against. That one models
+/// what a person sees well enough to pick a readable colour. This one is a cheap, stable
+/// number for telling two captures apart, and the two must not be conflated.
+pub fn luminance(bgra: &[u8]) -> u8 {
+    let b = u32::from(bgra[0]);
+    let g = u32::from(bgra[1]);
+    let r = u32::from(bgra[2]);
+    ((r * 77 + g * 150 + b * 29) >> 8) as u8
+}

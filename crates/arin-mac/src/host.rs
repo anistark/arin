@@ -118,11 +118,9 @@ where
         let mtm = MainThreadMarker::new()
             .expect("blocks dispatched to the main queue run on the main thread");
 
-        // Core Animation animates most layer property changes by default, over about a
-        // quarter of a second. That is the wrong default here twice over: a mark should
-        // appear where it was asked for rather than drift into place, and every frame of
-        // an implicit animation is a screen change that scroll detection has to sit
-        // through. Motion in this overlay is deliberate or it does not happen.
+        // Core Animation animates layer changes by default. A mark should appear where
+        // it was asked for, and every implicit frame is a screen change scroll detection
+        // has to sit through.
         CATransaction::begin();
         CATransaction::setDisableActions(true);
 
@@ -314,18 +312,14 @@ impl Renderer for MacRenderer {
                     let flight = orb.travel_to(target);
                     host_points.push((id.clone(), screen_id));
                     if !flight.is_zero() {
-                        // Land it: back to round, a flare, and the calm pointing pulse.
                         on_main_after(flight, move |host, _mtm| {
                             if let Some(panel) = host.panel_for(screen_id) {
                                 panel.orb_mut().settle();
                             }
                         });
                     }
-                    // The caption appears at the destination rather than riding the arc.
-                    // The orb is what carries the movement, and text sliding across the
-                    // screen is harder to read than text that is already there when the
-                    // orb arrives. It is also what keeps a clear during the flight from
-                    // racing a caption that has not been added yet.
+                    // At the destination rather than riding the arc: text already in
+                    // place reads better, and a clear during flight cannot race it.
                     caption::is_drawable(label.as_ref())
                         .map(|text| caption::beside_orb(text, target, color, panel_size, scale))
                 }

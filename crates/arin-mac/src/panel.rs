@@ -80,10 +80,9 @@ impl Panel {
         view.setLayer(Some(&root));
         view.setWantsLayer(true);
 
-        // Deliberately left in AppKit's own orientation, y growing upward from the bottom
-        // left. `setGeometryFlipped(true)` was tried here to make protocol coordinates
-        // land directly and did not take, which put every annotation at the wrong end of
-        // the screen. Inverting y is now arithmetic in `host`, where it can be tested.
+        // Left in AppKit's orientation, y growing upward from the bottom left.
+        // `setGeometryFlipped(true)` does not take on this view. Inverting y is
+        // arithmetic in `host`, where it can be tested.
         panel.setContentView(Some(&view));
 
         let orb = Orb::new();

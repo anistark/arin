@@ -149,11 +149,9 @@ impl ScrollWatcher {
             // First sighting of this display. Nothing to compare against yet.
             let Some(before) = previous else { continue };
 
-            // No display-wide gate before this. One used to decide whether anything had
-            // moved at all, and it was the wrong question twice over: a window scrolling
-            // in the corner of a large screen falls under any threshold worth having, and
-            // a mark inside it would then sit still over content that had moved, which is
-            // the one outcome worse than dropping it.
+            // No display-wide gate. A window scrolling in the corner of a large screen
+            // falls under any threshold worth having, and the mark inside it would then
+            // sit still over content that moved.
             if self.recorder.is_recording() {
                 let regions = self.daemon.measured_regions(id);
                 self.recorder.keep(id, &before, &frame, &regions);

@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" width="150" alt="Arin">
 
-# arin
+# ARIN
 
 **An annotation layer any agent can draw on.**
 

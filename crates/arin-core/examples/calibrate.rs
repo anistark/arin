@@ -16,9 +16,10 @@
 //! too slow to run twice a second but has no feature engineering in it to be wrong about.
 //! Whatever a cheap one dimensional scorer says is judged against that.
 
+use arin_core::record::replay;
 use std::path::{Path, PathBuf};
 
-/// One recorded before and after.
+/// One recorded pair, in the shape the scorers below want it.
 struct Pair {
     name: String,
     width: usize,
@@ -29,92 +30,33 @@ struct Pair {
     after: Vec<u8>,
 }
 
-fn luminance(bgra: &[u8]) -> f64 {
-    let b = f64::from(bgra[0]);
-    let g = f64::from(bgra[1]);
-    let r = f64::from(bgra[2]);
-    (r * 77.0 + g * 150.0 + b * 29.0) / 256.0
-}
-
-/// Pull one number out of flat JSON without a parser.
-fn number(json: &str, key: &str) -> Option<f64> {
-    let at = json.find(&format!("\"{key}\":"))? + key.len() + 3;
-    let rest = &json[at..];
-    let end = rest
-        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e'))
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
-}
-
-fn numbers(json: &str, key: &str) -> Vec<f64> {
-    let Some(at) = json.find(&format!("\"{key}\":")) else {
-        return Vec::new();
-    };
-    let rest = &json[at..];
-    let Some(open) = rest.find('[') else {
-        return Vec::new();
-    };
-    // Regions are nested one deep, so take everything up to the matching close.
-    let mut depth = 0;
-    let mut end = open;
-    for (i, c) in rest[open..].char_indices() {
-        match c {
-            '[' => depth += 1,
-            ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = open + i;
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    rest[open..end]
-        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse().ok())
+/// Read the corpus through the daemon's own reader.
+///
+/// Only [`arin_core::record`] defines this format, so parsing it anywhere else is a second
+/// definition that drifts from the first.
+fn load(dir: &Path) -> Vec<Pair> {
+    replay(dir)
+        .into_iter()
+        .filter_map(|r| {
+            let region = r.regions.first().copied()?;
+            Some(Pair {
+                name: r.name,
+                width: r.after.width as usize,
+                height: r.after.height as usize,
+                logical: r.after.logical_size,
+                region: [region.x, region.y, region.width, region.height],
+                before: r.before.pixels.to_vec(),
+                after: r.after.pixels.to_vec(),
+            })
+        })
         .collect()
 }
 
-fn load(dir: &Path) -> Vec<Pair> {
-    let mut pairs = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        eprintln!("cannot read {}", dir.display());
-        return pairs;
-    };
-    let mut manifests: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
-    manifests.sort();
-
-    for manifest in manifests {
-        let Ok(json) = std::fs::read_to_string(&manifest) else {
-            continue;
-        };
-        let stem = manifest.file_stem().unwrap().to_string_lossy().to_string();
-        let before = dir.join(format!("{stem}-before.bgra"));
-        let after = dir.join(format!("{stem}-after.bgra"));
-        let (Ok(before), Ok(after)) = (std::fs::read(&before), std::fs::read(&after)) else {
-            continue;
-        };
-        let logical = numbers(&json, "logical_size");
-        let region = numbers(&json, "regions");
-        if logical.len() < 2 || region.len() < 4 {
-            continue;
-        }
-        pairs.push(Pair {
-            name: stem,
-            width: number(&json, "width").unwrap_or(0.0) as usize,
-            height: number(&json, "height").unwrap_or(0.0) as usize,
-            logical: [logical[0], logical[1]],
-            region: [region[0], region[1], region[2], region[3]],
-            before,
-            after,
-        });
-    }
-    pairs
+/// Brightness of one pixel, through the daemon's own function rather than a copy.
+///
+/// A harness that samples differently from the daemon predicts the wrong thing.
+fn luminance(bgra: &[u8]) -> f64 {
+    f64::from(arin_core::traits::luminance(bgra))
 }
 
 /// The region in frame pixels.

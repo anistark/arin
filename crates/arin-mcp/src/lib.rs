@@ -384,12 +384,8 @@ impl Arin {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Arin {
     fn get_info(&self) -> ServerInfo {
-        // Named and versioned here rather than through `Implementation::from_build_env`,
-        // which reads the environment of whichever crate expanded it and so reports the
-        // SDK's own version rather than Arin's.
-        //
-        // `ServerInfo` is `#[non_exhaustive]`, so it is filled in rather than built from
-        // a struct literal. New fields then arrive with the SDK's own defaults.
+        // Not `Implementation::from_build_env`, which would report the SDK's version
+        // rather than Arin's. `ServerInfo` is `#[non_exhaustive]`, hence field by field.
         let server_info = Implementation::new(CLIENT_NAME, env!("CARGO_PKG_VERSION"));
 
         let mut info = ServerInfo::default();

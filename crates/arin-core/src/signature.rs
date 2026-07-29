@@ -24,12 +24,10 @@
 //!
 //! # Why sample rather than average
 //!
-//! An earlier version averaged brightness over each cell. It rejected annotations
-//! nicely and then failed to notice a terminal scrolling past, because a block of text
-//! has roughly the same average brightness whichever glyphs are in it. Averaging is what
-//! destroys the signal: the thing that changes when text scrolls is the pattern, not the
-//! overall brightness. Point samples keep that pattern, and the tolerance plus the
-//! fraction threshold supply the robustness the averaging was there for.
+//! A block of text has roughly the same average brightness whichever glyphs are in it, so
+//! averaging each cell cannot see a terminal scrolling past. What changes when text
+//! scrolls is the pattern, not the overall brightness. Point samples keep that pattern,
+//! and the tolerance plus the fraction threshold supply the robustness.
 //!
 //! # Measuring how far, not only whether
 //!
@@ -49,7 +47,7 @@
 //! rule in both answers the same question: is a shift genuinely the explanation for what
 //! changed, or merely the least bad one?
 
-use crate::traits::Frame;
+use crate::traits::{Frame, luminance};
 use arin_protocol::LogicalRect;
 
 /// Samples per side. 96 gives 9216 points, fine enough to catch a line of text moving
@@ -122,15 +120,10 @@ const DECISIVE: f64 = 1.02;
 
 /// How much better a shift must explain the change than not shifting at all.
 ///
-/// A floor rather than a discriminator, and it is worth being clear about which, because
-/// it was built as the latter and the measurements say it is not.
-///
-/// What actually separates a right answer from a wrong one is the two scorers agreeing.
-/// Against a recorded corpus of scrolls on a laptop display, judged against a full two
-/// dimensional comparison of the region, every offset the two agreed on was correct, six
-/// out of six, with this ratio ranging from 1.04 to 2.85 across them. Every wrong answer
-/// was one they disagreed about. Setting this at 1.3, which the same corpus appeared to
-/// support, threw away a correct answer scoring 1.04 and another measured live at 1.24.
+/// A floor, not a discriminator. What separates a right answer from a wrong one is the
+/// two scorers agreeing: against the recorded corpus every offset they agreed on was
+/// correct, with this ratio ranging from 1.04 to 2.85. Setting it at 1.3 threw away a
+/// correct answer scoring 1.04.
 ///
 /// So it sits just above the value a still region produces, which is exactly 1.0, and
 /// catches nothing but a shift that explains no more than staying put. The real work is
@@ -378,9 +371,7 @@ fn region_profile(frame: &Frame, area: Area, axis: Axis) -> Vec<u8> {
     // Across the band, take everything there is rather than a fixed handful of samples.
     // Sixty-four was enough for a whole-frame summary and is not enough here: a band
     // averaged from sixty-four points is noisy, and two scorers reading the same noisy
-    // profile disagree about where it lines up. Measured against the recorded corpus, the
-    // two agreed on six of eleven scrolls when reading every column and on none of four
-    // when reading sixty-four.
+    // profile disagree about where it lines up.
     let stride = across.div_ceil(BAND_SAMPLES).max(1);
     let mut values = vec![0u8; bands];
     for (band, value) in values.iter_mut().enumerate() {
@@ -633,17 +624,6 @@ fn to_logical(bands: i32, total: usize, extent: f64) -> f64 {
         return 0.0;
     }
     f64::from(bands) * extent / total as f64
-}
-
-/// Perceived brightness of one BGRA pixel.
-///
-/// Integer weights rather than floats: this runs over every pixel of every capture, and
-/// the answer only has to be consistent, not colorimetrically exact.
-fn luminance(bgra: &[u8]) -> u8 {
-    let b = u32::from(bgra[0]);
-    let g = u32::from(bgra[1]);
-    let r = u32::from(bgra[2]);
-    ((r * 77 + g * 150 + b * 29) >> 8) as u8
 }
 
 #[cfg(test)]
