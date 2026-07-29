@@ -50,6 +50,7 @@
 //! changed, or merely the least bad one?
 
 use crate::traits::Frame;
+use arin_protocol::LogicalRect;
 
 /// Samples per side. 96 gives 9216 points, fine enough to catch a line of text moving
 /// and cheap enough to run twice a second for the life of a session.
@@ -75,8 +76,25 @@ const MOVED_FRACTION: f64 = 0.08;
 /// becomes its own band.
 const PROFILE_BANDS: usize = 512;
 
-/// Samples averaged into each band.
-const PROFILE_SAMPLES: usize = 64;
+/// How many strips a region is cut into across the axis being measured.
+///
+/// One mean per band throws away *where* in the band the ink was, and that is most of what
+/// tells one line of text from the next. Measured against the recorded corpus, a single
+/// profile per axis found the right offset on nine scrolls of eleven and only six survived
+/// the checks around it. Eight strips found all eleven, and reported no movement on all
+/// sixty-three still pairs.
+///
+/// Nearly free, because the strips divide the same pixels rather than adding any: the
+/// reading cost is unchanged and only the comparison is multiplied, which is arithmetic
+/// over a few hundred numbers.
+const STRIPS: usize = 8;
+
+/// Most samples to average into each band of a region's profile.
+///
+/// High enough that a band is a stable average rather than a noisy one, capped so that a
+/// full resolution capture of a large region does not read every pixel of it twice a
+/// second. A downscaled capture falls well under this and is read in full.
+const BAND_SAMPLES: usize = 512;
 
 /// A profile flatter than this carries no usable structure.
 ///
@@ -85,29 +103,54 @@ const PROFILE_SAMPLES: usize = 64;
 /// answer rather than an admission of defeat.
 const FEATURELESS: f64 = 2.0;
 
-/// How well two profiles must line up before a shift is believed, out of 255.
-///
-/// This is the whole partial-scroll defence. A window scrolling inside a screen that is
-/// otherwise still leaves every static band disagreeing with the winning offset, which
-/// lifts the residual well clear of the noise floor and the shift is refused. A starting
-/// number rather than a measured one: it wants a real corpus of scrolls behind it.
-const PROFILE_MATCH: f64 = 6.0;
-
 /// Bands either side of the winner that count as the same answer.
 const NEIGHBOURHOOD: i32 = 2;
 
-/// A shift is only believed when the nearest distant rival is this much worse.
+/// How much better the winning offset must be than the nearest offset that is not it.
 ///
-/// Evenly spaced text lines make a profile periodic, so sliding by exactly one line pitch
-/// scores almost as well as the truth. Two plausible answers means no answer.
-const DECISIVE: f64 = 2.0;
+/// Evenly spaced content is the case this exists for. Stripes on a fixed pitch, or lines of
+/// code at a uniform leading, line up exactly as well every whole number of periods away,
+/// so the winner ties with rivals far from it and picking one is a coin toss that can land
+/// a mark a hundred points out.
+///
+/// A ratio, and a narrow one, because the corpus says there is not much room: real scrolls
+/// scored between 1.04 and 1.76 on this, while an exact tie scores 1.00 by construction.
+/// This sits between the two, which rejects content that genuinely aliases without
+/// rejecting any measured scroll. Narrow enough to be worth revisiting when the corpus
+/// grows.
+const DECISIVE: f64 = 1.02;
 
-/// Absolute margin on the decisiveness test, so a near-zero residual cannot make any
-/// rival look like a rival.
-const DECISIVE_MARGIN: f64 = 2.0;
+/// How much better a shift must explain the change than not shifting at all.
+///
+/// A floor rather than a discriminator, and it is worth being clear about which, because
+/// it was built as the latter and the measurements say it is not.
+///
+/// What actually separates a right answer from a wrong one is the two scorers agreeing.
+/// Against a recorded corpus of scrolls on a laptop display, judged against a full two
+/// dimensional comparison of the region, every offset the two agreed on was correct, six
+/// out of six, with this ratio ranging from 1.04 to 2.85 across them. Every wrong answer
+/// was one they disagreed about. Setting this at 1.3, which the same corpus appeared to
+/// support, threw away a correct answer scoring 1.04 and another measured live at 1.24.
+///
+/// So it sits just above the value a still region produces, which is exactly 1.0, and
+/// catches nothing but a shift that explains no more than staying put. The real work is
+/// done by [`shift_along`] requiring two scorers that fail differently to arrive at the
+/// same place.
+const WORTH_MOVING: f64 = 1.02;
 
 /// How far a movement must carry before it is worth redrawing for, in logical points.
 const NEGLIGIBLE: f64 = 1.0;
+
+/// How far from its old place to look for a mark's content, in logical points.
+///
+/// The template stays tight around the mark, so that it measures that mark's own window
+/// rather than the desktop behind it. Reach is a separate question, and tying the two
+/// together was a mistake: slid against itself, a region can only show half its own height
+/// of movement, so a 540 point neighbourhood could not follow a scroll past 270 points and
+/// ordinary flicks are bigger than that. Live, the winning offset was repeatedly the last
+/// one in range. Searching a wider window in the later frame buys reach without loosening
+/// what is being measured.
+const SEARCH: f64 = 400.0;
 
 /// How far content moved between two frames, in logical points.
 ///
@@ -137,10 +180,6 @@ pub struct Signature {
     logical_size: [f64; 2],
     /// Sampled brightness, row major.
     samples: Vec<u8>,
-    /// Mean brightness per horizontal band, top to bottom. Moves with a vertical scroll.
-    rows: Vec<u8>,
-    /// Mean brightness per vertical band, left to right. Moves with a horizontal scroll.
-    columns: Vec<u8>,
 }
 
 impl Signature {
@@ -155,8 +194,6 @@ impl Signature {
                 height: frame.height,
                 logical_size: frame.logical_size,
                 samples,
-                rows: Vec::new(),
-                columns: Vec::new(),
             };
         }
 
@@ -180,27 +217,7 @@ impl Signature {
             height: frame.height,
             logical_size: frame.logical_size,
             samples,
-            rows: profile(frame, Axis::Vertical),
-            columns: profile(frame, Axis::Horizontal),
         }
-    }
-
-    /// How far the content moved since `previous`, if that can be established.
-    ///
-    /// `None` means the change has no single shift that explains it: a partial scroll, a
-    /// window appearing, a page replaced outright. The caller's fallback is what 0.1 did
-    /// unconditionally, which is to invalidate.
-    pub fn shift_from(&self, previous: &Self) -> Option<Shift> {
-        if self.width != previous.width || self.height != previous.height {
-            return None;
-        }
-        let down = shift_along(&previous.rows, &self.rows);
-        let across = shift_along(&previous.columns, &self.columns);
-        let (bands_down, bands_across) = reconcile(down, across)?;
-        Some(Shift {
-            dx: to_logical(bands_across, self.columns.len(), self.logical_size[0]),
-            dy: to_logical(bands_down, self.rows.len(), self.logical_size[1]),
-        })
     }
 
     /// The fraction of samples that moved more than the tolerance.
@@ -226,6 +243,210 @@ impl Signature {
     }
 }
 
+/// How far the content inside one region of the screen moved between two frames.
+///
+/// This is what a mark actually needs to know, and measuring it across the whole display
+/// was the mistake. On a real desktop a scroll happens inside a window: the menu bar, the
+/// dock, the desktop and every other window stay exactly where they were. Correlated over
+/// the whole screen that comes out as *nothing moved*, because globally nothing did, and
+/// the one window that did is outvoted by everything that did not.
+///
+/// Measured on a 1512 by 982 display, scrolling a text window: the display-wide profiles
+/// put their best offset at zero with a residual of 4.6, comfortably inside the tolerance,
+/// while a fifth of the screen's samples had changed. The correct answer for the window
+/// was tens of points and the correct answer for the screen was zero. Both are true, and
+/// only one of them is any use to a mark sitting in that window.
+///
+/// The region is expected to be generous around the mark rather than tight to it. See
+/// [`crate::daemon`] for how it is sized, and why the mark's own ink inside it is left to
+/// be outvoted rather than masked out.
+pub fn shift_within(before: &Frame, after: &Frame, region: LogicalRect) -> Option<Shift> {
+    if before.width != after.width || before.height != after.height {
+        tracing::debug!(
+            was = format_args!("{}x{}", before.width, before.height),
+            now = format_args!("{}x{}", after.width, after.height),
+            "the capture changed size, so there is nothing to compare"
+        );
+        return None;
+    }
+    let Some(area) = to_pixels(after, region) else {
+        tracing::debug!(?region, "the region is not on the frame");
+        return None;
+    };
+
+    // How far to hunt, in this frame's pixels. Captures arrive downscaled, so this is a
+    // much smaller number than it looks: on a 1512 point display captured 512 wide, four
+    // hundred points is a hundred and thirty five pixels.
+    let [logical_width, logical_height] = after.logical_size;
+    let grow = |logical: f64, pixels: u32| {
+        if logical <= 0.0 {
+            return 0;
+        }
+        ((SEARCH / logical) * f64::from(pixels)).round().max(0.0) as usize
+    };
+    let grow_x = grow(logical_width, after.width);
+    let grow_y = grow(logical_height, after.height);
+
+    // Each axis widens only along itself, because the strips have to line up: strip three
+    // of the template and strip three of the window must be the same columns of the
+    // screen, or they are correlating unrelated slices of the display against each other.
+    let down_window = Area {
+        y0: area.y0.saturating_sub(grow_y),
+        y1: (area.y1 + grow_y).min(after.height as usize),
+        ..area
+    };
+    let across_window = Area {
+        x0: area.x0.saturating_sub(grow_x),
+        x1: (area.x1 + grow_x).min(after.width as usize),
+        ..area
+    };
+
+    let down = shift_along(
+        "down",
+        &region_strips(before, area, Axis::Vertical),
+        &region_strips(after, down_window, Axis::Vertical),
+        (area.y0 - down_window.y0) as i32,
+    );
+    let across = shift_along(
+        "across",
+        &region_strips(before, area, Axis::Horizontal),
+        &region_strips(after, across_window, Axis::Horizontal),
+        (area.x0 - across_window.x0) as i32,
+    );
+    let (bands_down, bands_across) = reconcile(down, across)?;
+
+    let Area { x0, y0, x1, y1 } = area;
+    Some(Shift {
+        dx: to_logical(bands_across, (x1 - x0).min(PROFILE_BANDS), region.width),
+        dy: to_logical(bands_down, (y1 - y0).min(PROFILE_BANDS), region.height),
+    })
+}
+
+/// A rectangle of a frame, in that frame's own pixels.
+#[derive(Debug, Clone, Copy)]
+struct Area {
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+}
+
+/// Where a logical rectangle lands in a frame's pixels.
+///
+/// Through the frame's own dimensions rather than its `scale`, for the reason the whole
+/// crate keeps repeating: a downscaled capture reports its own pixels per point, and a
+/// resolver may have shrunk it again. The frame is the only thing that knows how big the
+/// frame is.
+fn to_pixels(frame: &Frame, rect: LogicalRect) -> Option<Area> {
+    let (width, height) = (frame.width as usize, frame.height as usize);
+    let [logical_width, logical_height] = frame.logical_size;
+    if width == 0 || height == 0 || logical_width <= 0.0 || logical_height <= 0.0 {
+        return None;
+    }
+    if !rect.is_valid() {
+        return None;
+    }
+
+    let scale_x = |v: f64| (v / logical_width) * width as f64;
+    let scale_y = |v: f64| (v / logical_height) * height as f64;
+
+    let x0 = scale_x(rect.x).floor().clamp(0.0, (width - 1) as f64) as usize;
+    let y0 = scale_y(rect.y).floor().clamp(0.0, (height - 1) as f64) as usize;
+    let x1 = scale_x(rect.x + rect.width).ceil().clamp(1.0, width as f64) as usize;
+    let y1 = scale_y(rect.y + rect.height)
+        .ceil()
+        .clamp(1.0, height as f64) as usize;
+
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(Area { x0, y0, x1, y1 })
+}
+
+/// Mean brightness per band, over one region of a frame.
+fn region_profile(frame: &Frame, area: Area, axis: Axis) -> Vec<u8> {
+    let width = frame.width as usize;
+    let (along, across) = match axis {
+        Axis::Vertical => (area.y1 - area.y0, area.x1 - area.x0),
+        Axis::Horizontal => (area.x1 - area.x0, area.y1 - area.y0),
+    };
+    if along == 0 || across == 0 {
+        return Vec::new();
+    }
+
+    let bands = along.min(PROFILE_BANDS);
+    // Across the band, take everything there is rather than a fixed handful of samples.
+    // Sixty-four was enough for a whole-frame summary and is not enough here: a band
+    // averaged from sixty-four points is noisy, and two scorers reading the same noisy
+    // profile disagree about where it lines up. Measured against the recorded corpus, the
+    // two agreed on six of eleven scrolls when reading every column and on none of four
+    // when reading sixty-four.
+    let stride = across.div_ceil(BAND_SAMPLES).max(1);
+    let mut values = vec![0u8; bands];
+    for (band, value) in values.iter_mut().enumerate() {
+        let major = ((band * 2 + 1) * along / (bands * 2)).min(along - 1);
+        let mut total = 0u32;
+        let mut taken = 0u32;
+        let mut minor = 0;
+        while minor < across {
+            let (x, y) = match axis {
+                Axis::Vertical => (area.x0 + minor, area.y0 + major),
+                Axis::Horizontal => (area.x0 + major, area.y0 + minor),
+            };
+            let idx = (y * width + x) * 4;
+            if let Some(px) = frame.pixels.get(idx..idx + 4) {
+                total += u32::from(luminance(px));
+                taken += 1;
+            }
+            minor += stride;
+        }
+        if taken > 0 {
+            *value = (total / taken) as u8;
+        }
+    }
+    values
+}
+
+/// One profile per strip of a region.
+fn region_strips(frame: &Frame, area: Area, axis: Axis) -> Vec<Vec<u8>> {
+    (0..STRIPS)
+        .map(|strip| {
+            let narrowed = match axis {
+                // Measuring down the region, so the strips divide it across.
+                Axis::Vertical => {
+                    let span = (area.x1 - area.x0).max(1);
+                    let x0 = area.x0 + strip * span / STRIPS;
+                    let x1 = (area.x0 + (strip + 1) * span / STRIPS)
+                        .max(x0 + 1)
+                        .min(area.x1);
+                    Area { x0, x1, ..area }
+                }
+                Axis::Horizontal => {
+                    let span = (area.y1 - area.y0).max(1);
+                    let y0 = area.y0 + strip * span / STRIPS;
+                    let y1 = (area.y0 + (strip + 1) * span / STRIPS)
+                        .max(y0 + 1)
+                        .min(area.y1);
+                    Area { y0, y1, ..area }
+                }
+            };
+            region_profile(frame, narrowed, axis)
+        })
+        .collect()
+}
+
+/// Mean absolute difference with the template laid down at `at`, over every strip.
+fn strip_mismatch(template: &[Vec<u8>], window: &[Vec<u8>], at: i32) -> Option<f64> {
+    if template.len() != window.len() || template.is_empty() {
+        return None;
+    }
+    let mut total = 0.0;
+    for (strip, into) in template.iter().zip(window) {
+        total += mismatch(strip, into, at)?;
+    }
+    Some(total / template.len() as f64)
+}
+
 /// Which axis a profile measures along.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Axis {
@@ -233,48 +454,6 @@ enum Axis {
     Vertical,
     /// One value per vertical band. Moves when content scrolls left or right.
     Horizontal,
-}
-
-/// Mean brightness of each band along an axis.
-///
-/// Samples the middle of each band rather than its edge, so a one pixel shift does not
-/// move every sample onto a boundary at once. Same reasoning as the two dimensional grid
-/// above, for the same reason.
-fn profile(frame: &Frame, axis: Axis) -> Vec<u8> {
-    let (width, height) = (frame.width as usize, frame.height as usize);
-    if width == 0 || height == 0 {
-        return Vec::new();
-    }
-    let (along, across) = match axis {
-        Axis::Vertical => (height, width),
-        Axis::Horizontal => (width, height),
-    };
-
-    let bands = along.min(PROFILE_BANDS);
-    let mut values = vec![0u8; bands];
-    for (band, value) in values.iter_mut().enumerate() {
-        let major = ((band * 2 + 1) * along / (bands * 2)).min(along - 1);
-        let mut total = 0u32;
-        let mut taken = 0u32;
-        for sample in 0..PROFILE_SAMPLES {
-            let minor = ((sample * 2 + 1) * across / (PROFILE_SAMPLES * 2)).min(across - 1);
-            let (x, y) = match axis {
-                Axis::Vertical => (minor, major),
-                Axis::Horizontal => (major, minor),
-            };
-            let idx = (y * width + x) * 4;
-            // A frame shorter than its dimensions is a capture bug, not a reason to panic
-            // on a timer.
-            if let Some(px) = frame.pixels.get(idx..idx + 4) {
-                total += u32::from(luminance(px));
-                taken += 1;
-            }
-        }
-        if taken > 0 {
-            *value = (total / taken) as u8;
-        }
-    }
-    values
 }
 
 /// What one axis was able to say about the movement.
@@ -294,7 +473,7 @@ enum Estimate {
 /// Turn two per-axis readings into one movement, or decline to.
 ///
 /// The asymmetry here is the interesting part. A vertical scroll *should* leave the
-/// horizontal profile unexplained: each vertical band is an average down the screen, and
+/// horizontal profile unexplained: each vertical band is an average down the region, and
 /// scrolling pulls new content into it, so the profile changes without having shifted.
 /// Refusing to follow a scroll because the other axis changed would refuse every real
 /// scroll, which is what a first attempt at this did.
@@ -302,11 +481,7 @@ enum Estimate {
 /// So one axis naming a genuine movement is allowed to account for the other axis being
 /// unexplainable. What is never allowed is *nothing* accounting for it: an axis with
 /// structure that changed, next to an axis that either measured no movement or could not
-/// look, is a content change rather than a scroll and the marks go.
-///
-/// The gap this leaves is a diagonal scroll whose horizontal component is not decisive on
-/// its own. That is followed vertically and not horizontally, so the mark ends up sideways
-/// of its target. Per-annotation verification in [`crate::fingerprint`] is what catches it.
+/// look, is a content change rather than a scroll and the mark goes.
 fn reconcile(down: Estimate, across: Estimate) -> Option<(i32, i32)> {
     use Estimate::{Blind, Moved, Unexplained};
     match (down, across) {
@@ -324,80 +499,119 @@ fn reconcile(down: Estimate, across: Estimate) -> Option<(i32, i32)> {
     }
 }
 
-/// The offset, in bands, that best explains `current` as `previous` shifted.
+/// The offset, in bands, that best explains where a template's content went.
 ///
 /// Two things have to hold before an offset is believed, and each rules out a way of
 /// being confidently wrong:
 ///
-/// 1. The profiles must actually line up at the winning offset. A region of the screen
-///    that did not move disagrees with any non-zero shift, which is what stops a window
-///    scrolling inside a still screen from dragging every other mark along with it.
-/// 2. No distant offset may score nearly as well. Lines of text are evenly spaced, so
+/// 1. The template must actually line up where it landed. A region of the screen that did
+///    not move disagrees with any non-zero shift, which is what stops a window scrolling
+///    inside a still screen from dragging every other mark along with it.
+/// 2. No distant position may score nearly as well. Lines of text are evenly spaced, so
 ///    sliding by one line pitch looks almost as good as the truth, and two plausible
 ///    answers are worth no answer at all.
 ///
 /// Failing either yields [`Estimate::Unexplained`] rather than a guess. A mark that
 /// vanishes is a mark the client can see is gone. A mark confidently pointing at the
 /// wrong thing is worse, and the client has no way to know.
-fn shift_along(previous: &[u8], current: &[u8]) -> Estimate {
-    let bands = previous.len();
-    if bands == 0 || bands != current.len() {
+///
+/// `base` is where the template started, so that an answer can be reported relative to
+/// where the mark already is rather than to the edge of the window being searched.
+fn shift_along(axis: &str, template: &[Vec<u8>], window: &[Vec<u8>], base: i32) -> Estimate {
+    let span = template.first().map_or(0, Vec::len);
+    let reach = window.first().map_or(0, Vec::len);
+    if span == 0 || reach < span || template.len() != window.len() {
         return Estimate::Unexplained;
     }
-    // Nothing to line up against, and nothing that would visibly move if it did.
-    if spread(previous) < FEATURELESS || spread(current) < FEATURELESS {
+
+    let textured =
+        |strips: &[Vec<u8>]| strips.iter().map(|strip| spread(strip)).fold(0.0, f64::max);
+    // Both sides have to have something in them. A featureless region cannot be seen to
+    // move, and a featureless one that gains a single feature must not read as a shift.
+    if textured(template).min(textured(window)) < FEATURELESS {
         return Estimate::Blind;
     }
 
-    // Half the axis. Beyond that the overlap is too small to mean anything, and a jump
-    // that far is a new page rather than a scroll.
-    let reach = (bands / 2) as i32;
-    let scores: Vec<(i32, f64)> = (-reach..=reach)
-        .filter_map(|offset| mismatch(previous, current, offset).map(|score| (offset, score)))
-        .collect();
-
-    let &(best, residual) = scores
-        .iter()
+    // Where the template may sit in the window: anywhere that keeps half of it covered.
+    let first = -(span as i32 / 2);
+    let last = reach as i32 - span as i32 + span as i32 / 2;
+    let Some((at, residual)) = (first..=last)
+        .filter_map(|at| strip_mismatch(template, window, at).map(|s| (at, s)))
         .min_by(|a, b| a.1.total_cmp(&b.1))
-        .expect("an offset of zero always overlaps");
+    else {
+        return Estimate::Unexplained;
+    };
 
-    if residual > PROFILE_MATCH {
+    // An answer sitting on the end of the range is the search running out of room rather
+    // than a measurement. Live, this was the common failure: the winning offset was
+    // exactly the last one tried, and the mark was flung several hundred points off the
+    // content it was pointing at.
+    if at == first || at == last {
+        tracing::debug!(
+            axis,
+            at,
+            residual,
+            "the search reached the end of its range"
+        );
         return Estimate::Unexplained;
     }
 
-    let rival = scores
-        .iter()
-        .filter(|(offset, _)| (offset - best).abs() > NEIGHBOURHOOD)
-        .map(|(_, score)| *score)
+    let best = at - base;
+    if best.abs() <= NEIGHBOURHOOD {
+        return Estimate::Moved(0);
+    }
+
+    let rival = (first..=last)
+        .filter(|other| (other - at).abs() > NEIGHBOURHOOD)
+        .filter_map(|other| strip_mismatch(template, window, other))
         .fold(f64::INFINITY, f64::min);
-    if rival < residual * DECISIVE + DECISIVE_MARGIN {
+    // Not `<`. On content that repeats exactly, every alias scores zero, and a strict
+    // comparison would let the first of them through as though it had won.
+    if rival <= residual * DECISIVE {
+        tracing::debug!(
+            axis,
+            best,
+            residual,
+            rival,
+            "several offsets explain it equally"
+        );
         return Estimate::Unexplained;
     }
 
+    let staying = strip_mismatch(template, window, base).unwrap_or(f64::INFINITY);
+    let gain = if residual > f64::EPSILON {
+        staying / residual
+    } else {
+        f64::INFINITY
+    };
+    tracing::debug!(axis, best, residual, staying, gain, "correlated a region");
+
+    if gain < WORTH_MOVING {
+        return Estimate::Unexplained;
+    }
     Estimate::Moved(best)
 }
 
-/// Mean absolute difference between `current` and `previous` slid by `offset` bands.
+/// How badly `template` disagrees with `window` when laid down starting at index `at`.
 ///
-/// `None` when the two overlap over less than half the axis, which is what keeps a large
-/// offset from winning on a handful of agreeable bands.
-fn mismatch(previous: &[u8], current: &[u8], offset: i32) -> Option<f64> {
-    let bands = previous.len() as i32;
-    let first = offset.max(0);
-    let last = (bands + offset).min(bands);
-    let overlap = last - first;
-    if overlap * 2 < bands {
+/// Only the overlapping part is compared, and at least half the template has to be
+/// covered: a sliver that happens to agree says nothing about where the rest went.
+fn mismatch(template: &[u8], window: &[u8], at: i32) -> Option<f64> {
+    let mut total = 0u32;
+    let mut counted = 0usize;
+    for (i, value) in template.iter().enumerate() {
+        let Ok(j) = usize::try_from(at + i as i32) else {
+            continue;
+        };
+        if let Some(other) = window.get(j) {
+            total += u32::from(value.abs_diff(*other));
+            counted += 1;
+        }
+    }
+    if counted * 2 < template.len() {
         return None;
     }
-
-    let total: u32 = (first..last)
-        .map(|i| {
-            let here = i16::from(current[i as usize]);
-            let there = i16::from(previous[(i - offset) as usize]);
-            (here - there).unsigned_abs() as u32
-        })
-        .sum();
-    Some(f64::from(total) / f64::from(overlap))
+    Some(f64::from(total) / counted as f64)
 }
 
 /// Mean absolute deviation of a profile, as a stand-in for how much structure it has.
@@ -433,13 +647,13 @@ fn luminance(bgra: &[u8]) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use arin_protocol::DisplayId;
     use std::sync::Arc;
 
     /// A frame with vertical texture, so that shifting it is detectable.
-    fn textured(width: u32, height: u32) -> Vec<u8> {
+    pub(crate) fn textured(width: u32, height: u32) -> Vec<u8> {
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
         for y in 0..height as usize {
             for x in 0..width as usize {
@@ -455,7 +669,7 @@ mod tests {
         pixels
     }
 
-    fn frame(pixels: Vec<u8>, width: u32, height: u32) -> Frame {
+    pub(crate) fn frame(pixels: Vec<u8>, width: u32, height: u32) -> Frame {
         Frame {
             display: DisplayId(1),
             scale: 1.0,
@@ -656,13 +870,20 @@ mod tests {
         pixels
     }
 
-    /// The same pattern running the other way, for the horizontal case.
-    fn upright(width: u32, height: u32, offset: i32) -> Vec<u8> {
-        let mut pixels = vec![0u8; width as usize * height as usize * 4];
-        for x in 0..width as usize {
-            let v = noise(x as i32 + offset);
-            for y in 0..height as usize {
-                let idx = (y * width as usize + x) * 4;
+    /// A page split in two: the top band never moves, the rest scrolls. This is what a
+    /// real screen looks like, and what the display-wide measurement could not read.
+    pub(crate) fn split_page(frozen_rows: usize, offset: i32) -> Vec<u8> {
+        let (width, height) = (512usize, 320usize);
+        let mut pixels = vec![0u8; width * height * 4];
+        for y in 0..height {
+            let source = if y < frozen_rows {
+                y as i32
+            } else {
+                y as i32 + offset
+            };
+            let v = noise(source);
+            for x in 0..width {
+                let idx = (y * width + x) * 4;
                 pixels[idx] = v;
                 pixels[idx + 1] = v;
                 pixels[idx + 2] = v;
@@ -672,146 +893,91 @@ mod tests {
         pixels
     }
 
+    /// The measurement the redesign exists for. The scrolling part of a screen reports how
+    /// far it went, whatever the rest of the screen is doing.
     #[test]
-    fn a_still_screen_has_not_shifted() {
-        let a = Signature::of(&frame(landscape(512, 320, 0), 512, 320));
-        let b = Signature::of(&frame(landscape(512, 320, 0), 512, 320));
-        let shift = b.shift_from(&a).expect("a still screen is explainable");
+    fn a_region_that_scrolled_reports_how_far() {
+        let before = frame(split_page(100, 0), 512, 320);
+        let after = frame(split_page(100, 16), 512, 320);
+
+        // Well below the frozen band. Logical size equals pixel size here, so a row is a
+        // point.
+        let region = LogicalRect::new(0.0, 160.0, 512.0, 120.0);
+        let shift =
+            shift_within(&before, &after, region).expect("a scrolling region is measurable");
+
+        assert!(
+            (shift.dy + 16.0).abs() <= 1.0,
+            "expected about -16 points, got {}",
+            shift.dy
+        );
+    }
+
+    /// The other half of the same measurement, and the one the display-wide version got
+    /// wrong. A region that did not move reports that it did not move, even though most of
+    /// the screen around it did.
+    #[test]
+    fn a_region_that_did_not_move_reports_nothing_moved() {
+        let before = frame(split_page(100, 0), 512, 320);
+        let after = frame(split_page(100, 16), 512, 320);
+
+        let region = LogicalRect::new(0.0, 10.0, 512.0, 80.0);
+        let shift = shift_within(&before, &after, region).expect("a still region is measurable");
+
         assert!(
             shift.is_negligible(),
-            "a still screen must not read as movement, got {shift:?}"
+            "a region inside the frozen band must read as still, got {shift:?}"
         );
     }
 
-    /// The measurement the whole feature rests on: content that moved up by a known
-    /// amount reports that amount, with the sign the protocol's axes use.
+    /// A region spanning both sides of a boundary settles on neither.
+    ///
+    /// Sixty rows of this region are still and a hundred scrolled, so "nothing moved" and
+    /// "everything moved by sixteen" each explain part of it and neither explains most.
+    /// Measured, the two score within half a percent of each other, and the estimator
+    /// reports no movement rather than committing to a coin toss. That is the safe half of
+    /// the answer: a mark that stays put is at least somewhere the client can see.
+    ///
+    /// It is not the whole answer, because a mark left on content that scrolled away is
+    /// still pointing at the wrong thing. What catches that is [`crate::fingerprint`],
+    /// which [`crate::daemon`] now consults even when the measurement comes back zero, for
+    /// exactly this case. On the recorded corpus that check caught ten left behind marks
+    /// in twelve.
+    ///
+    /// What would fix it here rather than downstream is measuring the halves of the region
+    /// separately and refusing when they disagree, which is the decisiveness guard applied
+    /// to a division that can see a horizontal boundary.
     #[test]
-    fn a_vertical_scroll_reports_how_far() {
-        // The frame's logical size equals its pixel size here, so a row is a point.
-        let before = Signature::of(&frame(landscape(512, 320, 0), 512, 320));
-        let after = Signature::of(&frame(landscape(512, 320, 12), 512, 320));
+    fn a_region_straddling_a_boundary_reports_no_movement() {
+        let before = frame(split_page(100, 0), 512, 320);
+        let after = frame(split_page(100, 16), 512, 320);
 
-        let shift = after
-            .shift_from(&before)
-            .expect("a clean scroll is measurable");
-        // Row y now shows what row y+12 used to, so the content moved twelve points up.
+        // Sixty rows of the still band and a hundred of the part that scrolled.
+        let region = LogicalRect::new(0.0, 40.0, 512.0, 160.0);
+        let shift = shift_within(&before, &after, region).expect("an answer, and it is zero");
         assert!(
-            (shift.dy + 12.0).abs() <= 1.0,
-            "expected about -12 points of vertical movement, got {}",
-            shift.dy
-        );
-        assert!(
-            shift.dx.abs() <= 1.0,
-            "nothing moved sideways, got {}",
-            shift.dx
+            shift.is_negligible(),
+            "a split region must not commit to one side, got {shift:?}"
         );
     }
 
     #[test]
-    fn a_horizontal_scroll_reports_how_far() {
-        let before = Signature::of(&frame(upright(512, 320, 0), 512, 320));
-        let after = Signature::of(&frame(upright(512, 320, 20), 512, 320));
-
-        let shift = after
-            .shift_from(&before)
-            .expect("a clean scroll is measurable");
-        assert!(
-            (shift.dx + 20.0).abs() <= 1.0,
-            "expected about -20 points of horizontal movement, got {}",
-            shift.dx
-        );
-        assert!(
-            shift.dy.abs() <= 1.0,
-            "nothing moved down, got {}",
-            shift.dy
-        );
-    }
-
-    /// The case that decides whether this is safe to ship. Part of the screen scrolled
-    /// and part did not, so there is no one offset that follows the content, and marks on
-    /// the still part would be dragged somewhere arbitrary by any answer at all.
-    #[test]
-    fn a_partial_scroll_has_no_answer() {
-        let still = landscape(512, 320, 0);
-        let mut mixed = landscape(512, 320, 24);
-        // Put the top third back the way it was: a toolbar that did not move.
-        let split = (320 / 3) * 512 * 4;
-        mixed[..split].copy_from_slice(&still[..split]);
-
-        let before = Signature::of(&frame(still, 512, 320));
-        let after = Signature::of(&frame(mixed, 512, 320));
+    fn a_region_off_the_edge_of_the_frame_is_refused() {
+        let before = frame(split_page(100, 0), 512, 320);
+        let after = frame(split_page(100, 16), 512, 320);
         assert_eq!(
-            after.shift_from(&before),
-            None,
-            "a screen that moved in one place and not another must refuse to name a shift"
+            shift_within(&before, &after, LogicalRect::new(0.0, 0.0, 0.0, 0.0)),
+            None
         );
     }
 
-    /// Evenly spaced content offers several equally good answers, and several answers is
-    /// no answer. `textured` is stripes on a fixed pitch, which is the worst case.
     #[test]
-    fn periodic_content_refuses_to_guess() {
-        let base = textured(512, 320);
-        let mut scrolled = vec![0u8; base.len()];
-        let shift = 4 * 512 * 4;
-        scrolled[..base.len() - shift].copy_from_slice(&base[shift..]);
-
-        let before = Signature::of(&frame(base, 512, 320));
-        let after = Signature::of(&frame(scrolled, 512, 320));
+    fn frames_of_different_sizes_cannot_be_compared() {
+        let before = frame(split_page(100, 0), 512, 320);
+        let after = frame(landscape(640, 400, 0), 640, 400);
         assert_eq!(
-            after.shift_from(&before),
-            None,
-            "stripes on a fixed pitch line up at many offsets, so none of them is the answer"
+            shift_within(&before, &after, LogicalRect::new(0.0, 0.0, 100.0, 100.0)),
+            None
         );
-    }
-
-    #[test]
-    fn a_mark_appearing_does_not_read_as_a_shift() {
-        let base = landscape(512, 320, 0);
-        let mut drawn = base.clone();
-        block(&mut drawn, 512, (200, 120, 40, 40));
-
-        let before = Signature::of(&frame(base, 512, 320));
-        let after = Signature::of(&frame(drawn, 512, 320));
-        match after.shift_from(&before) {
-            None => {}
-            Some(shift) => assert!(
-                shift.is_negligible(),
-                "the daemon's own mark must not look like the page moving, got {shift:?}"
-            ),
-        }
-    }
-
-    /// A wall of text is what this actually runs against, so measure one. The pattern
-    /// here has uniform ink density per line, which is the case that defeated an earlier
-    /// averaging summary, and it still has to yield a distance rather than just a yes.
-    #[test]
-    fn scrolling_text_reports_how_far() {
-        let before = Signature::of(&frame(texty(512, 320, 0), 512, 320));
-        let after = Signature::of(&frame(texty(512, 320, 9), 512, 320));
-
-        let shift = after
-            .shift_from(&before)
-            .expect("text scrolling by a known amount is measurable");
-        assert!(
-            (shift.dy + 9.0).abs() <= 1.0,
-            "expected about -9 points of vertical movement, got {}",
-            shift.dy
-        );
-    }
-
-    #[test]
-    fn a_resized_display_has_no_shift() {
-        let a = Signature::of(&frame(landscape(512, 320, 0), 512, 320));
-        let b = Signature::of(&frame(landscape(640, 400, 0), 640, 400));
-        assert_eq!(b.shift_from(&a), None);
-    }
-
-    #[test]
-    fn a_blank_screen_reports_no_movement() {
-        // Nothing to line up against, but nothing that could visibly move either.
-        let a = Signature::of(&frame(vec![20; 512 * 320 * 4], 512, 320));
-        let b = Signature::of(&frame(vec![20; 512 * 320 * 4], 512, 320));
-        assert_eq!(b.shift_from(&a), Some(Shift { dx: 0.0, dy: 0.0 }));
     }
 }

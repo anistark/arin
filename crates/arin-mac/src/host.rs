@@ -15,17 +15,19 @@ use crate::display::{Screen, screens};
 use crate::panel::Panel;
 use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result, Rgb};
 use arin_protocol::{AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect, StrokeStyle};
+use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::NSColor;
+use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSColor};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
-use objc2_foundation::NSString;
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSString};
 use objc2_quartz_core::{CALayer, CAShapeLayer, CATextLayer, CATransaction};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::ptr::NonNull;
+use std::sync::{Arc, Mutex, OnceLock};
 
 thread_local! {
     /// Main thread only. Every access happens inside a block dispatched to the main
@@ -36,8 +38,12 @@ thread_local! {
 /// Everything the renderer owns on the main thread.
 struct Host {
     panels: Vec<Panel>,
-    /// Layers added for annotations, so `clear` can find them again.
-    layers: HashMap<AnnotationId, Retained<CALayer>>,
+    /// Layers added for annotations, and the display each sits on.
+    ///
+    /// `clear` finds them by id. The display is what lets a panel going away take its own
+    /// layers with it, which the id alone cannot answer: a highlight or a text box has no
+    /// other record of where it was drawn.
+    layers: HashMap<AnnotationId, (DisplayId, Retained<CALayer>)>,
     /// Point annotations, and the display each is on.
     ///
     /// Points have no layer of their own: they move the orb, which belongs to the panel.
@@ -56,6 +62,47 @@ impl Host {
         self.panels
             .iter_mut()
             .find(|p| p.screen().info.id == display)
+    }
+
+    /// Bring the panels back in line with the displays that are actually attached.
+    ///
+    /// Returns the displays whose panel was replaced or removed, because every layer that
+    /// was on one of those is gone and the daemon is still holding annotations that
+    /// believe otherwise.
+    ///
+    /// A panel is kept only when its screen is unchanged in every respect. A display that
+    /// moved, resized, or changed scale gets a new one: `Panel` has no way to be resized
+    /// in place, and the layers already on it were positioned against the old height, so
+    /// keeping them would leave every mark on that display at the wrong end of it.
+    fn reconcile(&mut self, mtm: MainThreadMarker) -> Vec<DisplayId> {
+        let attached = screens(mtm);
+
+        let mut disturbed: Vec<DisplayId> = Vec::new();
+        self.panels.retain(|panel| {
+            let screen = panel.screen();
+            let kept = attached.contains(&screen);
+            if !kept {
+                // Dropping the panel closes its window, which is what takes a stale
+                // overlay off a display that resized.
+                disturbed.push(screen.info.id);
+            }
+            kept
+        });
+
+        for screen in attached {
+            if self.panel_for(screen.info.id).is_none() {
+                tracing::info!(display = %screen.info.id, "display attached, adding an overlay");
+                self.panels.push(Panel::new(screen, mtm));
+            }
+        }
+
+        // Layers on a panel that went away went away with it, so the bookkeeping has to
+        // agree rather than holding references to a closed window's tree.
+        for display in &disturbed {
+            self.layers.retain(|_, (on, _)| on != display);
+            self.points.retain(|_, on| on != display);
+        }
+        disturbed
     }
 }
 
@@ -124,6 +171,22 @@ where
     });
 }
 
+/// What to run after the displays change, once the panels have caught up.
+///
+/// Set by the binary, because the renderer has no handle on the daemon and the daemon is
+/// what holds the annotations that need reconciling against the new arrangement.
+static DISPLAYS_CHANGED: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// Register what happens when a display is attached, removed, or reconfigured.
+///
+/// Runs on the main thread with the panels already rebuilt, so it must be quick and must
+/// not block. Reconciling the daemon's annotations is fine, capturing a screen is not.
+pub fn on_displays_changed(handler: impl Fn() + Send + Sync + 'static) {
+    if DISPLAYS_CHANGED.set(Box::new(handler)).is_err() {
+        tracing::warn!("a display change handler was already registered");
+    }
+}
+
 /// Draws the overlay on macOS.
 ///
 /// Cheap to clone and safe to share. All it holds is the display cache and the knowledge
@@ -151,9 +214,63 @@ impl MacRenderer {
             });
         });
 
-        Self {
+        let renderer = Self {
             displays: Arc::new(Mutex::new(displays)),
-        }
+        };
+        renderer.watch_for_display_changes();
+        renderer
+    }
+
+    /// Rebuild the panels whenever the screen arrangement changes.
+    ///
+    /// AppKit posts this for a display being attached or removed, for a resolution or
+    /// scale change, and for the screens being rearranged. Without it the panels and the
+    /// display cache are whatever they were at startup: a monitor plugged in afterwards
+    /// can never be drawn on, and marks on one that was unplugged sit in the daemon's
+    /// state for the life of the session with no overlay left to show them.
+    fn watch_for_display_changes(&self) {
+        let cache = Arc::clone(&self.displays);
+        let centre = NSNotificationCenter::defaultCenter();
+        let handler = RcBlock::new(move |_: NonNull<NSNotification>| {
+            let Some(mtm) = MainThreadMarker::new() else {
+                // AppKit posts this on the main thread. If that ever stops being true,
+                // touching panels from anywhere else is worse than doing nothing.
+                tracing::error!("a screen change arrived off the main thread");
+                return;
+            };
+
+            let attached = screens(mtm);
+            let refreshed: Vec<DisplayInfo> = attached.iter().map(|s| s.info).collect();
+            tracing::info!(count = refreshed.len(), "displays changed");
+
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
+            HOST.with_borrow_mut(|host| {
+                if let Some(host) = host.as_mut() {
+                    host.reconcile(mtm);
+                }
+            });
+            CATransaction::commit();
+
+            // After the panels, so that anything the handler draws has somewhere to go.
+            *cache.lock().expect("display cache") = refreshed;
+            if let Some(handler) = DISPLAYS_CHANGED.get() {
+                handler();
+            }
+        });
+
+        unsafe {
+            centre.addObserverForName_object_queue_usingBlock(
+                Some(NSApplicationDidChangeScreenParametersNotification),
+                None,
+                None,
+                &handler,
+            )
+        };
+        // The observer holds the block, and the notification centre holds the observer for
+        // the life of the process. Nothing here is ever unregistered because the overlay
+        // outlives every display it draws on.
+        std::mem::forget(handler);
     }
 }
 
@@ -174,7 +291,7 @@ impl Renderer for MacRenderer {
             // that scrolled. Replacing the map entry alone would leave the old layer on
             // screen with nothing left holding a reference to remove it: a mark that
             // multiplies every time the page moves, and only the newest one clearable.
-            if let Some(stale) = host.layers.remove(&id) {
+            if let Some((_, stale)) = host.layers.remove(&id) {
                 stale.removeFromSuperlayer();
             }
             let Some(panel) = host.panel_for(screen_id) else {
@@ -244,7 +361,7 @@ impl Renderer for MacRenderer {
 
             if let Some(layer) = layer {
                 panel.root().addSublayer(&layer);
-                host.layers.insert(id, layer);
+                host.layers.insert(id, (screen_id, layer));
             }
             for (point, display) in host_points {
                 host.points.insert(point, display);
@@ -256,7 +373,7 @@ impl Renderer for MacRenderer {
     fn clear(&self, id: &AnnotationId) -> Result<()> {
         let id = id.clone();
         on_main(move |host, _mtm| {
-            if let Some(layer) = host.layers.remove(&id) {
+            if let Some((_, layer)) = host.layers.remove(&id) {
                 layer.removeFromSuperlayer();
             }
             // A point has no layer of its own, it moves the orb, so the orb only goes
@@ -281,7 +398,7 @@ impl Renderer for MacRenderer {
 
     fn clear_all(&self) -> Result<()> {
         on_main(|host, _mtm| {
-            for (_, layer) in host.layers.drain() {
+            for (_, (_, layer)) in host.layers.drain() {
                 layer.removeFromSuperlayer();
             }
             host.points.clear();

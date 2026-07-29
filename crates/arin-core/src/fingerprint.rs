@@ -36,18 +36,21 @@
 use crate::traits::Frame;
 use arin_protocol::LogicalRect;
 
-/// Samples per side of the region. Sixteen values, one per cell of a 4x4 grid.
+/// Samples per side of the region. Thirty six values, one per cell of a 6x6 grid.
 ///
-/// Small on purpose. It travels on the wire inside an anchor, and it only has to tell
-/// content apart from unrelated content.
-const GRID: usize = 4;
+/// Small on purpose: it travels on the wire inside an anchor. Not as small as it was.
+/// Sixteen cells could not tell a followed mark from a left behind one, and adding cells
+/// was the cheapest of the three things that fixed it.
+const GRID: usize = 6;
 
 /// How far one sample may drift and still count as the same content, out of 255.
 ///
-/// Looser than the scroll tolerance. This compares two different captures of a region
+/// Still looser than the scroll tolerance, because this compares two captures of a region
 /// that has moved across the screen, where subpixel positioning genuinely differs, rather
-/// than two captures of a still one.
-const TOLERANCE: i16 = 24;
+/// than two captures of a still one. Tightened from 24 once the samples became cell means
+/// rather than single pixels: an average is steady enough to hold a narrower bar, and at
+/// 24 the check passed almost everything put to it.
+const TOLERANCE: i16 = 12;
 
 /// What share of samples must still agree for the content to be the same.
 ///
@@ -80,24 +83,45 @@ impl Fingerprint {
         let mut samples = [0u8; GRID * GRID];
         for row in 0..GRID {
             for col in 0..GRID {
-                // The middle of each cell, for the same reason the signature grid does it:
-                // a sample on a boundary moves onto the neighbouring cell for free.
-                let at_x = rect.x + rect.width * (col as f64 * 2.0 + 1.0) / (GRID as f64 * 2.0);
-                let at_y = rect.y + rect.height * (row as f64 * 2.0 + 1.0) / (GRID as f64 * 2.0);
+                // The mean of the cell, not a pixel from the middle of it. Captures are
+                // downscaled, so one pixel spans about three logical points and a single
+                // sample of downscaled text is noise: it swings further between two
+                // captures of the same content than it does between different content.
+                // Averaging the cell is what makes the comparison mean anything.
+                let x0 = rect.x + rect.width * col as f64 / GRID as f64;
+                let x1 = rect.x + rect.width * (col + 1) as f64 / GRID as f64;
+                let y0 = rect.y + rect.height * row as f64 / GRID as f64;
+                let y1 = rect.y + rect.height * (row + 1) as f64 / GRID as f64;
 
                 // Positions off the edge are clamped rather than dropped, so a mark half
                 // off the screen still records the half that is on it.
-                let x = ((at_x / logical_width) * width as f64).round();
-                let y = ((at_y / logical_height) * height as f64).round();
-                if !x.is_finite() || !y.is_finite() {
+                let to_x = |v: f64| {
+                    ((v / logical_width) * width as f64).clamp(0.0, width as f64 - 1.0) as usize
+                };
+                let to_y = |v: f64| {
+                    ((v / logical_height) * height as f64).clamp(0.0, height as f64 - 1.0) as usize
+                };
+                if !(x0.is_finite() && x1.is_finite() && y0.is_finite() && y1.is_finite()) {
                     return None;
                 }
-                let x = x.clamp(0.0, width as f64 - 1.0) as usize;
-                let y = y.clamp(0.0, height as f64 - 1.0) as usize;
+                let (px0, py0) = (to_x(x0), to_y(y0));
+                // At least one pixel per cell, however small the cell is on this capture.
+                let px1 = to_x(x1).max(px0 + 1).min(width);
+                let py1 = to_y(y1).max(py0 + 1).min(height);
 
-                let idx = (y * width + x) * 4;
-                if let Some(px) = frame.pixels.get(idx..idx + 4) {
-                    samples[row * GRID + col] = luminance(px);
+                let mut total = 0u32;
+                let mut taken = 0u32;
+                for y in py0..py1 {
+                    for x in px0..px1 {
+                        let idx = (y * width + x) * 4;
+                        if let Some(px) = frame.pixels.get(idx..idx + 4) {
+                            total += u32::from(luminance(px));
+                            taken += 1;
+                        }
+                    }
+                }
+                if taken > 0 {
+                    samples[row * GRID + col] = (total / taken) as u8;
                 }
             }
         }
@@ -171,15 +195,23 @@ mod tests {
         }
     }
 
-    /// Content with a strong vertical pattern, offset by whole rows.
+    /// Content with structure at a scale a downscaled capture would survive.
+    ///
+    /// Blocks rather than per-pixel noise, deliberately. Fine checkerboards average to a
+    /// flat grey, so a fingerprint built from cell means cannot see them at all, and
+    /// neither can the 512 wide capture the daemon actually works from. Testing against
+    /// texture that never reaches the estimator would be testing the wrong thing. See
+    /// `only_pixel_level_texture_is_invisible` for that limitation, stated outright.
     fn page(offset: i32) -> Vec<u8> {
         let mut pixels = vec![0u8; WIDTH as usize * HEIGHT as usize * 4];
         for y in 0..HEIGHT as usize {
-            let row = y as i32 + offset;
+            let band = (y as i32 + offset).div_euclid(4) as u32;
             for x in 0..WIDTH as usize {
-                // Varies along both axes, so a region is distinguishable from its
-                // neighbours in either direction.
-                let v = (((row * 7) ^ (x as i32 * 3)) & 0xFF) as u8;
+                let cell = (x as u32).div_euclid(24);
+                // Two mixers, so neighbouring blocks are unrelated and the pattern does
+                // not repeat on any pitch a correlation could mistake for a shift.
+                let v = (band.wrapping_mul(2_654_435_761) >> 24) as u8
+                    ^ (cell.wrapping_mul(2_246_822_519) >> 22) as u8;
                 let idx = (y * WIDTH as usize + x) * 4;
                 pixels[idx] = v;
                 pixels[idx + 1] = v;
@@ -217,6 +249,41 @@ mod tests {
         assert!(
             !before.matches(&after),
             "a stale anchor over changed content must not pass verification"
+        );
+    }
+
+    /// The cost of averaging, written down.
+    ///
+    /// A fingerprint of cell means cannot tell apart content whose only structure is at
+    /// the pixel level, because the mean of a fine checkerboard is the mean of any other
+    /// fine checkerboard. This is accepted rather than fixed: the daemon compares 512
+    /// wide captures of a 1512 point display, where such content has already been
+    /// averaged away by the downscale before the fingerprint ever sees it. Against the
+    /// recorded corpus, moving from single pixels to cell means took the check from
+    /// catching two left behind marks in twelve to catching ten.
+    #[test]
+    fn only_pixel_level_texture_is_invisible() {
+        let rect = LogicalRect::new(100.0, 80.0, 120.0, 60.0);
+        let checker = |phase: usize| {
+            let mut pixels = vec![0u8; WIDTH as usize * HEIGHT as usize * 4];
+            for y in 0..HEIGHT as usize {
+                for x in 0..WIDTH as usize {
+                    let v = if (x + y + phase) % 2 == 0 { 0 } else { 255 };
+                    let idx = (y * WIDTH as usize + x) * 4;
+                    pixels[idx] = v;
+                    pixels[idx + 1] = v;
+                    pixels[idx + 2] = v;
+                    pixels[idx + 3] = 255;
+                }
+            }
+            pixels
+        };
+        let a = Fingerprint::of(&frame(checker(0)), rect).unwrap();
+        let b = Fingerprint::of(&frame(checker(1)), rect).unwrap();
+        assert!(
+            a.matches(&b),
+            "documenting a known blind spot: inverting a one pixel checkerboard leaves \
+             every cell mean where it was, so this reads as the same content"
         );
     }
 

@@ -14,8 +14,9 @@
 //! it honest lives in [`crate::fingerprint`].
 
 use crate::daemon::Daemon;
-use crate::signature::Signature;
-use arin_protocol::{DisplayId, Invalidated, InvalidationReason};
+use crate::record::Recorder;
+use crate::traits::Frame;
+use arin_protocol::{DisplayId, Invalidated};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -28,7 +29,13 @@ const SETTLE_TICKS: u8 = 2;
 /// Watches displays for content movement.
 pub struct ScrollWatcher {
     daemon: Arc<Daemon>,
-    baselines: HashMap<DisplayId, Signature>,
+    /// What each display looked like last tick.
+    ///
+    /// The whole frame rather than a summary of it. Movement is measured per mark, over
+    /// the patch of screen around that mark, and which patches those are is not known
+    /// when the frame is taken. Cheap to keep: `Frame` shares its pixels behind an `Arc`,
+    /// and a downscaled capture is well under a megabyte.
+    baselines: HashMap<DisplayId, Frame>,
     /// The daemon's render generation as of the last comparison.
     ///
     /// Capture includes the overlay, so a frame taken after the daemon drew differs from
@@ -46,6 +53,9 @@ pub struct ScrollWatcher {
     /// The tick runs twice a second for as long as anything is on screen, so a backend
     /// that cannot capture would otherwise fill the log with the same line forever.
     reported: HashSet<DisplayId>,
+    /// Writes real frame pairs to disk when asked, so the thresholds above can be
+    /// calibrated against a screen rather than against generated content.
+    recorder: Recorder,
 }
 
 impl ScrollWatcher {
@@ -57,6 +67,7 @@ impl ScrollWatcher {
             generation: 0,
             settling: 0,
             reported: HashSet::new(),
+            recorder: Recorder::from_env(),
         }
     }
 
@@ -69,6 +80,15 @@ impl ScrollWatcher {
         if self.daemon.annotation_count() == 0 {
             self.baselines.clear();
             return Vec::new();
+        }
+
+        // Before anything is captured. A mark on a display that has been unplugged should
+        // not survive long enough for the backend to be asked for a frame of it, and a
+        // display that resized may have left marks outside itself.
+        let mut invalidated = self.daemon.reconcile_displays();
+        if self.daemon.annotation_count() == 0 {
+            self.baselines.clear();
+            return invalidated;
         }
 
         // Anything the daemon drew since the last tick makes the previous frame useless
@@ -90,12 +110,16 @@ impl ScrollWatcher {
                 .filter(|id| watched.contains(id))
                 .collect(),
             Err(e) => {
+                // Whatever reconciling already found still happened and still has to be
+                // reported, so this returns it rather than starting a fresh empty list.
                 tracing::warn!(error = %e, "could not enumerate displays");
-                return Vec::new();
+                return invalidated;
             }
         };
 
-        let mut invalidated = Vec::new();
+        // A display that went away leaves a baseline nothing will ever compare against.
+        self.baselines.retain(|id, _| displays.contains(id));
+
         // Named `screen` rather than `display` so the tracing macros below do not
         // shadow their own `display` value helper.
         for id in displays {
@@ -115,45 +139,36 @@ impl ScrollWatcher {
             // blames the user for a change the daemon made.
             let drew_during_capture = self.daemon.render_generation() != generation;
 
-            let current = frame.signature();
-            let previous = self.baselines.insert(id, current.clone());
+            let previous = self.baselines.insert(id, frame.clone());
             if rebaseline || drew_during_capture {
                 if drew_during_capture {
                     self.settling = SETTLE_TICKS;
                 }
                 continue;
             }
-            match previous {
-                // First sighting of this display. Nothing to compare against yet.
-                None => {}
-                Some(previous) if current.moved_from(&previous) => {
-                    match current.shift_from(&previous) {
-                        Some(shift) => {
-                            let followed = self.daemon.follow_scroll(id, shift, Some(&frame));
-                            tracing::debug!(
-                                %id,
-                                dx = shift.dx,
-                                dy = shift.dy,
-                                moved = followed.moved.len(),
-                                dropped = followed.invalidated.len(),
-                                "content moved, following it"
-                            );
-                            invalidated.extend(followed.invalidated);
-                        }
-                        // No single movement accounts for what changed, so there is
-                        // nowhere honest to put the marks. This is what 0.1 did for every
-                        // change, and it is now the fallback rather than the rule.
-                        None => {
-                            tracing::debug!(%id, "content changed unaccountably, invalidating");
-                            invalidated.extend(
-                                self.daemon
-                                    .invalidate_display(id, InvalidationReason::Scroll),
-                            );
-                        }
-                    }
-                }
-                Some(_) => {}
+            // First sighting of this display. Nothing to compare against yet.
+            let Some(before) = previous else { continue };
+
+            // No display-wide gate before this. One used to decide whether anything had
+            // moved at all, and it was the wrong question twice over: a window scrolling
+            // in the corner of a large screen falls under any threshold worth having, and
+            // a mark inside it would then sit still over content that had moved, which is
+            // the one outcome worse than dropping it.
+            if self.recorder.is_recording() {
+                let regions = self.daemon.measured_regions(id);
+                self.recorder.keep(id, &before, &frame, &regions);
             }
+
+            let followed = self.daemon.follow_movement(id, &before, &frame);
+            if !followed.moved.is_empty() || !followed.invalidated.is_empty() {
+                tracing::debug!(
+                    %id,
+                    moved = followed.moved.len(),
+                    dropped = followed.invalidated.len(),
+                    "content moved under marks"
+                );
+            }
+            invalidated.extend(followed.invalidated);
         }
         invalidated
     }

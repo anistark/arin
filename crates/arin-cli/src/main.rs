@@ -404,6 +404,24 @@ async fn serve(
         arin_mac::on_status(move || {
             status_line(reporting.annotation_count(), reporting.session_count())
         });
+
+        // A display was attached, removed, or reconfigured, and the overlay panels have
+        // already been rebuilt around it. Two things follow. Marks on a display that is
+        // gone, or now outside one that shrank, are dropped and their owners told. What
+        // survives is drawn again, because rebuilding a panel took its layers with it and
+        // the renderer has no record of what was on it.
+        let arranging = Arc::clone(&daemon);
+        arin_mac::on_displays_changed(move || {
+            let dropped = arranging.reconcile_displays();
+            let redrawn = arranging.redraw_all();
+            if !dropped.is_empty() || redrawn > 0 {
+                tracing::info!(
+                    dropped = dropped.len(),
+                    redrawn,
+                    "displays changed, marks reconciled"
+                );
+            }
+        });
     }
 
     // Quitting from the menu bar used to go straight to `NSApplication terminate:`, which

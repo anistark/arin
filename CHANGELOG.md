@@ -135,12 +135,37 @@ protocol freeze, after which protocol changes are additive only.
   Placement has a preferred side and a fallback, so a mark near an edge puts its caption
   on the side with room rather than half off the display, and a label too long to be one
   truncates instead of running the width of the screen.
-- Scroll tracking. Annotations now move with content that scrolled instead of being
-  thrown away by it. The watcher already noticed movement; it now also measures how far,
-  by keeping one brightness value per horizontal and per vertical band of the frame and
-  sliding each profile against the previous tick's to find the offset that lines them up.
-  Marks are translated by that offset and redrawn in place, so an orb keeps up with the
-  page rather than disappearing off it.
+- Scroll tracking. Annotations move with content that scrolled instead of being thrown
+  away by it. Movement is measured around each mark rather than across the display: the
+  patch of screen surrounding it is reduced to brightness profiles, eight strips per axis
+  so that a scroll in part of the patch is still visible, and the profiles from the
+  previous tick are slid through the current frame to find where that content went. Marks
+  translate by their own offset and are redrawn in place.
+
+  The template and the window it is searched in are deliberately different sizes. Sliding a
+  region against itself can only show half its own height of movement, which put a ceiling
+  of a couple of hundred points on what could be followed, and ordinary scrolls are bigger
+  than that: live, the winning offset was repeatedly the last one in range, and a mark was
+  flung several hundred points off its content. The template stays tight around the mark so
+  it measures that mark's own window rather than the desktop behind it, the window searched
+  in the later frame is wider, and an offset landing on the end of the range is now refused
+  rather than reported.
+
+  Against a recorded corpus of 74 frame pairs this measures 11 of 12 movements correctly,
+  refuses 1, invents none, and holds 61 of 62 still screens. It is not yet smooth in use:
+  a mark follows one scroll and is invalidated by the next. See `plan/ROADMAP.md`.
+  
+  Measuring the whole display was tried first and is the obvious thing to build, which is
+  why it is worth recording that it cannot work, and why `ARIN_RECORD` and
+  `cargo run --example calibrate` now exist to settle this kind of question with
+  measurements instead of argument. A scroll happens inside a window, so the
+  menu bar, the dock, the desktop and every other window stay exactly where they were, and
+  correlated across the whole screen the answer comes back as *nothing moved*. On a real
+  laptop display, scrolling a text window: best offset zero, residual 4.6, with a fifth of
+  the screen's samples changed. Globally true, and no use at all to a mark inside the
+  window. Measuring locally also dissolves the case the display-wide version needed the
+  content fingerprint to patch up after the fact: a mark on a toolbar beside a scrolling
+  pane now simply measures no movement, which is correct rather than a special case.
 - Grounding. `arin point "the Submit button"` and `arin highlight "the error message"`
   now work with no coordinates, as do `query` on the `point_at` and `highlight` MCP tools.
   The daemon captures the display, a resolver says where the thing is, and the mark goes
@@ -156,16 +181,40 @@ protocol freeze, after which protocol changes are additive only.
 - `arin resolvers`, which lists what this build can ground with and whether each one
   leaves the machine. It builds each rather than describing it, so a resolver that is not
   going to work says why there rather than at first use.
+- Display changes are now handled rather than ignored. The overlay rebuilds its panels
+  when a display is attached, removed, or reconfigured, and the daemon drops the marks
+  that went with it and redraws the ones that survived. Before this the panels and the
+  display list were whatever they had been at startup: a monitor plugged in afterwards
+  could never be drawn on, and marks on one that was unplugged sat in the daemon's state
+  for the life of the session, invisible, unclearable from the menu bar, and keeping the
+  scroll watcher asking for frames of a display that was not there.
+- `display_change` is emitted at last. It has been a documented invalidation reason since
+  0.1 with nothing in the daemon producing it. A mark on a display that goes away, or one
+  left outside a display that shrank, now gets it.
+- A dedicated display matrix, `crates/arin-core/tests/displays.rs`, running the same
+  properties against six arrangements: one display at each scale, two matched, a Retina
+  laptop beside a 1x external, three that differ in every respect, and a portrait panel
+  beside a landscape one. Every one of them asserts that acks report that display's own
+  scale and size, that named positions resolve against the right display, that the colour
+  picker reads the frame for the display being marked, and that a scroll on one display
+  leaves the others alone.
 - `Capture::capture_detailed`, so one backend can serve two callers that want very
   different things. Scroll detection and the colour picker read coarse statistics from a
   thumbnail, which is why the daemon captures downscaled. A resolver has to read the
   interface, and a mark placed from a 512 pixel thumbnail is off by however much that
   thumbnail rounded.
 - Content fingerprints, which fill in the `content_hash` the anchor has carried as null
-  since 0.1. Each positioned mark records a small grid of brightnesses from the region it
-  was drawn over. After the daemon follows a movement it looks again at where the mark
-  landed, and a mark now sitting on unrelated content is invalidated rather than left
-  pointing at the wrong thing. This is what covers the case a display-wide answer cannot:
+  since 0.1. Each positioned mark records a 6x6 grid of average brightnesses from the
+  region it was drawn over. After the daemon follows a movement it looks again at where the
+  mark landed, and a mark now sitting on unrelated content is invalidated rather than left
+  pointing at the wrong thing. The check runs even when the measurement says nothing moved,
+  which is the case that needs it most: a region split between a still part and a scrolling
+  one has two explanations, settles on zero, and would otherwise leave the mark sitting on
+  content that had gone. Averages rather than single samples because the daemon compares
+  512 pixel wide captures, where one pixel spans about three logical points and one sample
+  of downscaled text swings further between two captures of the same content than it does
+  between different content. Measured against the corpus, that change took the check from
+  catching 2 left behind marks in 12 to catching 10. This is what covers the case a display-wide answer cannot:
   a page that scrolls under a toolbar that does not has one honest answer for most of the
   screen and a different one for the rest, and only the mark's own anchor knows which
   side of that line it is on.
@@ -279,6 +328,16 @@ protocol freeze, after which protocol changes are additive only.
   spends only a small fraction of its length over a different background, an eighth say,
   which is a minority of its own chunk and stays outvoted. It comes out legible where most
   of it is drawn and dim for the rest.
+- Nobody has plugged a monitor in while the daemon was running. The panels rebuild and the
+  daemon reconciles from an AppKit notification that no test can post, so both sides of
+  that transition are covered and the transition itself has not been watched. The
+  arrangements either side of it are covered against six layouts and on real hardware, a
+  2x laptop with two 1x externals.
+- A display that is reconfigured rather than removed loses its overlay and gets a new one,
+  so every mark on it is redrawn from the daemon's state. That is correct and it is not
+  free: a display whose parameters change repeatedly, as some do while waking, redraws
+  everything on it each time. A panel that could be resized in place would avoid it, at
+  the cost of repositioning every layer already on it against the new height.
 - **Grounding accuracy is unmeasured.** The adapter is verified as far as a socket: the
   request shape, the required headers, the coordinate conversion, and every failure path
   are covered against a loopback server. None of that says whether it puts the orb on the
@@ -295,6 +354,18 @@ protocol freeze, after which protocol changes are additive only.
   no progress on the wire while it runs, which is the open question about whether `ack`
   should stream. The orb sits in its thinking state, so the person watching sees
   something, and the agent does not.
+- **Scroll tracking follows about half of real scrolls and invalidates the rest.**
+  Measured against a recorded corpus of scrolls on a laptop display, judged against a full
+  two dimensional comparison of each region: of eleven scrolls, six are followed correctly,
+  four are refused and fall back to invalidating, and one is left where it is when it should
+  have moved. No mark was placed anywhere wrong. Confirmed on a live screen, where a mark
+  followed its content up by 82 points and other scrolls on the same page were refused.
+
+  What refuses them is the two scorers disagreeing, and there is no cheap fix in hand: the
+  obvious one, a gentler high-pass on the profile, was tried against the corpus and is
+  measurably worse. Improving the rate means a better feature rather than a better
+  threshold, and the corpus and its harness are checked in so that can be tried without a
+  person sitting at a screen scrolling on request.
 - A diagonal scroll is followed vertically and not horizontally when its horizontal
   component is not decisive on its own. The two axes are measured independently, and one
   of them naming a movement is allowed to account for the other being unreadable, because

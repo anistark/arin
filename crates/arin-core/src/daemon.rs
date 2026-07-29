@@ -11,7 +11,6 @@ use crate::error::{Error, Result};
 use crate::fingerprint::Fingerprint;
 use crate::policy::{OrbState, Rendering};
 use crate::session::Session;
-use crate::signature::Shift;
 use crate::traits::{Capture, Frame, Renderer, Resolver};
 use arin_protocol::{
     Ack, Anchor, AnnotationId, ClientMessage, DaemonMessage, DisplayId, DisplayInfo, Envelope,
@@ -35,6 +34,51 @@ const ANNOUNCEMENT_BACKLOG: usize = 256;
 /// Deliberately generous. A slightly large highlight reads as intentional, while a
 /// confident mark in the wrong place reads as broken.
 const UNCERTAIN_REGION: f64 = 120.0;
+
+/// How far around a mark to look when measuring what moved under it, in logical points.
+///
+/// Two things pull against each other. Too tight and there is not enough content to
+/// correlate against. Too wide and the region takes in the toolbars and neighbouring
+/// windows that made the display-wide measurement useless in the first place, which is
+/// the failure being fixed and so the one to lean away from.
+///
+/// The wrong reading of "not enough content" is what makes this tempting to raise. A
+/// region with no structure in it is not a failure: it reports no movement, the mark stays
+/// where it is, and a plain background is exactly the kind of thing that does not visibly
+/// move. Widening buys correlation the mark did not need, at the price of measuring a
+/// window it is not in.
+///
+/// It also bounds how far a scroll can jump and still be followed, since the search only
+/// reaches half the region. A flick that throws the page further than that reads as
+/// unexplainable and the mark goes, which is the right answer to content that is no longer
+/// anywhere near where it was.
+const CONTEXT: f64 = 120.0;
+
+/// The patch of screen a mark's movement is measured against.
+///
+/// The mark's own ink is inside it and is left there rather than masked out. The overlay
+/// is in the frame, so between two ticks the mark has not moved and votes for an offset of
+/// zero against content that may have scrolled. Masking it would leave holes in the profile
+/// that vote for zero exactly as loudly, so it is cheaper to let the surrounding content
+/// outvote it and let the residual carry the disagreement.
+fn neighbourhood(anchor: LogicalRect, display: [f64; 2]) -> LogicalRect {
+    // A fixed margin, not one that grows with the mark. Scaling it by the anchor was the
+    // obvious way to keep the mark a small share of what is being correlated, and it
+    // quietly undid the whole change: a highlight six hundred points wide got a margin of
+    // six hundred, which on a laptop display is the entire screen and therefore the same
+    // display-wide answer this replaced.
+    //
+    // Letting a large mark occupy most of its own region is the better trade. A highlight
+    // is an outline, so the content inside it is visible and is precisely the content the
+    // mark is about. Only a text box is opaque over its own anchor, and it is the one kind
+    // that has no target underneath to keep up with.
+    let left = (anchor.x - CONTEXT).max(0.0);
+    let top = (anchor.y - CONTEXT).max(0.0);
+    let right = (anchor.x + anchor.width + CONTEXT).min(display[0]);
+    let bottom = (anchor.y + anchor.height + CONTEXT).min(display[1]);
+
+    LogicalRect::new(left, top, (right - left).max(1.0), (bottom - top).max(1.0))
+}
 
 /// Shared daemon state and the platform seams it drives.
 pub struct Daemon {
@@ -259,6 +303,106 @@ impl Daemon {
             .collect()
     }
 
+    /// Drop marks whose display went away or moved out from under them.
+    ///
+    /// Displays are not fixed. A monitor is unplugged, a laptop lid closes, a resolution
+    /// changes, and the arrangement a mark was placed against is no longer the one on the
+    /// desk. Two things follow from that, and neither used to be handled:
+    ///
+    /// A mark on a display that is gone cannot be seen, cannot be cleared from the menu
+    /// bar because there is no panel to clear it from, and is never invalidated on its
+    /// own. It sits in the daemon's state for the life of the session, keeping the scroll
+    /// watcher asking a backend for a display that does not exist.
+    ///
+    /// A mark on a display that shrank may now be outside it, which is the same failure a
+    /// scroll causes and gets the same answer.
+    ///
+    /// `display_change` has been on the wire since 0.1 with nothing emitting it. This is
+    /// what emits it.
+    pub fn reconcile_displays(&self) -> Vec<Invalidated> {
+        let Ok(present) = self.displays() else {
+            // No idea what is connected. Guessing here would either drop every mark on
+            // screen or none, and doing nothing is the recoverable half of that.
+            tracing::warn!("could not enumerate displays, leaving marks alone");
+            return Vec::new();
+        };
+
+        let mut state = self.state.lock().expect("state lock");
+        let doomed: Vec<(AnnotationId, SessionId)> = state
+            .annotations
+            .iter()
+            .filter(|(_, annotation)| {
+                match present.iter().find(|d| d.id == annotation.display_id()) {
+                    None => true,
+                    Some(display) => !annotation.is_on_screen(display.logical_size),
+                }
+            })
+            .map(|(id, annotation)| (id.clone(), annotation.session.clone()))
+            .collect();
+        for (id, _) in &doomed {
+            state.annotations.remove(id);
+        }
+        drop(state);
+
+        if doomed.is_empty() {
+            return Vec::new();
+        }
+        self.mark_drawn();
+
+        for (id, _) in &doomed {
+            // A clear for a display that is gone is expected to fail, so this is quieter
+            // than the other clear paths.
+            if let Err(e) = self.renderer.clear(id) {
+                tracing::debug!(%id, error = %e, "clearing a mark from a display that changed");
+            }
+        }
+        self.announce(doomed.clone(), &InvalidationReason::DisplayChange);
+        tracing::info!(
+            count = doomed.len(),
+            "displays changed, dropped marks that went with them"
+        );
+
+        doomed
+            .into_iter()
+            .map(|(id, _)| Invalidated::one(id, InvalidationReason::DisplayChange))
+            .collect()
+    }
+
+    /// Draw every surviving mark again.
+    ///
+    /// For after something outside the daemon threw away what was on screen. A platform
+    /// renderer rebuilding its overlay for a display that changed cannot repopulate it,
+    /// because the annotations live here and it has never been told what they are.
+    ///
+    /// Not a general refresh. Call it when the screen has been emptied behind the daemon's
+    /// back, and reconcile first so nothing is redrawn onto a display that is gone.
+    pub fn redraw_all(&self) -> usize {
+        let annotations: Vec<Annotation> = self
+            .state
+            .lock()
+            .expect("state lock")
+            .annotations
+            .values()
+            .cloned()
+            .collect();
+
+        if annotations.is_empty() {
+            return 0;
+        }
+        self.mark_drawn();
+
+        let mut drawn = 0;
+        for annotation in &annotations {
+            match self.renderer.draw(annotation) {
+                Ok(()) => drawn += 1,
+                Err(e) => {
+                    tracing::warn!(id = %annotation.id, error = %e, "renderer refused a redraw")
+                }
+            }
+        }
+        drawn
+    }
+
     /// Remove every annotation, whoever owns it.
     ///
     /// This is the user's escape hatch rather than a client operation. A session can
@@ -404,77 +548,136 @@ impl Daemon {
     /// `frame` is the capture the movement was detected from. Without it, and without a
     /// fingerprint recorded when the mark was made, a mark is followed on the display-wide
     /// estimate alone.
-    pub fn follow_scroll(
-        &self,
-        display: DisplayId,
-        shift: Shift,
-        frame: Option<&Frame>,
-    ) -> Followed {
+    /// The patches of screen that would be correlated for the marks on a display.
+    ///
+    /// For recording alongside a capture pair, so a scorer tried against that pair offline
+    /// is looking at the same regions the daemon was.
+    pub fn measured_regions(&self, display: DisplayId) -> Vec<LogicalRect> {
         let Ok(info) = self.display(display) else {
-            // The display went away between the capture and here. Nothing to follow it on.
-            return Followed {
-                moved: Vec::new(),
-                invalidated: self.invalidate_display(display, InvalidationReason::Scroll),
-            };
+            return Vec::new();
+        };
+        let state = self.state.lock().expect("state lock");
+        state
+            .annotations
+            .values()
+            .filter(|a| a.display_id() == display)
+            .map(|a| neighbourhood(a.anchor.screen_rect, info.logical_size))
+            .collect()
+    }
+
+    /// Follow whatever moved under each mark on a display, one mark at a time.
+    ///
+    /// The display-wide version of this was wrong, and wrong in a way only a real screen
+    /// showed. A scroll happens inside a window. Correlated across the whole display the
+    /// answer comes back as *nothing moved*, because the menu bar, the dock, the desktop
+    /// and every other window did not, and they outvote the one region that did. Measured
+    /// while scrolling a text window: best offset zero, residual 4.6, with a fifth of the
+    /// screen's samples changed. Both answers were true at once, and the display-wide one
+    /// was no use to a mark sitting inside the window.
+    ///
+    /// So each mark is measured against its own surroundings. A mark in the scrolling pane
+    /// sees the scroll. A mark on a toolbar beside it sees nothing and stays put, which is
+    /// correct rather than a special case, and is what the display-wide code needed the
+    /// fingerprint to patch up after the fact.
+    pub fn follow_movement(&self, display: DisplayId, before: &Frame, after: &Frame) -> Followed {
+        let Ok(info) = self.display(display) else {
+            return Followed::default();
         };
 
-        // A movement too small to see is not worth redrawing for, but it is still worth
-        // checking: content can change in place without going anywhere.
-        let moving = !shift.is_negligible();
+        let watched: Vec<Annotation> = {
+            let state = self.state.lock().expect("state lock");
+            state
+                .annotations
+                .values()
+                .filter(|a| a.display_id() == display)
+                .cloned()
+                .collect()
+        };
 
-        let mut state = self.state.lock().expect("state lock");
-        let mut moved = Vec::new();
+        let mut moving: Vec<Annotation> = Vec::new();
         let mut doomed: Vec<(AnnotationId, SessionId)> = Vec::new();
-        for (id, annotation) in state.annotations.iter_mut() {
-            if annotation.display_id() != display {
+        for annotation in watched {
+            let around = neighbourhood(annotation.anchor.screen_rect, info.logical_size);
+            tracing::debug!(id = %annotation.id, ?around, "measuring what moved under a mark");
+            let Some(shift) = crate::signature::shift_within(before, after, around) else {
+                // Something changed here that no movement explains, so there is nowhere
+                // honest to put this mark. The rest of the display is unaffected.
+                doomed.push((annotation.id.clone(), annotation.session.clone()));
+                continue;
+            };
+            let mut candidate = annotation.clone();
+            candidate.translate(shift);
+
+            let on_screen = candidate.is_on_screen(info.logical_size);
+            let recognised = match candidate.fingerprint() {
+                Some(recorded) => Fingerprint::of(after, candidate.anchor.screen_rect)
+                    .is_none_or(|now| recorded.matches(&now)),
+                None => true,
+            };
+
+            // Checked even when the measurement says nothing moved, which it did not use
+            // to be. A region split between a still part and a scrolling one has two
+            // explanations and settles on "no movement", so the mark that most needs
+            // catching is precisely the one that reported a zero and skipped the check.
+            // A mark sitting on content that is no longer its content has to go whether
+            // or not anyone managed to measure where that content went.
+            if !recognised {
+                tracing::debug!(
+                    id = %annotation.id,
+                    dx = shift.dx,
+                    dy = shift.dy,
+                    "the content under a mark is not the content it was put on"
+                );
+                doomed.push((annotation.id.clone(), annotation.session.clone()));
+                continue;
+            }
+            if shift.is_negligible() {
                 continue;
             }
 
-            let mut candidate = annotation.clone();
-            if moving {
-                candidate.translate(shift);
-            }
-
-            let followed = candidate.is_on_screen(info.logical_size)
-                && match (candidate.fingerprint(), frame) {
-                    (Some(recorded), Some(frame)) => {
-                        Fingerprint::of(frame, candidate.anchor.screen_rect)
-                            .is_none_or(|now| recorded.matches(&now))
-                    }
-                    // Nothing to check against. The display-wide estimate is all there is.
-                    _ => true,
-                };
-
-            if followed {
-                if moving {
-                    *annotation = candidate;
-                    moved.push(id.clone());
-                }
+            if on_screen {
+                tracing::debug!(
+                    id = %annotation.id,
+                    dx = shift.dx,
+                    dy = shift.dy,
+                    "following a mark"
+                );
+                moving.push(candidate);
             } else {
-                doomed.push((id.clone(), annotation.session.clone()));
+                tracing::debug!(
+                    id = %annotation.id,
+                    dx = shift.dx,
+                    dy = shift.dy,
+                    on_screen,
+                    recognised,
+                    "measured a movement but could not follow it"
+                );
+                doomed.push((annotation.id.clone(), annotation.session.clone()));
             }
         }
-        for (id, _) in &doomed {
-            state.annotations.remove(id);
-        }
-        drop(state);
 
-        if moved.is_empty() && doomed.is_empty() {
+        if moving.is_empty() && doomed.is_empty() {
             return Followed::default();
+        }
+
+        {
+            let mut state = self.state.lock().expect("state lock");
+            for annotation in &moving {
+                // Only if it is still there. A clear or an expiry may have got here first.
+                if let Some(slot) = state.annotations.get_mut(&annotation.id) {
+                    *slot = annotation.clone();
+                }
+            }
+            for (id, _) in &doomed {
+                state.annotations.remove(id);
+            }
         }
         self.mark_drawn();
 
         // Redrawing in place rather than clearing first: a clear would fade the orb out
         // and fly it back in, which reads as the mark leaving and a new one arriving
         // rather than as one mark keeping up with the page.
-        let drawn: Vec<Annotation> = {
-            let state = self.state.lock().expect("state lock");
-            moved
-                .iter()
-                .filter_map(|id| state.annotations.get(id).cloned())
-                .collect()
-        };
-        for annotation in &drawn {
+        for annotation in &moving {
             if let Err(e) = self.renderer.draw(annotation) {
                 tracing::warn!(id = %annotation.id, error = %e, "renderer refused a redraw");
             }
@@ -487,7 +690,7 @@ impl Daemon {
         self.announce(doomed.clone(), &InvalidationReason::Scroll);
 
         Followed {
-            moved,
+            moved: moving.into_iter().map(|a| a.id).collect(),
             invalidated: doomed
                 .into_iter()
                 .map(|(id, _)| Invalidated::one(id, InvalidationReason::Scroll))

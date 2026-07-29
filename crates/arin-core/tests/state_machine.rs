@@ -5,7 +5,7 @@
 
 use arin_core::{
     Annotation, Capture, Config, Connection, Daemon, Error, Frame, OrbState, Renderer, Rendering,
-    Resolution, Resolver, Result, Rgb, ScrollWatcher, Shift,
+    Resolution, Resolver, Result, Rgb, ScrollWatcher,
 };
 use arin_protocol::*;
 use futures::future::BoxFuture;
@@ -21,6 +21,9 @@ struct FakeRenderer {
     states: Mutex<Vec<OrbState>>,
     /// The colour each annotation arrived with, in draw order.
     colors: Mutex<Vec<Rgb>>,
+    /// Where each annotation was when it was last drawn, which is how a test sees a mark
+    /// move without reaching inside the daemon's state.
+    anchors: Mutex<std::collections::HashMap<AnnotationId, LogicalRect>>,
 }
 
 impl Renderer for FakeRenderer {
@@ -35,6 +38,10 @@ impl Renderer for FakeRenderer {
     fn draw(&self, annotation: &Annotation) -> Result<()> {
         self.drawn.lock().unwrap().push(annotation.id.clone());
         self.colors.lock().unwrap().push(annotation.color);
+        self.anchors
+            .lock()
+            .unwrap()
+            .insert(annotation.id.clone(), annotation.anchor.screen_rect);
         Ok(())
     }
 
@@ -1073,49 +1080,57 @@ async fn a_scroll_carries_a_mark_with_it() {
     );
 }
 
-/// The check that stops a display-wide answer from being applied where it is wrong. A
-/// mark over a band that did not move is dragged off its target by any shift at all, and
-/// its own fingerprint is the only thing that knows.
+/// The case the display-wide measurement got wrong, and the reason it was replaced.
+///
+/// One mark sits on a band that never moves, as a toolbar does, and another sits in the
+/// part of the page that scrolls. Measured across the whole display there is one answer
+/// for both, and it is wrong for one of them whichever way it comes out. Measured around
+/// each mark there are two answers, and both are right.
 #[tokio::test]
-async fn a_mark_over_content_that_did_not_move_is_dropped() {
-    let page = Arc::new(PageCapture::with_frozen_band(200.0));
-    let (daemon, _) = daemon_on(page.clone());
+async fn a_mark_on_a_band_that_did_not_move_stays_where_it_is() {
+    let page = Arc::new(PageCapture::with_frozen_band(300.0));
+    let (daemon, renderer) = daemon_on(page.clone());
     let mut conn = started(daemon.clone()).await;
 
-    // One in the frozen band at the top, one in the part of the page that scrolls.
-    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
-        LogicalRect::new(200.0, 40.0, 340.0, 90.0),
-        DISPLAY,
-    ))))
-    .await
-    .unwrap();
-    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
-        LogicalRect::new(200.0, 600.0, 340.0, 90.0),
-        DISPLAY,
-    ))))
-    .await
-    .unwrap();
+    // In the frozen band at the top.
+    let toolbar = drew(
+        &mut conn,
+        Highlight::over(LogicalRect::new(600.0, 60.0, 340.0, 90.0), DISPLAY),
+    )
+    .await;
+    // Well inside the part of the page that scrolls.
+    let content = drew(
+        &mut conn,
+        Highlight::over(LogicalRect::new(600.0, 700.0, 340.0, 90.0), DISPLAY),
+    )
+    .await;
 
+    let before = daemon.capture_backend().capture(DISPLAY).unwrap();
     page.scroll_to(-80.0);
-    let frame = daemon.capture_backend().capture(DISPLAY).unwrap();
-    let followed = daemon.follow_scroll(DISPLAY, Shift { dx: 0.0, dy: -80.0 }, Some(&frame));
+    let after = daemon.capture_backend().capture(DISPLAY).unwrap();
+
+    let followed = daemon.follow_movement(DISPLAY, &before, &after);
 
     assert_eq!(
-        followed.moved.len(),
-        1,
-        "the mark on the part that scrolled should have followed it"
+        followed.moved,
+        vec![content.clone()],
+        "only the mark in the scrolling part should have moved"
     );
+    assert!(
+        followed.invalidated.is_empty(),
+        "nothing had to be thrown away, which is the whole improvement"
+    );
+    assert_eq!(daemon.annotation_count(), 2);
     assert_eq!(
-        followed.invalidated.len(),
-        1,
-        "the mark on the part that did not should have gone"
+        anchor_of(&renderer, &toolbar).y,
+        60.0,
+        "the mark over content that did not move must not have moved"
     );
-    assert_eq!(
-        followed.invalidated[0].reason,
-        InvalidationReason::Scroll,
-        "a mark dropped because it could not follow a scroll says so"
+    let moved_to = anchor_of(&renderer, &content).y;
+    assert!(
+        (moved_to - 620.0).abs() <= 12.0,
+        "expected the content mark to follow the page up to about 620, got {moved_to}"
     );
-    assert_eq!(daemon.annotation_count(), 1);
 }
 
 #[tokio::test]
@@ -1131,15 +1146,10 @@ async fn a_mark_carried_off_the_display_is_dropped() {
     .await
     .unwrap();
 
-    let frame = daemon.capture_backend().capture(DISPLAY).unwrap();
-    let followed = daemon.follow_scroll(
-        DISPLAY,
-        Shift {
-            dx: 0.0,
-            dy: -400.0,
-        },
-        Some(&frame),
-    );
+    let before = daemon.capture_backend().capture(DISPLAY).unwrap();
+    page.scroll_to(-400.0);
+    let after = daemon.capture_backend().capture(DISPLAY).unwrap();
+    let followed = daemon.follow_movement(DISPLAY, &before, &after);
 
     assert!(followed.moved.is_empty());
     assert_eq!(followed.invalidated.len(), 1);
@@ -1194,15 +1204,16 @@ async fn a_positioned_mark_records_what_it_was_drawn_over() {
     assert_eq!(daemon.annotation_count(), 1);
     // Nothing else can see inside the store, so the check is that following a scroll with
     // a frame that disagrees drops the mark. A mark with no fingerprint would survive.
+    let before = daemon.capture_backend().capture(DISPLAY).unwrap();
     let elsewhere = PageCapture::new();
     elsewhere.replace_page();
-    let frame = elsewhere.capture(DISPLAY).unwrap();
-    let followed = daemon.follow_scroll(DISPLAY, Shift { dx: 0.0, dy: -40.0 }, Some(&frame));
+    let after = elsewhere.capture(DISPLAY).unwrap();
+    let followed = daemon.follow_movement(DISPLAY, &before, &after);
 
     assert_eq!(
         followed.invalidated.len(),
         1,
-        "a recorded fingerprint must be compared against, not ignored"
+        "content replaced outright leaves nowhere honest to put the mark"
     );
 }
 
@@ -1228,12 +1239,17 @@ async fn without_a_capture_marks_are_followed_unverified() {
     .await
     .unwrap();
 
-    let elsewhere = PageCapture::new();
-    elsewhere.replace_page();
-    let frame = elsewhere.capture(DISPLAY).unwrap();
-    let followed = daemon.follow_scroll(DISPLAY, Shift { dx: 0.0, dy: -40.0 }, Some(&frame));
+    let page = PageCapture::new();
+    let before = page.capture(DISPLAY).unwrap();
+    page.scroll_to(-60.0);
+    let after = page.capture(DISPLAY).unwrap();
+    let followed = daemon.follow_movement(DISPLAY, &before, &after);
 
-    assert_eq!(followed.moved.len(), 1);
+    assert_eq!(
+        followed.moved.len(),
+        1,
+        "with nothing recorded to check against, the measurement is all there is"
+    );
     assert!(followed.invalidated.is_empty());
 }
 
@@ -1277,4 +1293,27 @@ async fn a_client_that_stops_reading_loses_the_oldest_and_is_told() {
         listener.try_recv().is_ok(),
         "a lagged receiver keeps receiving from wherever it caught up to"
     );
+}
+
+/// Send a drawing message and hand back the id it was given.
+async fn drew(conn: &mut Connection, highlight: Highlight) -> AnnotationId {
+    let reply = conn
+        .handle(wrap(ClientMessage::Highlight(highlight)))
+        .await
+        .expect("the mark is accepted");
+    let DaemonMessage::Ack(ack) = reply else {
+        panic!("expected an ack, got {reply:?}");
+    };
+    ack.annotation_id.expect("a drawing ack carries an id")
+}
+
+/// Where a mark's anchor sat the last time it was drawn.
+fn anchor_of(renderer: &FakeRenderer, id: &AnnotationId) -> LogicalRect {
+    renderer
+        .anchors
+        .lock()
+        .unwrap()
+        .get(id)
+        .copied()
+        .expect("the mark has been drawn at least once")
 }

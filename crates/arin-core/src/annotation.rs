@@ -279,7 +279,7 @@ mod tests {
         );
         assert_eq!(annotation.fingerprint(), None);
 
-        let recorded = Fingerprint::parse(&"7f".repeat(16)).expect("a well formed fingerprint");
+        let recorded = Fingerprint::parse(&"7f".repeat(36)).expect("a well formed fingerprint");
         let annotation = annotation.with_fingerprint(Some(recorded.clone()));
         assert_eq!(annotation.fingerprint(), Some(recorded));
         assert!(annotation.anchor.content_hash.is_some());

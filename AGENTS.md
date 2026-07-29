@@ -191,6 +191,7 @@ Do not relitigate these without asking.
 | Grounding | CUA class models only. Raw coordinates from the client in 0.1. Resolver plugin registry from 0.3. |
 | Grounding shape | Ask a vision model where something is and constrain the answer to a schema, rather than handing it the computer use tool and reading the coordinate out of a click it wants to make. A tool call carries no confidence, and Arin does not actuate, so a request shaped like "click this" asks for something that will never happen. |
 | Resolver consent | Off unless named. An API key in the environment is not consent, so no adapter is selected by inference, and a daemon told to use a remote one says so at startup. Provisional until the security model is settled. |
+| Displays changing | Panels are rebuilt on the platform's own screen change notification, and the daemon reconciles against the new arrangement: marks on a display that went, or now outside one that shrank, are dropped with `display_change`, and what survives is redrawn. A renderer cannot repopulate an overlay it just rebuilt, because the annotations live in core and it has never been told what they are. |
 | Who captures | The daemon, never the adapter. A resolver declares how much detail it needs through `Resolver::detail` and is handed a frame, so an adapter never touches the screen and a fake one in a test never has to. |
 | Textboxes | Display only through all of 0.x. No input widgets. |
 | Sequencing | Brain side. The daemon has no concept of step 2 of 7. |

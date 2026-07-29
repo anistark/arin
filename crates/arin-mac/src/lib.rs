@@ -44,7 +44,7 @@ mod permission;
 
 pub use capture::MacCapture;
 pub use display::Screen;
-pub use host::{MacRenderer, known_screens};
+pub use host::{MacRenderer, known_screens, on_displays_changed};
 pub use menubar::{MenuBar, on_clear, on_quit, on_status};
 pub use orb::MINIMUM_FEATURED_SIZE;
 pub use permission::{
