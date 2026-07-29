@@ -26,8 +26,15 @@ protocol freeze, after which protocol changes are additive only.
   the only two crates in the workspace that are. It carries no binary: Arin is an
   application and is not distributed through Cargo, so `cargo install arin` reports that
   there is nothing to install, and the crate README points at the real install instead.
+- `arin-mcp`: the MCP server, as a library rather than a second binary. `arin mcp` serves
+  it on stdio, so an agent is pointed at Arin with one executable and one version:
+
+  ```sh
+  claude mcp add arin -- arin mcp
+  ```
+
 - `arin-resolve`: the resolver registry. No adapters yet, those land in 0.3.
-- `arin-linux`, `arin-win`, `arin-mcp`: crate scaffolds carrying their documented scope.
+- `arin-linux`, `arin-win`: crate scaffolds carrying their documented scope.
 - CI covering the two invariants the architecture rests on: core and the protocol build
   and test on Linux with no platform crate in the tree, and no input synthesis API is
   referenced anywhere in the source.

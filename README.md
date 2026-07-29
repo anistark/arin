@@ -38,7 +38,6 @@ Needs a [Rust toolchain](https://rustup.rs). macOS 14.2 or newer.
 ```
 git clone https://github.com/anistark/arin && cd arin
 cargo install --path crates/arin-cli
-cargo install --path crates/arin-mcp
 ```
 
 Then start the daemon. It asks for Screen Recording on first run, which it needs to
@@ -53,7 +52,7 @@ arin daemon
 Add it to your MCP client. For Claude Code that is one line:
 
 ```
-claude mcp add arin -- arin-mcp
+claude mcp add arin -- arin mcp
 ```
 
 Or, in any client that takes the standard JSON:
@@ -61,7 +60,7 @@ Or, in any client that takes the standard JSON:
 ```json
 {
   "mcpServers": {
-    "arin": { "command": "arin-mcp" }
+    "arin": { "command": "arin", "args": ["mcp"] }
   }
 }
 ```

@@ -96,6 +96,7 @@ dependencies = [
  "anyhow",
  "arin-core",
  "arin-mac",
+ "arin-mcp",
  "arin-protocol",
  "arin-resolve",
  "clap",

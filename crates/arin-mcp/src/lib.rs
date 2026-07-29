@@ -456,6 +456,48 @@ fn refused(reply: DaemonMessage) -> ErrorData {
     }
 }
 
+/// Run the MCP server on stdio until the client closes it.
+///
+/// This is the whole of what the `arin mcp` subcommand does. It lives here rather than in
+/// the CLI so that the MCP wiring stays in the MCP crate, and it takes a socket path
+/// rather than finding one itself so that `--socket` reaches it like every other command.
+///
+/// The caller owns logging, and owes this one thing: nothing may be written to stdout.
+/// Stdout is the MCP transport, and a stray line on it corrupts the stream.
+pub async fn serve(socket: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use rmcp::ServiceExt as _;
+
+    // Fail here rather than at the first tool call: a client that cannot reach the daemon
+    // should find out while it is still starting up.
+    let mut client = arin_core::Client::connect_to(socket)
+        .await
+        .with_context(|| {
+            format!(
+                "could not reach the arin daemon on {}; is `arin daemon` running?",
+                socket.display()
+            )
+        })?;
+
+    let session = client
+        .start_session(CLIENT_NAME)
+        .await
+        .context("daemon refused the session")?;
+
+    tracing::info!(%session, tools = ?tools::ALL, "connected to the daemon");
+
+    // Runs until the client closes stdin, which is how an MCP client says it is done.
+    // Ending here drops the session, and the daemon clears whatever it drew shortly
+    // after, so a client going away does not leave marks on the user's screen.
+    let service = Arin::new(client)
+        .serve(rmcp::transport::stdio())
+        .await
+        .context("could not start the MCP server on stdio")?;
+
+    service.waiting().await.context("the MCP server stopped")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

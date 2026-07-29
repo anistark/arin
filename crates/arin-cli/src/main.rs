@@ -52,6 +52,17 @@ enum Command {
         resolver: Option<String>,
     },
 
+    /// Serve MCP on stdio, for an agent to launch as a subprocess.
+    ///
+    /// Not something to run by hand. An MCP client starts it, speaks MCP on stdin and
+    /// stdout, and closes stdin when it is done. Point a client at it with
+    /// `claude mcp add arin -- arin mcp`.
+    ///
+    /// This was a separate `arin-mcp` binary. One binary means one path in an agent's
+    /// config and one version to keep straight, which matters because that config is
+    /// written once and then outlives several updates.
+    Mcp,
+
     /// List the resolvers this build can ground queries with.
     Resolvers,
 
@@ -235,6 +246,9 @@ fn main() -> Result<()> {
             start_daemon(config, headless)
         }
         Command::Resolvers => list_resolvers(),
+        // Its own session, its own transport, and stdout it must not share. Logging is
+        // already on stderr above, which is what makes that safe.
+        Command::Mcp => block_on(arin_mcp::serve(&config.socket_path)),
         #[cfg(target_os = "macos")]
         Command::Displays => list_displays(),
         #[cfg(target_os = "macos")]
@@ -857,7 +871,7 @@ async fn run_client(config: Config, command: Command) -> Result<()> {
         Command::Displays | Command::Capture { .. } | Command::Permissions { .. } => {
             unreachable!("handled above")
         }
-        Command::Daemon { .. } | Command::Resolvers | Command::Status => {
+        Command::Daemon { .. } | Command::Resolvers | Command::Status | Command::Mcp => {
             unreachable!("handled above")
         }
     };

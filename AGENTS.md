@@ -62,9 +62,9 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
 | `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | done for 0.1 |
 | `arin-linux` | Renderer via wgpu on wlr layer shell. Capture via xdg desktop portal. 0.4. | Linux | empty |
 | `arin-win` | Layered window renderer, DXGI capture. 0.6. | Windows | empty |
-| `arin-mcp` | MCP server binary. Translates MCP tool calls into socket messages. 0.2. | no | four tools over stdio |
+| `arin-mcp` | MCP server. Translates MCP tool calls into socket messages. A library, served by `arin mcp`. 0.2. | no | four tools over stdio |
 | `arin` | Facade library published to crates.io. Re-exports `arin-protocol` under the plain name. | no | published |
-| `arin-cli` | `arin` binary: daemon control, debug commands, scripting client. | no | working |
+| `arin-cli` | The `arin` binary, the only one in the workspace: daemon control, MCP, debug commands, scripting client. | no | working |
 
 The `Renderer`, `Capture`, and `Resolver` traits all live in `arin-core`, matching the diagram. `arin-resolve` holds the registry and the adapters that implement `Resolver`, not the trait itself.
 
@@ -201,6 +201,7 @@ Do not relitigate these without asking.
 | Publishing | Two crates on crates.io and no more: `arin-protocol`, the wire format, and `arin`, a facade re-exporting it so the plain name is taken and means something. Everything else carries `publish = false` permanently rather than provisionally. Publishing `arin-core` and the platform crates would put a semver obligation on the daemon's internals, in exchange for a shorter command than `cargo install --git` already provides. Revisit only with evidence that someone wants it. |
 | Distribution | Nothing ships to a user before 0.5. Source only until then: `cargo install --path crates/arin-cli`, or `cargo install --git`. From 0.5 the GitHub releases, the signed and notarized dmg, the brew tap and the distro packages land together, with Sparkle carrying updates on macOS. |
 | `cargo install arin` | Does not work, on purpose. `arin` is a library, so Cargo answers that there is nothing to install. That error is the first thing anyone guessing the command will see, so the crate README leads with `brew install --cask arin` and says outright that the application is not distributed through Cargo. Building from source is `cargo install --git https://github.com/anistark/arin arin-cli`. |
+| One binary | `arin` and nothing else. MCP is `arin mcp` rather than a second executable, because an agent's MCP config is written once and outlives several updates: two binaries means two paths to keep on `PATH` and two versions to keep in step, and a stale one fails in ways that look like Arin being broken. Crates stay split as they are. It is the shipped executables that are collapsed, not the code. |
 | Running the daemon | `arin -d` starts it, `arin daemon` is the long spelling, and both run in the foreground. Backgrounding is the shell's job or launchd's, not a hand rolled daemonizer: Screen Recording permission is bound to binary identity and a forked child is a good way to lose it quietly. Starting at login is a launchd agent. `-d` is a top level flag and never a modifier on `point` or `highlight`, which connect, send, and exit. |
 | Launching from the GUI | An app bundle with `LSUIElement` set, wrapping the same binary with the daemon flag. Menu bar only, no Dock icon. This is also what makes the permission grant stick, which is why it lands with signing rather than before it. |
 

@@ -27,6 +27,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 arin-core.workspace = true
+arin-mcp.workspace = true
 arin-protocol.workspace = true
 arin-resolve.workspace = true
 clap.workspace = true

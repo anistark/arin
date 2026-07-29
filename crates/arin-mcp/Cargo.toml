@@ -16,10 +16,6 @@ categories.workspace = true
 # actually packaged. See the distribution row in `AGENTS.md`.
 publish = false
 
-[[bin]]
-name = "arin-mcp"
-path = "src/main.rs"
-
 [dependencies]
 anyhow.workspace = true
 arin-core.workspace = true
