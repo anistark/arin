@@ -19,21 +19,44 @@ pub struct Screen {
 }
 
 impl Screen {
-    /// Convert a logical point on this display into AppKit's global space.
+    /// Convert a point in this panel's layer space into AppKit's global space.
     ///
-    /// The protocol measures from the top left of the display and grows downward, which
-    /// is what a screenshot looks like. AppKit measures from the bottom left of the
-    /// primary display and grows upward. Everything above this function is in protocol
-    /// coordinates and everything below it is in AppKit's.
+    /// A panel's root layer is left in AppKit's orientation, y growing upward, with its
+    /// origin at the bottom left of its own display. So this differs from global space by
+    /// the display's origin and nothing else.
     ///
-    /// Within a single panel this is not needed, because the root layer is flipped and
-    /// protocol coordinates land directly. It is for the cases that cross displays, such
-    /// as flying the orb from one screen to another.
-    pub fn to_global(&self, x: f64, y: f64) -> NSPoint {
-        NSPoint::new(
-            self.frame.origin.x + x,
-            self.frame.origin.y + self.frame.size.height - y,
-        )
+    /// The protocol's own inversion, y growing downward from the top left, is applied in
+    /// `host` on the way in and is already gone by the time anything reaches here.
+    ///
+    /// Needed because the orb's flight is computed once across the whole desktop and then
+    /// drawn in segments, one per panel it crosses. A panel cannot draw outside its own
+    /// window, so the arc has to be cut at the screen boundary and each piece expressed in
+    /// the coordinates of the panel that draws it.
+    pub fn layer_to_global(&self, point: NSPoint) -> NSPoint {
+        NSPoint::new(self.frame.origin.x + point.x, self.frame.origin.y + point.y)
+    }
+
+    /// Convert a point in AppKit's global space into this panel's layer space.
+    ///
+    /// The inverse of [`Screen::layer_to_global`], and deliberately not clamped: a sample
+    /// on the flight path that has left this display converts to coordinates outside it,
+    /// which is what makes it possible to ask where the arc crossed.
+    pub fn global_to_layer(&self, point: NSPoint) -> NSPoint {
+        NSPoint::new(point.x - self.frame.origin.x, point.y - self.frame.origin.y)
+    }
+
+    /// Whether a point in AppKit's global space falls on this display.
+    ///
+    /// Half open, so a point on the shared edge of two abutting displays belongs to
+    /// exactly one of them. Without that a flight crossing the boundary would find two
+    /// answers at the crossing and stitch a zero length segment between them.
+    pub fn contains(&self, point: NSPoint) -> bool {
+        let origin = self.frame.origin;
+        let size = self.frame.size;
+        point.x >= origin.x
+            && point.x < origin.x + size.width
+            && point.y >= origin.y
+            && point.y < origin.y + size.height
     }
 }
 
@@ -85,33 +108,76 @@ mod tests {
     }
 
     #[test]
-    fn the_protocol_origin_is_the_top_left() {
+    fn the_primary_display_needs_no_translation() {
+        // AppKit's origin is the primary's bottom left, and so is its panel's.
         let s = screen(0.0, 0.0, 1512.0, 982.0);
-        // Protocol (0, 0) is the top left, which in AppKit is the full height up.
-        assert_eq!(s.to_global(0.0, 0.0), NSPoint::new(0.0, 982.0));
-        // Protocol y grows downward, so the bottom edge is AppKit's zero.
-        assert_eq!(s.to_global(0.0, 982.0), NSPoint::new(0.0, 0.0));
-    }
-
-    #[test]
-    fn x_is_unchanged_and_y_is_inverted() {
-        let s = screen(0.0, 0.0, 1512.0, 982.0);
-        assert_eq!(s.to_global(756.0, 200.0), NSPoint::new(756.0, 782.0));
+        assert_eq!(
+            s.layer_to_global(NSPoint::new(756.0, 200.0)),
+            NSPoint::new(756.0, 200.0)
+        );
     }
 
     #[test]
     fn a_secondary_display_is_offset_by_its_origin() {
         // A second screen to the right of the primary.
         let s = screen(1512.0, 0.0, 1000.0, 800.0);
-        assert_eq!(s.to_global(0.0, 0.0), NSPoint::new(1512.0, 800.0));
-        assert_eq!(s.to_global(100.0, 800.0), NSPoint::new(1612.0, 0.0));
+        assert_eq!(
+            s.layer_to_global(NSPoint::new(0.0, 0.0)),
+            NSPoint::new(1512.0, 0.0)
+        );
+        assert_eq!(
+            s.layer_to_global(NSPoint::new(100.0, 800.0)),
+            NSPoint::new(1612.0, 800.0)
+        );
     }
 
     #[test]
     fn a_display_below_the_primary_has_a_negative_origin() {
         // AppKit puts screens below the primary at negative y.
         let s = screen(0.0, -800.0, 1000.0, 800.0);
-        assert_eq!(s.to_global(0.0, 0.0), NSPoint::new(0.0, 0.0));
-        assert_eq!(s.to_global(0.0, 800.0), NSPoint::new(0.0, -800.0));
+        assert_eq!(
+            s.layer_to_global(NSPoint::new(0.0, 0.0)),
+            NSPoint::new(0.0, -800.0)
+        );
+        assert_eq!(
+            s.global_to_layer(NSPoint::new(0.0, 0.0)),
+            NSPoint::new(0.0, 800.0)
+        );
+    }
+
+    #[test]
+    fn layer_and_global_round_trip_on_every_arrangement() {
+        for s in [
+            screen(0.0, 0.0, 1512.0, 982.0),
+            screen(1512.0, 0.0, 1920.0, 1080.0),
+            screen(0.0, -800.0, 1000.0, 800.0),
+            screen(-1920.0, 240.0, 1920.0, 1080.0),
+        ] {
+            for (x, y) in [(0.0, 0.0), (10.0, 700.0), (411.0, 88.0)] {
+                let start = NSPoint::new(x, y);
+                let there_and_back = s.global_to_layer(s.layer_to_global(start));
+                assert_eq!(there_and_back, start, "{:?}", s.frame);
+            }
+        }
+    }
+
+    #[test]
+    fn a_display_holds_its_own_origin_and_not_the_far_edges() {
+        let s = screen(1512.0, 0.0, 1920.0, 1080.0);
+        assert!(s.contains(NSPoint::new(1512.0, 0.0)));
+        assert!(s.contains(NSPoint::new(3431.0, 1079.0)));
+        // Half open: the far edges belong to whatever display starts there.
+        assert!(!s.contains(NSPoint::new(3432.0, 500.0)));
+        assert!(!s.contains(NSPoint::new(2000.0, 1080.0)));
+        assert!(!s.contains(NSPoint::new(1511.0, 500.0)));
+    }
+
+    #[test]
+    fn abutting_displays_do_not_both_claim_the_shared_edge() {
+        let left = screen(0.0, 0.0, 1512.0, 982.0);
+        let right = screen(1512.0, 0.0, 1920.0, 1080.0);
+        let seam = NSPoint::new(1512.0, 400.0);
+        assert!(!left.contains(seam));
+        assert!(right.contains(seam));
     }
 }

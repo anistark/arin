@@ -14,7 +14,6 @@
 //! Not one of these needs the Accessibility permission. That is the point.
 
 use crate::display::Screen;
-use crate::orb::Orb;
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
@@ -37,7 +36,6 @@ pub struct Panel {
     screen: Screen,
     panel: Retained<NSPanel>,
     root: Retained<CALayer>,
-    orb: Orb,
 }
 
 impl Panel {
@@ -85,10 +83,6 @@ impl Panel {
         // arithmetic in `host`, where it can be tested.
         panel.setContentView(Some(&view));
 
-        let orb = Orb::new();
-        orb.set_visible(false);
-        root.addSublayer(orb.layer());
-
         // Regardless, because the panel is non activating and must appear without Arin
         // ever becoming the active application.
         panel.orderFrontRegardless();
@@ -97,7 +91,6 @@ impl Panel {
             screen,
             panel,
             root,
-            orb,
         }
     }
 
@@ -109,13 +102,12 @@ impl Panel {
     /// The layer annotations are added to.
     ///
     /// Sublayers are positioned in AppKit coordinates, not protocol ones. Convert first.
+    ///
+    /// The orb is not one of them. There is a single orb for the whole system and it is
+    /// re-parented into whichever panel it is currently over, so a panel is somewhere the
+    /// orb visits rather than something that owns one.
     pub fn root(&self) -> &CALayer {
         &self.root
-    }
-
-    /// The orb living in this panel.
-    pub fn orb_mut(&mut self) -> &mut Orb {
-        &mut self.orb
     }
 }
 

@@ -233,6 +233,26 @@ protocol freeze, after which protocol changes are additive only.
 
 ### Changed
 
+- There is one orb for the whole system rather than one per display. Arin is a single
+  agent, so it has a single presence: it points at one place at a time and moves between
+  screens the way a mouse pointer does, and it belongs to the renderer host rather than to
+  any one overlay window. Pointing at a second display used to leave the first display's
+  orb behind, so two orbs sat on screen at once, saying there were two agents.
+
+  A flight that crosses a screen boundary is planned once in the desktop's global space
+  and cut into one segment per window it passes over, since a window cannot draw outside
+  its own display. Each segment is drawn at its own display's backing scale, so the orb
+  stays sharp crossing from a Retina laptop to a 1x external. The easing is carried by how
+  the sampled positions are spaced along the arc rather than by a timing function per
+  segment, so a flight drawn in three pieces still accelerates once instead of three
+  times.
+
+  Marks are unaffected and still stay on the screen they were drawn on, a point's caption
+  among them. Nothing in `arin-core` or on the wire changed: a pointer position was never
+  an annotation.
+- A point redrawn as it follows scrolled content tracks rather than flying. The orb was
+  setting off on a full flight on every tick of a scroll, when nothing about where
+  attention should be had changed.
 - The daemon no longer owns the main thread on macOS. AppKit requires it, so the overlay
   runs its event loop there and the daemon moves to a worker thread. Every other platform
   is unchanged.
@@ -355,8 +375,8 @@ protocol freeze, after which protocol changes are additive only.
   are covered against a loopback server. None of that says whether it puts the orb on the
   right button, and it has never been run against the real API or a real screen. The
   effort level, the detail sent, and the confidence threshold are all starting points. The
-  eval set the roadmap owes for this is still owed, and nobody should sign off the 0.3
-  acceptance criterion until it exists.
+  eval set is still owed, and the confidence threshold should not move off its 0.85 default
+  until it exists.
 - Grounding sends a screenshot of the whole display to a third party on every query. It is
   off unless named, an API key alone does not turn it on, and the daemon says so at
   startup, but that is the extent of the consent story. Whether consent belongs at the

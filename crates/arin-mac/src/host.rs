@@ -12,13 +12,15 @@
 
 use crate::caption;
 use crate::display::{Screen, screens};
+use crate::flight;
+use crate::orb::{self, Orb};
 use crate::panel::Panel;
 use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result, Rgb};
 use arin_protocol::{AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect, StrokeStyle};
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchTime};
-use objc2::MainThreadMarker;
 use objc2::rc::Retained;
+use objc2::{MainThreadMarker, Message};
 use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSColor};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
@@ -46,22 +48,174 @@ struct Host {
     layers: HashMap<AnnotationId, (DisplayId, Retained<CALayer>)>,
     /// Point annotations, and the display each is on.
     ///
-    /// Points have no layer of their own: they move the orb, which belongs to the panel.
-    /// Tracking them separately is what lets the orb stay up while any point still wants
-    /// it, and go away once the last one is cleared.
+    /// Points have no layer of their own: they move the orb. Tracking them separately is
+    /// what lets the orb stay up while any point still wants it, and go away once the last
+    /// one is cleared.
     points: HashMap<AnnotationId, DisplayId>,
+    /// The orb. One, for the whole system.
+    ///
+    /// Arin is a single agent, so it has a single presence and can draw attention to one
+    /// place at a time. It is not a property of a display: it is re-parented into whichever
+    /// panel it is currently over. An orb per panel would mean pointing at a second screen
+    /// left the first orb behind, and two orbs on screen say there are two agents.
+    orb: Orb,
+    /// Which panel's layer tree the orb is in, if it has been placed at all.
+    orb_on: Option<DisplayId>,
+    /// Which flight is current.
+    ///
+    /// A flight is drawn as a sequence of segments scheduled ahead on the main queue, and a
+    /// new point can arrive before they have all run. Each scheduled piece carries the
+    /// generation it belongs to and does nothing if it is no longer the current one, so a
+    /// superseded flight cannot drag the orb back off the target it has moved on to.
+    flight: u64,
 }
 
 impl Host {
-    /// Whether any point annotation still wants the orb on this display.
-    fn any_point_on(&self, display: DisplayId) -> bool {
-        self.points.values().any(|d| *d == display)
+    /// Whether any point annotation still wants the orb, on any display.
+    ///
+    /// System wide rather than per display, because there is one orb. A point on the
+    /// external display is reason enough to keep it up after one on the laptop is cleared.
+    fn any_point(&self) -> bool {
+        !self.points.is_empty()
     }
 
     fn panel_for(&mut self, display: DisplayId) -> Option<&mut Panel> {
         self.panels
             .iter_mut()
             .find(|p| p.screen().info.id == display)
+    }
+
+    fn screens(&self) -> Vec<Screen> {
+        self.panels.iter().map(|p| p.screen()).collect()
+    }
+
+    fn screen_for(&self, display: DisplayId) -> Option<Screen> {
+        self.panels
+            .iter()
+            .map(|p| p.screen())
+            .find(|s| s.info.id == display)
+    }
+
+    /// The layer tree of a display's panel.
+    ///
+    /// Owned rather than borrowed, so moving the orb into it does not hold a borrow of
+    /// every other field on the host while it happens.
+    fn root_for(&self, display: DisplayId) -> Option<Retained<CALayer>> {
+        self.panels
+            .iter()
+            .find(|p| p.screen().info.id == display)
+            .map(|p| p.root().retain())
+    }
+
+    /// Where the orb is in AppKit's global space, if it is anywhere.
+    fn orb_global(&self) -> Option<CGPoint> {
+        if !self.orb.is_placed() {
+            return None;
+        }
+        let screen = self.screen_for(self.orb_on?)?;
+        Some(screen.layer_to_global(self.orb.center()))
+    }
+
+    /// Put the orb on a display at a layer point, with no travel.
+    fn place_orb(&mut self, display: DisplayId, at: CGPoint) {
+        let Some(root) = self.root_for(display) else {
+            return;
+        };
+        self.orb.attach_to(&root);
+        self.orb.place(at);
+        self.orb.settle();
+        self.orb_on = Some(display);
+    }
+
+    /// Fly the one orb to a point on a display, crossing screens if it has to.
+    ///
+    /// The arc is computed once across the whole desktop and cut into per panel segments,
+    /// which are scheduled at absolute offsets from now. Scheduling them all up front
+    /// rather than chaining each off the last means a slow main thread cannot stretch the
+    /// flight, and the generation check is what keeps a stale one from landing.
+    fn fly_orb_to(&mut self, display: DisplayId, target: CGPoint) {
+        self.orb.set_visible(true);
+
+        let Some(from) = self.orb_global() else {
+            // Never placed, or the display it was on was unplugged. Arriving from nowhere
+            // is better than flying out of a coordinate that no longer exists.
+            self.place_orb(display, target);
+            return;
+        };
+        let Some(to_screen) = self.screen_for(display) else {
+            return;
+        };
+        let to = to_screen.layer_to_global(target);
+
+        let dx = to.x - from.x;
+        let dy = to.y - from.y;
+        if (dx * dx + dy * dy).sqrt() < orb::NUDGE {
+            // A nudge, not a journey.
+            self.place_orb(display, target);
+            return;
+        }
+
+        let plan = flight::plan(from, to, &self.screens());
+        let arrival = match plan.segments.last() {
+            Some(last) => last.start + last.duration,
+            // Every sample fell in a gap between displays, which needs an arrangement the
+            // arc can cross entirely through open space. Nothing can be drawn on the way,
+            // so the orb goes straight there.
+            None => {
+                self.place_orb(display, target);
+                return;
+            }
+        };
+
+        self.flight = self.flight.wrapping_add(1);
+        let generation = self.flight;
+        // Held for the whole flight rather than eased back to round per segment, so the
+        // deformation crosses a seam without popping. `settle` returns it to round.
+        self.orb.begin_flight(dx, dy);
+
+        // The first leg starts now, so the orb never waits a queue turn before setting off.
+        let mut legs = plan.segments.into_iter();
+        if let Some(first) = legs.next() {
+            self.draw_leg(&first);
+        }
+        for leg in legs {
+            on_main_after(leg.start, move |host, _mtm| {
+                if host.flight == generation {
+                    host.draw_leg(&leg);
+                }
+            });
+        }
+
+        on_main_after(arrival, move |host, _mtm| {
+            if host.flight == generation {
+                host.orb.settle();
+            }
+        });
+    }
+
+    /// Draw one leg of a flight, moving the orb into that panel first.
+    fn draw_leg(&mut self, leg: &flight::Segment) {
+        let Some(root) = self.root_for(leg.display) else {
+            return;
+        };
+        // Re-parenting rather than one orb per panel is what makes "a single orb" a fact
+        // about the layer tree rather than a discipline the code has to keep.
+        if self.orb_on != Some(leg.display) {
+            self.orb.attach_to(&root);
+            self.orb_on = Some(leg.display);
+        }
+        self.orb.fly_segment(&leg.points, leg.duration);
+    }
+
+    /// Begin fading the orb out, and hide it if nothing has claimed it by the time it has.
+    fn dismiss_orb(&mut self) {
+        self.orb.set_state(OrbState::Ending);
+        on_main_after(FADE, |host, _mtm| {
+            // Another point may have arrived while it was fading.
+            if !host.any_point() {
+                host.orb.set_visible(false);
+            }
+        });
     }
 
     /// Bring the panels back in line with the displays that are actually attached.
@@ -101,6 +255,26 @@ impl Host {
         for display in &disturbed {
             self.layers.retain(|_, (on, _)| on != display);
             self.points.retain(|_, on| on != display);
+        }
+
+        // A flight in the air was planned against the arrangement that just changed, and
+        // its remaining legs name displays that may no longer be there. Abandoning it is
+        // what stops the orb being dragged onto a panel that has been rebuilt underneath
+        // it, or stalling mid arc in the deformed shape it travels in.
+        if !disturbed.is_empty() {
+            self.flight = self.flight.wrapping_add(1);
+            if self.orb_on.is_some_and(|on| disturbed.contains(&on)) {
+                // Its layer went with the panel, and its last position was a coordinate on
+                // a display that may be gone. A point that survived elsewhere still wants
+                // an orb, and the next draw places it fresh. Nothing here can do that:
+                // reconcile runs before the daemon has reconciled its own annotations, so
+                // it does not yet know what survived.
+                self.orb.forget_position();
+                self.orb_on = None;
+            } else {
+                // Its own panel is intact, so it stops where it is rather than mid flight.
+                self.orb.settle();
+            }
         }
         disturbed
     }
@@ -204,11 +378,18 @@ impl MacRenderer {
         tracing::info!(count = displays.len(), "creating overlay panels");
 
         let panels = found.into_iter().map(|s| Panel::new(s, mtm)).collect();
+        let orb = Orb::new();
+        orb.set_visible(false);
         HOST.with_borrow_mut(|slot| {
             *slot = Some(Host {
                 panels,
                 layers: HashMap::new(),
                 points: HashMap::new(),
+                // Built here rather than per panel, and not attached to any of them until
+                // the first point decides which display it belongs on.
+                orb,
+                orb_on: None,
+                flight: 0,
             });
         });
 
@@ -292,11 +473,17 @@ impl Renderer for MacRenderer {
             if let Some((_, stale)) = host.layers.remove(&id) {
                 stale.removeFromSuperlayer();
             }
+            // Read before a panel is borrowed out of the host. Drawing a point that is
+            // already on screen is it following content that scrolled, not attention
+            // moving: the orb tracks it rather than setting off on a flight, the way a
+            // pointer over a scrolling page stays on what it was over.
+            let following = host.points.contains_key(&id);
             let Some(panel) = host.panel_for(screen_id) else {
                 tracing::warn!(%screen_id, "no panel for display, dropping annotation");
                 return;
             };
             let mut host_points: Vec<(AnnotationId, DisplayId)> = Vec::new();
+            let mut fly_to: Option<(DisplayId, CGPoint, bool)> = None;
             let info = panel.screen().info;
             let panel_size = CGSize::new(info.logical_size[0], info.logical_size[1]);
             let panel_height = panel_size.height;
@@ -305,19 +492,12 @@ impl Renderer for MacRenderer {
             let layer = match &kind {
                 AnnotationKind::Point { at, label, .. } => {
                     let target = to_layer_point(*at, panel_height);
-                    let orb = panel.orb_mut();
-                    orb.set_visible(true);
-                    // Flying rather than teleporting is what makes the orb read as one
-                    // thing moving between targets instead of blinking out and back.
-                    let flight = orb.travel_to(target);
                     host_points.push((id.clone(), screen_id));
-                    if !flight.is_zero() {
-                        on_main_after(flight, move |host, _mtm| {
-                            if let Some(panel) = host.panel_for(screen_id) {
-                                panel.orb_mut().settle();
-                            }
-                        });
-                    }
+                    // Otherwise flying rather than teleporting, which is what makes the orb
+                    // read as one thing moving between targets instead of blinking out and
+                    // back. The move itself is deferred until after this match, because it
+                    // needs the whole host and this arm has a panel borrowed out of it.
+                    fly_to = Some((screen_id, target, following));
                     // At the destination rather than riding the arc: text already in
                     // place reads better, and a clear during flight cannot race it.
                     caption::is_drawable(label.as_ref())
@@ -360,6 +540,20 @@ impl Renderer for MacRenderer {
             for (point, display) in host_points {
                 host.points.insert(point, display);
             }
+            // Last, because the orb belongs to the host rather than to this panel and
+            // moving it needs the panel borrow released. Also the right order on screen:
+            // the caption is already in place when the orb arrives beside it.
+            if let Some((display, target, following)) = fly_to {
+                if following {
+                    // Abandons any flight still in the air: the point it was heading for
+                    // is this one, and it has just moved.
+                    host.flight = host.flight.wrapping_add(1);
+                    host.orb.set_visible(true);
+                    host.place_orb(display, target);
+                } else {
+                    host.fly_orb_to(display, target);
+                }
+            }
         });
         Ok(())
     }
@@ -370,21 +564,12 @@ impl Renderer for MacRenderer {
             if let Some((_, layer)) = host.layers.remove(&id) {
                 layer.removeFromSuperlayer();
             }
-            // A point has no layer of its own, it moves the orb, so the orb only goes
-            // away once nothing on that display still wants it.
-            if let Some(display) = host.points.remove(&id)
-                && !host.any_point_on(display)
-                && let Some(panel) = host.panel_for(display)
-            {
-                panel.orb_mut().set_state(OrbState::Ending);
-                on_main_after(FADE, move |host, _mtm| {
-                    // Another point may have arrived while it was fading.
-                    if !host.any_point_on(display)
-                        && let Some(panel) = host.panel_for(display)
-                    {
-                        panel.orb_mut().set_visible(false);
-                    }
-                });
+            // A point has no layer of its own, it moves the orb, so the orb only goes away
+            // once nothing anywhere still wants it. Clearing a point on one display while
+            // another holds one elsewhere leaves the orb where it is: a pointer does not
+            // travel because something behind it went away.
+            if host.points.remove(&id).is_some() && !host.any_point() {
+                host.dismiss_orb();
             }
         });
         Ok(())
@@ -396,32 +581,15 @@ impl Renderer for MacRenderer {
                 layer.removeFromSuperlayer();
             }
             host.points.clear();
-            for panel in &mut host.panels {
-                panel.orb_mut().set_state(OrbState::Ending);
-            }
-            on_main_after(FADE, |host, _mtm| {
-                let displays: Vec<DisplayId> = host
-                    .panels
-                    .iter()
-                    .map(|p| p.screen().info.id)
-                    .filter(|id| !host.any_point_on(*id))
-                    .collect();
-                for display in displays {
-                    if let Some(panel) = host.panel_for(display) {
-                        panel.orb_mut().set_visible(false);
-                    }
-                }
-            });
+            // Any flight still in the air is going nowhere anyone asked for.
+            host.flight = host.flight.wrapping_add(1);
+            host.dismiss_orb();
         });
         Ok(())
     }
 
     fn set_orb_state(&self, state: OrbState) -> Result<()> {
-        on_main(move |host, _mtm| {
-            for panel in &mut host.panels {
-                panel.orb_mut().set_state(state);
-            }
-        });
+        on_main(move |host, _mtm| host.orb.set_state(state));
         Ok(())
     }
 }

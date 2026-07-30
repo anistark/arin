@@ -140,6 +140,10 @@ Unknown fields are ignored and unknown message types return an error rather than
 
 **Only one visual primitive is implemented in code: the orb.** Three concentric radial gradients plus a particle emitter.
 
+**And there is only one of it, for the whole system.** The orb is Arin's pointer, not a mark. It has a single existence however many displays are attached, it draws attention to one place at a time, and it moves between screens the way a mouse pointer does. It belongs to the renderer host rather than to any one overlay window, and a flight that crosses a screen boundary is cut into one segment per window so it reads as one continuous movement. An orb per display would mean pointing at a second screen left the first one behind, and two orbs on screen say there are two agents.
+
+Marks are the opposite: a highlight, a text box, a path, and a point's caption stay on the screen they were drawn on. So a second `point` moving the orb off the first is correct, and leaves no residue behind it. Nothing about this is in the protocol, because a pointer position is not an annotation.
+
 The phoenix logo is a static brand asset. It is never rendered by the daemon. Do not add bird geometry to any renderer.
 
 Orb state vocabulary. The client never requests these. They follow from daemon state.
@@ -193,6 +197,9 @@ Do not relitigate these without asking.
 | Grounding shape | Ask a vision model where something is and constrain the answer to a schema, rather than handing it the computer use tool and reading the coordinate out of a click it wants to make. A tool call carries no confidence, and Arin does not actuate, so a request shaped like "click this" asks for something that will never happen. |
 | Resolver consent | Off unless named. An API key in the environment is not consent, so no adapter is selected by inference, and a daemon told to use a remote one says so at startup. Provisional until the security model is settled. |
 | Displays changing | Panels are rebuilt on the platform's own screen change notification, and the daemon reconciles against the new arrangement: marks on a display that went, or now outside one that shrank, are dropped with `display_change`, and what survives is redrawn. A renderer cannot repopulate an overlay it just rebuilt, because the annotations live in core and it has never been told what they are. |
+| One orb | One for the whole system, not one per display. Arin is a single agent, so it has a single presence and points at one thing at a time. It is re-parented between overlay windows rather than existing once per screen, so "there is one orb" is a fact about the layer tree instead of a discipline every renderer has to keep. A platform renderer that gives each display its own orb is wrong, and it is the shape the macOS one had until 0.4. |
+| Crossing a screen | The flight is computed once in the desktop's global space and cut into one segment per window it crosses, because a window cannot draw outside its own display. Each segment is drawn by its own window at its own backing scale, which is what keeps the orb sharp on a mixed DPI arrangement. A single window spanning every display would make the geometry trivial and has one backing scale for all of them, so the orb would render soft on whichever display did not win. |
+| Pacing a flight | The easing is carried by how the sampled positions are spaced along the arc, not by a timing function. Core Animation gives each adjacent pair of samples an equal slice of time, so spacing them is what sets the speed, and a flight drawn in three segments still accelerates once. A timing function per segment would ease within each one and the orb would surge at every screen boundary. |
 | Who captures | The daemon, never the adapter. A resolver declares how much detail it needs through `Resolver::detail` and is handed a frame, so an adapter never touches the screen and a fake one in a test never has to. |
 | Textboxes | Display only through all of 0.x. No input widgets. |
 | Sequencing | Brain side. The daemon has no concept of step 2 of 7. |

@@ -29,14 +29,13 @@ use objc2_app_kit::NSColor;
 use objc2_core_foundation::{CFData, CFRetained, CFType, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapInfo, CGColor, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage,
-    CGImageAlphaInfo, CGMutablePath,
+    CGImageAlphaInfo,
 };
 use objc2_foundation::{NSArray, NSNumber, NSString, NSValue};
 use objc2_quartz_core::{
     CABasicAnimation, CAEmitterCell, CAEmitterLayer, CAGradientLayer, CAKeyframeAnimation, CALayer,
     CAMediaTiming, CAMediaTimingFunction, CATransform3D, CATransform3DIdentity,
-    NSValueCATransform3DAdditions, kCAGradientLayerRadial, kCAMediaTimingFunctionEaseIn,
-    kCAMediaTimingFunctionEaseInEaseOut,
+    kCAGradientLayerRadial, kCAMediaTimingFunctionEaseInEaseOut,
 };
 
 /// Brand colours. Blue belongs to Arin, which is why the contrast picker excludes it
@@ -101,14 +100,22 @@ const SPARK_SIZE: usize = 16;
 const EMBER_RATE: f32 = 34.0;
 
 /// Animation keys, so a state change can replace its own animation and leave the others.
+///
+/// There is no key for the stretch. It is a property held for the length of a flight
+/// rather than an animation, which is what lets it survive the orb being re-parented
+/// between panels part way across.
 mod key {
     pub const PULSE: &str = "arin.pulse";
     pub const FLIGHT: &str = "arin.flight";
     pub const FLARE: &str = "arin.flare";
-    pub const STRETCH_KEY: &str = "arin.stretch";
 }
 
-/// A single orb instance in a panel's layer tree.
+/// The orb.
+///
+/// There is one of these for the whole system, not one per display. Arin is a single
+/// agent, so it has a single presence: it is re-parented into whichever panel it is
+/// currently over rather than existing once per screen. See [`crate::host`] for the
+/// stitching that makes a flight across a screen boundary read as one movement.
 pub struct Orb {
     root: Retained<CALayer>,
     embers: Retained<CAEmitterLayer>,
@@ -144,9 +151,36 @@ impl Orb {
         orb
     }
 
-    /// The layer to add to a panel.
-    pub fn layer(&self) -> &CALayer {
-        &self.root
+    /// Move the orb into a panel's layer tree, out of whatever tree it was in.
+    ///
+    /// Appended last, so the orb draws above the marks on that display. A pointer that
+    /// went behind a highlight it had just been asked to point at would be the one place
+    /// the ordering is visible, and it would be wrong.
+    pub fn attach_to(&mut self, root: &CALayer) {
+        self.root.removeFromSuperlayer();
+        root.addSublayer(&self.root);
+    }
+
+    /// Where the orb is, in the coordinates of the panel it is currently in.
+    pub fn center(&self) -> CGPoint {
+        self.center
+    }
+
+    /// Whether the orb has ever been placed. An unplaced orb teleports rather than flying.
+    pub fn is_placed(&self) -> bool {
+        self.placed
+    }
+
+    /// Forget where the orb is, so the next point places it rather than flying from here.
+    ///
+    /// Used when the display the orb was on is unplugged. Its last position was a
+    /// coordinate on a screen that no longer exists, and flying out of it would mean
+    /// starting the arc from somewhere nothing can draw.
+    pub fn forget_position(&mut self) {
+        self.root
+            .removeAnimationForKey(&NSString::from_str(key::FLIGHT));
+        self.root.removeFromSuperlayer();
+        self.placed = false;
     }
 
     /// Show or hide without tearing the layer down.
@@ -164,89 +198,72 @@ impl Orb {
         self.placed = true;
     }
 
-    /// Fly to a point along a bowed arc, trailing embers.
+    /// Take on the deformation for a flight in this direction.
     ///
-    /// The arc is a quadratic curve bowed perpendicular to the direct line. A straight
-    /// slide reads as a UI element being repositioned; a curve reads as something moving
-    /// under its own power, which is the difference between a cursor and a companion.
-    pub fn travel_to(&mut self, point: CGPoint) -> std::time::Duration {
-        if !self.placed {
-            self.place(point);
-            self.settle();
-            return std::time::Duration::ZERO;
+    /// Set for the whole flight rather than animated back to round over it. A flight can
+    /// be drawn in more than one segment, once per display it crosses, and a per segment
+    /// animation back to identity would round the orb out at every screen boundary and
+    /// re-stretch it on the far side. A held deformation crosses a seam invisibly, and
+    /// [`Orb::settle`] is what returns it to round on arrival.
+    pub fn begin_flight(&mut self, dx: f64, dy: f64) {
+        self.root.setTransform(stretch_along(dx, dy));
+        self.set_state(OrbState::Traveling);
+    }
+
+    /// Animate through a run of sampled positions, ending at the last of them.
+    ///
+    /// The samples are in the coordinates of the layer tree the orb is currently in, so
+    /// the caller re-parents with [`Orb::attach_to`] before each segment. Nothing here
+    /// knows about displays: the host owns the geometry, because it is the only thing that
+    /// knows where the screens are.
+    ///
+    /// Deliberately positions rather than a `CGPath`, and deliberately without a timing
+    /// function. Core Animation gives each pair of adjacent values an equal slice of the
+    /// duration, so the easing of the whole flight is carried by how the host spaced the
+    /// samples: close together where the orb should be slow, far apart where it should be
+    /// fast. A timing function per segment would instead ease within each one, which on a
+    /// flight drawn in three pieces means three separate accelerations.
+    pub fn fly_segment(
+        &mut self,
+        samples: &[CGPoint],
+        duration: std::time::Duration,
+    ) -> Option<CGPoint> {
+        let &to = samples.last()?;
+        if samples.len() < 2 {
+            // A leg holding a single sample covers no time, which happens when the arc
+            // only clips a display's corner. There is nothing to interpolate, and a one
+            // value keyframe animation only asks Core Animation to work that out itself.
+            // Positioned directly rather than through `place`, which would drop the
+            // deformation the rest of the flight is still carrying.
+            self.root.setPosition(to);
+            self.center = to;
+            self.placed = true;
+            return Some(to);
         }
 
-        let from = self.center;
-        let dx = point.x - from.x;
-        let dy = point.y - from.y;
-        let distance = (dx * dx + dy * dy).sqrt();
-
-        // Anything this close is a nudge, not a journey.
-        if distance < 2.0 {
-            self.place(point);
-            self.settle();
-            return std::time::Duration::ZERO;
-        }
-
-        let path = CGMutablePath::new();
-        unsafe {
-            CGMutablePath::move_to_point(Some(&path), std::ptr::null(), from.x, from.y);
-            // Control point offset perpendicular to travel, which is what bows the arc.
-            let control = CGPoint::new(
-                (from.x + point.x) / 2.0 - dy * ARC_BOW,
-                (from.y + point.y) / 2.0 + dx * ARC_BOW,
-            );
-            CGMutablePath::add_quad_curve_to_point(
-                Some(&path),
-                std::ptr::null(),
-                control.x,
-                control.y,
-                point.x,
-                point.y,
-            );
-        }
-
-        // Longer trips take longer, but not linearly. Deliberate rather than quick: the
-        // point of the flight is that a person can follow where the orb went, and at
-        // half this duration the movement is over before the eye finds it.
-        let duration = (0.45 + distance / 1400.0).min(1.4);
+        // SAFETY: boxing a point and handing the animation the positions to interpolate
+        // through. Both are plain value transfers, and the array is retained by the
+        // animation for as long as it runs with it.
+        let values: Vec<Retained<NSValue>> = samples
+            .iter()
+            .map(|&p| unsafe { NSValue::valueWithPoint(p) })
+            .collect();
+        let refs: Vec<&AnyObject> = values
+            .iter()
+            .map(|v| <NSValue as AsRef<AnyObject>>::as_ref(v))
+            .collect();
 
         let flight =
             CAKeyframeAnimation::animationWithKeyPath(Some(&NSString::from_str("position")));
-        flight.setPath(Some(&path));
-        flight.setDuration(duration);
-        flight.setTimingFunction(Some(&CAMediaTimingFunction::functionWithName(unsafe {
-            kCAMediaTimingFunctionEaseInEaseOut
-        })));
+        unsafe { flight.setValues(Some(&NSArray::from_slice(&refs))) };
+        flight.setDuration(duration.as_secs_f64());
 
-        // Squash along the direction of travel, easing back to round over the flight.
-        // Animating it rather than setting it means the resting transform stays identity
-        // and arrival needs no callback to look right.
-        let squash = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("transform")));
-        unsafe {
-            squash.setFromValue(Some(&*NSValue::valueWithCATransform3D(stretch_along(
-                dx, dy,
-            ))));
-            squash.setToValue(Some(&*NSValue::valueWithCATransform3D(
-                CATransform3DIdentity,
-            )));
-        }
-        squash.setDuration(duration);
-        // Ease in, so the orb holds its deformation through the flight and rounds out
-        // near the end rather than relaxing the moment it sets off.
-        squash.setTimingFunction(Some(&CAMediaTimingFunction::functionWithName(unsafe {
-            kCAMediaTimingFunctionEaseIn
-        })));
-
-        self.root.setPosition(point);
+        self.root.setPosition(to);
         self.root
             .addAnimation_forKey(&flight, Some(&NSString::from_str(key::FLIGHT)));
-        self.root
-            .addAnimation_forKey(&squash, Some(&NSString::from_str(key::STRETCH_KEY)));
-
-        self.center = point;
-        self.set_state(OrbState::Traveling);
-        std::time::Duration::from_secs_f64(duration)
+        self.center = to;
+        self.placed = true;
+        Some(to)
     }
 
     /// Move to a state.
@@ -320,6 +337,59 @@ impl Default for Orb {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// How many positions a flight is sampled into, however many displays it crosses.
+///
+/// The orb moves along a polyline through these, so this is the resolution of the curve
+/// as well as of the easing. Enough that neither reads as stepped, and cheap: it is a few
+/// hundred floats once per flight, not per frame.
+pub const FLIGHT_SAMPLES: usize = 120;
+
+/// Below this distance a flight is a nudge, and the orb is placed rather than flown.
+pub const NUDGE: f64 = 2.0;
+
+/// A point on the flight arc, `t` running 0 at `from` to 1 at `to`.
+///
+/// A quadratic curve bowed perpendicular to the direct line. A straight slide reads as a
+/// UI element being repositioned; a curve reads as something moving under its own power,
+/// which is the difference between a cursor and a companion.
+///
+/// Evaluated by the host in AppKit's global space, so the bow of an arc between two
+/// displays is the same shape as one within a single display.
+pub fn arc_point(from: CGPoint, to: CGPoint, t: f64) -> CGPoint {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    // Control point offset perpendicular to travel, which is what bows the arc.
+    let control = CGPoint::new(
+        (from.x + to.x) / 2.0 - dy * ARC_BOW,
+        (from.y + to.y) / 2.0 + dx * ARC_BOW,
+    );
+
+    let u = 1.0 - t;
+    CGPoint::new(
+        u * u * from.x + 2.0 * u * t * control.x + t * t * to.x,
+        u * u * from.y + 2.0 * u * t * control.y + t * t * to.y,
+    )
+}
+
+/// Eased progress along a flight, easing in and out.
+///
+/// Smoothstep, which is what the flight used to get from a timing function before it had
+/// to be drawn in more than one piece. Applied to where the samples sit rather than to how
+/// each segment is timed, so it eases the whole journey and not each leg of it.
+pub fn ease(u: f64) -> f64 {
+    let u = u.clamp(0.0, 1.0);
+    u * u * (3.0 - 2.0 * u)
+}
+
+/// How long a flight covering this distance takes.
+///
+/// Longer trips take longer, but not linearly. Deliberate rather than quick: the point of
+/// the flight is that a person can follow where the orb went, and at half this duration
+/// the movement is over before the eye finds it.
+pub fn flight_duration(distance: f64) -> std::time::Duration {
+    std::time::Duration::from_secs_f64((0.45 + distance / 1400.0).min(1.4))
 }
 
 /// Squash along the travel direction and swell across it, preserving area by eye.

@@ -36,6 +36,7 @@
 mod caption;
 mod capture;
 mod display;
+mod flight;
 mod host;
 mod menubar;
 mod orb;
