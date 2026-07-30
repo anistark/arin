@@ -343,10 +343,17 @@ protocol freeze, after which protocol changes are additive only.
 
 ### Known gaps
 
-- Only one process can capture at a time. While the daemon runs, a second process asking
-  ScreenCaptureKit for a screenshot has its request dropped without an error, so
-  `arin capture` does not work alongside a live daemon. The daemon is unaffected, and
-  `arin permissions` defers to it rather than reading the failure as a denied permission.
+- `arin capture` does not work alongside a live daemon. ScreenCaptureKit drops the second
+  request, deallocating the completion handler without ever calling it, so it fails in
+  about 200ms rather than hanging. The daemon is unaffected, and `arin permissions` defers
+  to it rather than reading the failure as a denied permission.
+
+  This is **not** the machine allowing only one capturer, which is how it was described
+  until it was measured. Apple's own `screencapture` takes a frame quite happily while the
+  daemon runs, and that is where the screenshots in the vision-client work came from. What
+  collides looks narrower: the daemon and the CLI are the same binary at the same path with
+  no bundle, so ScreenCaptureKit cannot tell the two clients apart. A different binary is
+  not affected. Untested, and it is the hypothesis that fits every measurement so far.
 - Thin content still cannot decide a colour on its own, and this is the design rather
   than a limitation of the capture. A five point bar reaches about a fifth of the samples
   even at 512 pixels, and the median the picker scores by comes out at 9.12 against it at
