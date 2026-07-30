@@ -45,7 +45,7 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
                      +-------------------+------------------+
                      v                                      v
               +-------------+                       +--------------+
-              |  arin-mac   |                       |  arin-linux  |  (0.4)
+              |  arin-mac   |                       |  arin-linux  |  (v2)
               |  objc2      |                       |  wgpu        |
               |  NSPanel+CA |                       |  layer shell |
               |  SCKit      |                       |  portal      |
@@ -60,8 +60,8 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
 | `arin-core` | Daemon. Socket server, auth, session and annotation state machine, anchor model, scroll invalidation loop. Depends on traits only. | no | done for 0.1 |
 | `arin-resolve` | `Resolver` registry and adapters. The only crate that reaches the network. | no | registry plus the Claude adapter |
 | `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | done for 0.1 |
-| `arin-linux` | Renderer via wgpu on wlr layer shell. Capture via xdg desktop portal. 0.4. | Linux | empty |
-| `arin-win` | Layered window renderer, DXGI capture. 0.6. | Windows | empty |
+| `arin-linux` | Renderer via wgpu on wlr layer shell. Capture via xdg desktop portal. v2. | Linux | empty |
+| `arin-win` | Layered window renderer, DXGI capture. v2. | Windows | empty |
 | `arin-mcp` | MCP server. Translates MCP tool calls into socket messages. A library, served by `arin mcp`. 0.2. | no | four tools over stdio |
 | `arin` | Facade library published to crates.io. Re-exports `arin-protocol` under the plain name. | no | published |
 | `arin-cli` | The `arin` binary, the only one in the workspace: daemon control, MCP, debug commands, scripting client. | no | working |
@@ -188,6 +188,7 @@ Do not relitigate these without asking.
 |---|---|
 | Language | Rust core plus native platform crates. Chosen for the portable 80 percent, accepting a slower Mac layer via objc2. |
 | Platform order | macOS, then Linux KDE and wlroots, then Windows. GNOME is out of scope: it does not support layer shell. |
+| What v1 is | A Mac app. Linux and Windows are v2. One platform a stranger can install and use, shipped, beats three platforms none of which has met one. The crate scaffolds, the trait seams, and the Linux CI job all stay, so the ports stay cheap to pick up. Rule 1 under hard dependency rules is what protects that, and it is not relaxed because the ports moved. |
 | Teaching mode | Freeze frame. Capture once, annotate, valid until scroll. |
 | Scroll detection | Screenshot diff on a 500ms tick during active sessions only. Keeps permissions at Screen Recording alone, no Accessibility TCC. |
 | Scroll response | Follow the content where the movement can be measured, invalidate where it cannot. Never guess: a mark that vanishes is a failure the client can see, and a mark confidently pointing at the wrong thing is one it cannot. |
@@ -197,7 +198,7 @@ Do not relitigate these without asking.
 | Grounding shape | Ask a vision model where something is and constrain the answer to a schema, rather than handing it the computer use tool and reading the coordinate out of a click it wants to make. A tool call carries no confidence, and Arin does not actuate, so a request shaped like "click this" asks for something that will never happen. |
 | Resolver consent | Off unless named. An API key in the environment is not consent, so no adapter is selected by inference, and a daemon told to use a remote one says so at startup. Provisional until the security model is settled. |
 | Displays changing | Panels are rebuilt on the platform's own screen change notification, and the daemon reconciles against the new arrangement: marks on a display that went, or now outside one that shrank, are dropped with `display_change`, and what survives is redrawn. A renderer cannot repopulate an overlay it just rebuilt, because the annotations live in core and it has never been told what they are. |
-| One orb | One for the whole system, not one per display. Arin is a single agent, so it has a single presence and points at one thing at a time. It is re-parented between overlay windows rather than existing once per screen, so "there is one orb" is a fact about the layer tree instead of a discipline every renderer has to keep. A platform renderer that gives each display its own orb is wrong, and it is the shape the macOS one had until 0.4. |
+| One orb | One for the whole system, not one per display. Arin is a single agent, so it has a single presence and points at one thing at a time. It is re-parented between overlay windows rather than existing once per screen, so "there is one orb" is a fact about the layer tree instead of a discipline every renderer has to keep. A platform renderer that gives each display its own orb is wrong, and it is the shape the macOS one had until it was fixed. `crates/arin-mac/src/flight.rs` is the reference for cutting a flight across a screen boundary. |
 | Crossing a screen | The flight is computed once in the desktop's global space and cut into one segment per window it crosses, because a window cannot draw outside its own display. Each segment is drawn by its own window at its own backing scale, which is what keeps the orb sharp on a mixed DPI arrangement. A single window spanning every display would make the geometry trivial and has one backing scale for all of them, so the orb would render soft on whichever display did not win. |
 | Pacing a flight | The easing is carried by how the sampled positions are spaced along the arc, not by a timing function. Core Animation gives each adjacent pair of samples an equal slice of time, so spacing them is what sets the speed, and a flight drawn in three segments still accelerates once. A timing function per segment would ease within each one and the orb would surge at every screen boundary. |
 | Who captures | The daemon, never the adapter. A resolver declares how much detail it needs through `Resolver::detail` and is handed a frame, so an adapter never touches the screen and a fake one in a test never has to. |
