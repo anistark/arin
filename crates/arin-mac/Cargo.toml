@@ -19,6 +19,9 @@ publish = false
 [dependencies]
 arin-core.workspace = true
 arin-protocol.workspace = true
+# `Approver::ask` returns a `BoxFuture`, and the consent prompt hands its answer back from
+# the main queue over a oneshot. No async runtime is pulled in for either.
+futures.workspace = true
 tracing.workspace = true
 
 # Target-gated so the workspace still builds on Linux CI, where this crate compiles to
@@ -30,6 +33,8 @@ block2.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
+  # The grounding consent prompt.
+  "NSAlert",
   "NSApplication",
   # NSAttributedString carries NSFontAttributeName, which is how a caption is measured.
   "NSAttributedString",

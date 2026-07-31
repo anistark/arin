@@ -20,7 +20,14 @@ pub(crate) fn start_daemon(config: Config, headless: bool) -> Result<()> {
             std::thread::Builder::new()
                 .name("arin-daemon".into())
                 .spawn(move || {
-                    let outcome = block_on(serve(config, Arc::new(renderer), Arc::new(capture)));
+                    // There is a menu bar here, so there is somebody to ask about
+                    // grounding. This is the only configuration in which that is true.
+                    let outcome = block_on(serve(
+                        config,
+                        Arc::new(renderer),
+                        Arc::new(capture),
+                        Some(arin_mac::approver()),
+                    ));
                     if let Err(e) = outcome {
                         tracing::error!(error = %e, "daemon stopped");
                         std::process::exit(1);
@@ -31,8 +38,11 @@ pub(crate) fn start_daemon(config: Config, headless: bool) -> Result<()> {
         });
     }
 
+    // No renderer means no interface, so there is nothing to prompt through. Core refuses
+    // grounding under `ask` rather than assuming yes, which is what makes handing it
+    // `None` here safe to do.
     let (renderer, capture) = backends(headless)?;
-    block_on(serve(config, renderer, capture))
+    block_on(serve(config, renderer, capture, None))
 }
 
 /// Build the configured resolver, and say plainly what enabling it means.
@@ -66,17 +76,81 @@ fn wire_resolver(config: &Config) -> Result<Option<Arc<dyn arin_core::Resolver>>
     Ok(Some(resolver))
 }
 
+/// Say what will happen the first time a client asks Arin to look at the screen.
+///
+/// Only when there is a resolver, since with none configured the question never arises and
+/// a line about consent would be noise. `always` is a real loosening rather than a
+/// convenience, so it is a warning, and `ask` with nobody to ask is a configuration that
+/// refuses everything, which is worth saying before somebody spends an afternoon on it.
+fn report_consent(config: &Config, has_resolver: bool, can_ask: bool) {
+    use arin_core::Consent;
+
+    if !has_resolver {
+        return;
+    }
+    match config.grounding {
+        Consent::Always => tracing::warn!(
+            "grounding is allowed without asking. Any program running as you can make Arin \
+             read your screen and tell it what is there. Drop --grounding-consent to be \
+             asked instead."
+        ),
+        Consent::Never => tracing::info!(
+            "grounding is refused. A resolver is configured but no client can use it."
+        ),
+        Consent::Ask if can_ask => tracing::info!(
+            "grounding will ask before it reads your screen, and remember your answer for \
+             as long as you say"
+        ),
+        Consent::Ask => tracing::warn!(
+            "grounding will be refused: this daemon has no way to ask you, so the answer \
+             is no. Start it with --grounding-consent always if you meant to allow \
+             grounding unattended."
+        ),
+    }
+}
+
+/// Say what colour marks will come out, when it is not the usual one.
+///
+/// Only when it has been configured. A line on every start saying marks are amber is noise,
+/// and the reason to print this at all is that a palette is set once and then forgotten:
+/// months later, "why are my marks green" wants an answer the daemon has and the person
+/// asking does not.
+fn report_palette(palette: &arin_core::Palette, adaptive: bool) {
+    if palette.is_builtin() && adaptive {
+        return;
+    }
+    let colors: Vec<String> = palette
+        .candidates()
+        .iter()
+        .map(|color| color.to_hex())
+        .collect();
+    tracing::info!(
+        preferred = %palette.preferred(),
+        palette = colors.join(","),
+        adaptive,
+        "drawing marks from a configured palette"
+    );
+}
+
 async fn serve(
     config: Config,
     renderer: Arc<dyn Renderer>,
     capture: Arc<dyn Capture>,
+    approver: Option<Arc<dyn arin_core::Approver>>,
 ) -> Result<()> {
     let resolver = wire_resolver(&config)?;
+    report_consent(&config, resolver.is_some(), approver.is_some());
+
     let daemon = Daemon::new(config, renderer, capture);
-    let daemon = Arc::new(match resolver {
+    let daemon = match resolver {
         Some(resolver) => daemon.with_resolver(resolver),
         None => daemon,
-    });
+    };
+    let daemon = match approver {
+        Some(approver) => daemon.with_approver(approver),
+        None => daemon,
+    };
+    let daemon = Arc::new(daemon);
 
     // The menu bar is built before the daemon exists, so the actions arrive now rather
     // than at construction.
@@ -95,6 +169,18 @@ async fn serve(
         arin_mac::on_status(move || {
             status_line(reporting.annotation_count(), reporting.session_count())
         });
+
+        // The consent prompt says a grant can be taken back from the menu bar. This is
+        // what makes that true, and a promise like that has to be kept or the prompt
+        // becomes a reason not to grant anything.
+        let reading = Arc::clone(&daemon);
+        let revoking = Arc::clone(&daemon);
+        arin_mac::on_grounding(
+            move || reading.grounding_grant(),
+            move || {
+                revoking.revoke_grounding();
+            },
+        );
 
         // Panels have already been rebuilt by this point, which takes their layers with
         // them, so whatever survives has to be drawn again.
@@ -124,6 +210,7 @@ async fn serve(
     let server = Server::bind(Arc::clone(&daemon)).context("could not bind the socket")?;
 
     tracing::info!(socket = %server.socket_path().display(), "arin daemon ready");
+    report_palette(&daemon.config().palette, daemon.config().adaptive_color);
 
     let watcher = tokio::spawn(watch_for_scrolling(Arc::clone(&daemon)));
     let expiry = tokio::spawn(expire_annotations(Arc::clone(&daemon)));

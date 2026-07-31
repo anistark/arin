@@ -41,6 +41,34 @@ pub struct Config {
     /// everything in the default colour and never capture except for scroll detection,
     /// accepting that marks are then followed on the display-wide movement alone.
     pub adaptive_color: bool,
+    /// The colours marks may be drawn in, preferred first.
+    ///
+    /// The first entry is what a mark gets unless it cannot be seen against what is under
+    /// it, and the rest are what the picker falls back to. With `adaptive_color` off only
+    /// the first is ever used, since nothing is looking at the screen to choose between
+    /// them.
+    ///
+    /// Blue is refused wherever this is built, because it belongs to the orb.
+    pub palette: crate::contrast::Palette,
+    /// Whether a client may make the daemon look at the screen to ground a query.
+    ///
+    /// The capability split. Drawing is open to any peer that passes the uid check, because
+    /// a process running as the user could draw its own window anyway. Grounding is gated,
+    /// because it is the only thing Arin does that a client could not do for itself: it is
+    /// backed by the Screen Recording grant, which Arin holds and the client does not.
+    ///
+    /// See [`crate::consent`] for the finding this addresses and for what it does not cover.
+    pub grounding: crate::consent::Consent,
+    /// How many annotations one session may hold at once.
+    ///
+    /// A bound on how much of the screen a client can paper over. Per session rather than
+    /// global, so a well behaved client is never refused because of a badly behaved one
+    /// sharing the daemon.
+    ///
+    /// Generous on purpose: this is a backstop against a runaway client, not a budget
+    /// anybody should be counting against. A teaching sequence puts up a handful of marks
+    /// at a time, so anything near this number is a loop that has got away from someone.
+    pub max_annotations_per_session: usize,
 }
 
 impl Default for Config {
@@ -62,6 +90,11 @@ impl Default for Config {
             // Nothing grounds and nothing leaves the machine until someone says so.
             resolver: None,
             adaptive_color: true,
+            palette: crate::contrast::Palette::default(),
+            // Ask, and with nobody to ask the answer is no. A gate that opens when nobody
+            // is watching is not a gate.
+            grounding: crate::consent::Consent::Ask,
+            max_annotations_per_session: 256,
         }
     }
 }

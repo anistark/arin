@@ -128,6 +128,12 @@ invalidated  {reason: scroll | display_change | session_end | ttl}
 error        {code, msg}
 ```
 
+Error codes are additive within a major version and an unknown one is carried rather than
+rejected, so a client from a future minor version reads a code this build has never heard
+of. `not_permitted` is the newest: a query form refused because the user has not allowed
+grounding, which is a different thing from `no_resolver` and the only one of the two a
+client can do something about.
+
 Every annotation carries an anchor descriptor `{screen_rect, display_id, content_hash?}`. From 0.3 all three are used: `content_hash` holds a coarse record of what the mark was drawn over, and the daemon re-reads it after following a scroll to check the mark landed on the same content. It is opaque and clients must not construct or interpret one.
 
 Marks are moved silently. A scroll that the daemon can follow produces no wire traffic at all, because nothing the client asked for has stopped being true. Only a mark that could not be followed is announced, with `invalidated`.
@@ -196,7 +202,10 @@ Do not relitigate these without asking.
 | Clear affordance | Menu bar item plus global hotkey. No overlay button. |
 | Grounding | CUA class models only. Raw coordinates from the client in 0.1. Resolver plugin registry from 0.3. |
 | Grounding shape | Ask a vision model where something is and constrain the answer to a schema, rather than handing it the computer use tool and reading the coordinate out of a click it wants to make. A tool call carries no confidence, and Arin does not actuate, so a request shaped like "click this" asks for something that will never happen. |
-| Resolver consent | Off unless named. An API key in the environment is not consent, so no adapter is selected by inference, and a daemon told to use a remote one says so at startup. Provisional until the security model is settled. |
+| Resolver consent | Off unless named. An API key in the environment is not consent, so no adapter is selected by inference, and a daemon told to use a remote one says so at startup, and again at the moment a screenshot goes out. |
+| Capability split | Drawing is open to any peer that passes the uid check. Grounding is gated behind the user saying yes. Arin holds the Screen Recording grant and a client does not, so grounding lets a client read the screen through Arin's permission, and that is the only capability Arin actually holds: a same-uid process could open its own always-on-top window and draw on it, so gating drawing costs a setup step and buys nothing. Enforced on the query form of `point` and `highlight`, never on the handshake, so `session_start` is unchanged. |
+| Grounding consent | Granted for a window of time, not to a client, because there is nothing trustworthy to grant it to. It is also the only shape the CLI survives, since every command there is a new session and per-session approval would mean a prompt per command. A control people turn off is worse than a weaker one they leave on. The cost is that a grant covers every same-uid peer, which is why identity is deferred rather than dropped. |
+| Asking with nobody there | No. A daemon with no `Approver` refuses under `ask` rather than assuming yes: a gate that opens when nobody is watching is not a gate. An unattended daemon says `--grounding-consent always` out loud. |
 | Displays changing | Panels are rebuilt on the platform's own screen change notification, and the daemon reconciles against the new arrangement: marks on a display that went, or now outside one that shrank, are dropped with `display_change`, and what survives is redrawn. A renderer cannot repopulate an overlay it just rebuilt, because the annotations live in core and it has never been told what they are. |
 | One orb | One for the whole system, not one per display. Arin is a single agent, so it has a single presence and points at one thing at a time. It is re-parented between overlay windows rather than existing once per screen, so "there is one orb" is a fact about the layer tree instead of a discipline every renderer has to keep. A platform renderer that gives each display its own orb is wrong, and it is the shape the macOS one had until it was fixed. `crates/arin-mac/src/flight.rs` is the reference for cutting a flight across a screen boundary. |
 | Crossing a screen | The flight is computed once in the desktop's global space and cut into one segment per window it crosses, because a window cannot draw outside its own display. Each segment is drawn by its own window at its own backing scale, which is what keeps the orb sharp on a mixed DPI arrangement. A single window spanning every display would make the geometry trivial and has one backing scale for all of them, so the orb would render soft on whichever display did not win. |
@@ -219,7 +228,7 @@ Do not relitigate these without asking.
 
 Do not assume answers. Ask before building past these.
 
-1. **Security model.** Baseline is a 0600 socket in a directory only its owner can traverse, a peer credential check, strict schema validation, and a 1MB payload cap. All of that is implemented. The full threat model, client authentication, annotation provenance, and resolver egress consent are unresolved. This must be settled before the protocol freezes at 1.0, because auth shape affects the `session_start` handshake.
+1. **What identifies a client.** The security model is settled: drawing is open to any peer that passes the uid check, grounding is gated behind the user's consent, and permission is granted for a window of time. What is not settled is who it is granted *to*. `client_name` is self declared and a hostile client claims to be `claude-code`, so a grant currently covers every same-uid peer rather than the one that asked. Closing that needs a peer pid, which is platform specific work in a crate that has no platform code, and a pid is recyclable so it is not a boundary on its own. Needed before 1.0 only if per-client permission is wanted then.
 2. Whether `ack` should stream progress for slow resolves, or clients should poll.
 
 ---

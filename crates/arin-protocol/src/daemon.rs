@@ -152,6 +152,18 @@ pub enum ErrorCode {
     PayloadTooLarge,
     /// A query-form request arrived with no resolver configured.
     NoResolver,
+    /// A resolver exists, and the user has not permitted this daemon to ground for a
+    /// client.
+    ///
+    /// Distinct from [`Self::NoResolver`], which says grounding is not set up. This says it
+    /// is set up and was refused, which is a different thing for a client to do something
+    /// about: one is a configuration problem and the other is a person declining.
+    ///
+    /// Drawing is never refused this way. Any peer that reaches the socket can draw, since
+    /// a process running as the user could open its own window and draw anyway. Grounding
+    /// is the only capability Arin actually holds, because it is the one backed by the
+    /// Screen Recording grant.
+    NotPermitted,
     /// A resolver ran and could not ground the query.
     ResolveFailed,
     /// The `display_id` does not name a connected display.
@@ -173,6 +185,7 @@ impl ErrorCode {
             Self::UnknownType => "unknown_type",
             Self::PayloadTooLarge => "payload_too_large",
             Self::NoResolver => "no_resolver",
+            Self::NotPermitted => "not_permitted",
             Self::ResolveFailed => "resolve_failed",
             Self::UnknownDisplay => "unknown_display",
             Self::NotOwner => "not_owner",

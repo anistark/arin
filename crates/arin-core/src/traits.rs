@@ -126,6 +126,26 @@ pub trait Resolver: Send + Sync + 'static {
     -> BoxFuture<'a, Result<Resolution>>;
 }
 
+/// Asks the user whether to do something Arin holds a permission for.
+///
+/// The fourth platform seam, and the only one whose implementation is a piece of user
+/// interface rather than a piece of plumbing. Core decides *when* to ask and what the answer
+/// means. The platform decides what asking looks like.
+///
+/// A daemon with no approver refuses under [`crate::Consent::Ask`], which is why this is
+/// optional rather than required: a headless daemon has nobody to ask, and answering on
+/// their behalf is the one thing a consent prompt must never do.
+pub trait Approver: Send + Sync + 'static {
+    /// Put a request in front of the user and wait for an answer.
+    ///
+    /// Async because a person is slow. Implementations must not block the caller's thread
+    /// waiting on a window: the daemon is serving other connections while this is open.
+    fn ask<'a>(
+        &'a self,
+        request: &'a crate::consent::Request,
+    ) -> BoxFuture<'a, crate::consent::Decision>;
+}
+
 /// Pixels on the long edge a resolver gets when it does not ask for a number.
 ///
 /// Roughly 1080p, which is enough to read interface text without paying for a Retina

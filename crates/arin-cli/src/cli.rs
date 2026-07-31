@@ -38,8 +38,56 @@ pub(crate) enum Command {
         /// Off unless named. A resolver may send screenshots of your screen to a third
         /// party, so it is never turned on by inference: having an API key in your
         /// environment is not the same as asking for one to be used.
+        ///
+        /// `local` grounds against a model served on this machine and sends nothing
+        /// anywhere. `claude` grounds against a hosted model and uploads a screenshot of
+        /// the display on every query that carries one.
         #[arg(long, value_name = "NAME", env = "ARIN_RESOLVER")]
         resolver: Option<String>,
+
+        /// Draw marks in this colour, as `#RRGGBB`.
+        ///
+        /// The daemon still moves off it when it would be invisible against what is under
+        /// the mark, falling back through the rest of the palette. `--palette` replaces
+        /// that fallback set, and `--no-adaptive-color` turns the whole thing off and
+        /// always uses this.
+        ///
+        /// Blue is refused. It belongs to the orb, and a mark in the orb's own colour
+        /// reads as part of the orb rather than as a separate mark.
+        #[arg(long, value_name = "HEX", env = "ARIN_COLOR")]
+        color: Option<String>,
+
+        /// The full set of colours to choose between, preferred first.
+        ///
+        /// A comma separated list of `#RRGGBB`, for example
+        /// `#FFB020,#FF3B30,#30D158`. The first is what marks are drawn in and the rest
+        /// are what the daemon may fall back to. Replaces the built-in palette rather than
+        /// adding to it, and takes precedence over `--color`.
+        #[arg(long, value_name = "HEX,HEX,...", env = "ARIN_PALETTE")]
+        palette: Option<String>,
+
+        /// Whether a client may make Arin look at the screen to ground a query.
+        ///
+        /// `ask` prompts you the first time and remembers your answer for as long as you
+        /// said. `always` never prompts, which is what an unattended daemon wants. `never`
+        /// refuses every query while leaving the resolver configured.
+        ///
+        /// Drawing is never gated. A process running as you could open its own window and
+        /// draw on it anyway, so gating that would cost every client a setup step and buy
+        /// nothing. Grounding is different: it is backed by the Screen Recording permission,
+        /// which Arin holds and your clients do not.
+        ///
+        /// With `ask` and no way to prompt, such as `--headless`, the answer is no.
+        #[arg(long, value_name = "ask|always|never", env = "ARIN_GROUNDING_CONSENT")]
+        grounding_consent: Option<String>,
+
+        /// Never look at the screen to choose a colour.
+        ///
+        /// Marks are always drawn in the preferred colour. Saves a capture per positioned
+        /// annotation, and costs the record of what each mark was drawn over, so marks
+        /// following a scroll are then checked against the display-wide movement alone.
+        #[arg(long)]
+        no_adaptive_color: bool,
     },
 
     /// Serve MCP on stdio, for an agent to launch as a subprocess.
@@ -145,6 +193,20 @@ pub(crate) enum Command {
     /// Report whether the daemon is reachable.
     Status,
 
+    /// Write a report about this machine, for attaching to a bug report.
+    ///
+    /// Arin collects no telemetry, so there is nothing on our side to look at when
+    /// something goes wrong. This is the replacement, and you run it rather than it running
+    /// itself. Nothing is uploaded: it prints to your terminal so you can read it before
+    /// deciding to send any of it.
+    ///
+    /// Secrets are never quoted. An API key is reported as set or not set, with its length.
+    Diagnose {
+        /// Write to a file instead of printing.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+
     /// List the displays the overlay covers, with the id to pass to `--display`.
     #[cfg(target_os = "macos")]
     Displays,
@@ -168,6 +230,17 @@ pub(crate) enum Command {
         /// Report the pixel at a logical point, as `x,y`.
         #[arg(long)]
         probe: Option<String>,
+        /// Also write the frame into this directory, for a grounding corpus.
+        ///
+        /// Three files: the raw pixels a resolver would be handed, a manifest describing
+        /// them, and a PNG to open. Label targets by reading coordinates off the PNG into
+        /// `cases.json`, then score a resolver with
+        /// `cargo run --release -p arin-resolve --example eval -- <dir> <resolver>`.
+        ///
+        /// These are raw captures of your screen. Put them somewhere you are happy to have
+        /// them, and not in a repository.
+        #[arg(long, value_name = "DIR")]
+        save: Option<PathBuf>,
     },
 }
 

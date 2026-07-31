@@ -16,7 +16,7 @@ use arin_core::{Error, Frame, Result};
 use arin_protocol::{LogicalPoint, LogicalRect};
 use base64::Engine as _;
 
-/// Longest edge to send, in pixels.
+/// Longest edge to send a hosted model, in pixels.
 ///
 /// The models this targets accept up to 2576 on the long edge. Sending less costs
 /// accuracy and sending more is refused, so this is a ceiling on what the daemon captures
@@ -57,8 +57,42 @@ impl Encoded {
     }
 }
 
-/// Encode a frame as a base64 PNG, shrinking it if it is larger than the model accepts.
+/// Encode a frame as a base64 PNG, shrinking it if it is larger than [`MAX_EDGE`].
 pub fn encode(frame: &Frame) -> Result<Encoded> {
+    encode_within(frame, MAX_EDGE)
+}
+
+/// Encode a frame, shrinking it to fit `max_edge` on its longest side.
+///
+/// A hosted model has a hard ceiling and wants everything under it. A model on this
+/// machine has no ceiling and a cost curve instead: pixels are seconds of somebody's GPU,
+/// and past the point where interface text is legible they buy nothing. So the limit is
+/// the adapter's rather than the encoder's.
+pub fn encode_within(frame: &Frame, max_edge: u32) -> Result<Encoded> {
+    let (out_width, out_height) = usable_size(frame, max_edge)?;
+    let png = to_png(frame, out_width, out_height)?;
+
+    Ok(Encoded {
+        base64: base64::engine::general_purpose::STANDARD.encode(&png),
+        width: out_width,
+        height: out_height,
+        logical_size: frame.logical_size,
+    })
+}
+
+/// Encode a frame as PNG bytes, shrinking it to fit `max_edge`.
+///
+/// The same encoder a resolver sends through, exposed for the one caller that wants an
+/// image rather than a request body: `arin capture --save`, which writes a frame somewhere
+/// a person can open it. Building a second encoder for that would mean the picture someone
+/// labels a target on and the picture a model is shown came out of different code.
+pub fn png_bytes(frame: &Frame, max_edge: u32) -> Result<Vec<u8>> {
+    let (width, height) = usable_size(frame, max_edge)?;
+    to_png(frame, width, height)
+}
+
+/// Check the frame is what it claims to be, and work out what size to write.
+fn usable_size(frame: &Frame, max_edge: u32) -> Result<(u32, u32)> {
     let (width, height) = (frame.width, frame.height);
     if width == 0 || height == 0 {
         return Err(Error::Capture("nothing was captured".into()));
@@ -70,8 +104,10 @@ pub fn encode(frame: &Frame) -> Result<Encoded> {
             frame.pixels.len()
         )));
     }
+    Ok(fit(width, height, max_edge.max(1)))
+}
 
-    let (out_width, out_height) = fit(width, height, MAX_EDGE);
+fn to_png(frame: &Frame, out_width: u32, out_height: u32) -> Result<Vec<u8>> {
     let rgb = resample(frame, out_width, out_height);
 
     let mut png = Vec::new();
@@ -87,13 +123,7 @@ pub fn encode(frame: &Frame) -> Result<Encoded> {
     writer
         .finish()
         .map_err(|e| Error::Capture(format!("png finish: {e}")))?;
-
-    Ok(Encoded {
-        base64: base64::engine::general_purpose::STANDARD.encode(&png),
-        width: out_width,
-        height: out_height,
-        logical_size: frame.logical_size,
-    })
+    Ok(png)
 }
 
 /// The largest size within `max_edge` that keeps the aspect ratio.

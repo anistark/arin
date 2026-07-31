@@ -230,6 +230,117 @@ protocol freeze, after which protocol changes are additive only.
   a page that scrolls under a toolbar that does not has one honest answer for most of the
   screen and a different one for the rest, and only the mark's own anchor knows which
   side of that line it is on.
+- `arin-resolve`: the `local` adapter, which grounds against a model served on the same
+  machine and is what removes both the API key and the one path by which a screenshot of
+  the screen leaves the computer. `arin daemon --resolver local` and nothing about
+  grounding touches the network.
+
+  It speaks the OpenAI shaped `/v1/chat/completions` API rather than any one runtime's,
+  because LM Studio, Ollama, vLLM, SGLang and llama.cpp's server all serve it and there is
+  no standard for which of them a person should have installed. What that costs is a
+  default port right for exactly one of them, so a resolver that cannot reach a server
+  prints the others rather than a bare failure.
+
+  `is_remote()` returning `false` is enforced rather than asserted. The endpoint is checked
+  at construction and anything that is not `127.0.0.1`, `::1` or `localhost` is refused, so
+  the resolver the consent story is built on cannot be pointed off the machine by editing an
+  environment variable.
+
+  Two answer shapes are accepted. A general vision model constrained to the schema reports
+  a confidence and gets a precise mark. A UI TARS checkpoint answers with an action,
+  `click(point='<point>512 384</point>')`, whatever the prompt asked for, because that is
+  what it was trained to emit. That is accepted too, and it runs straight into the reason
+  the computer use tool was rejected for grounding in 0.3: an action carries no confidence.
+  So an unrated answer gets a constant below the threshold and draws a region. That is a
+  placeholder for a measurement, and the eval set this cycle owes is what should replace it.
+- `arin-resolve::grounding`, holding what both adapters do identically: the instructions,
+  the schema, the range checks, and the one conversion out of the image the model saw into
+  logical points. They differ in the API they reach through and nothing else, and two
+  adapters quietly disagreeing about which corner a coordinate is measured from is the
+  failure this prevents.
+- `screenshot::encode_within`, so each adapter sets its own size limit. A hosted model has a
+  hard ceiling and no marginal cost under it. A local one has no ceiling and nothing but
+  marginal cost, since pixels are seconds of the machine's own GPU on a resolve somebody is
+  watching an orb wait through.
+- The annotation palette is configurable. `arin daemon --color '#FF2D95'` draws marks in
+  magenta and keeps the built-in fallbacks, `--palette` replaces the set outright with the
+  first entry preferred, and `--no-adaptive-color` stops the daemon looking at the screen
+  to choose at all. `ARIN_COLOR` and `ARIN_PALETTE` do the same. Previously the palette was
+  a constant with no way to reach it short of a rebuild.
+
+  **Blue is refused rather than dropped.** The reservation rule was a property of a `const`
+  covered by a test, and a configurable palette is a way to break it, so `Palette` checks
+  every entry where it is built and rejects a blue one with the hue range and the reason.
+  Accepting the palette and quietly removing the offending colour would leave someone
+  watching marks come out amber with nothing anywhere to explain it.
+
+  The daemon says at startup which palette it is using, but only when it is not the
+  built-in one. A palette is set once and then forgotten, so "why are my marks green"
+  months later wants an answer the daemon has and the person asking does not, while a line
+  on every start saying marks are amber is noise.
+- `arin diagnose`, a report to attach to a bug report. Arin collects no telemetry and never
+  will, so there is nothing on our side to look at when something goes wrong. This is the
+  replacement: version and target, the socket and whether anything is listening on it, the
+  settings a daemon started here would use, every resolver and whether it can be built, the
+  macOS version, the capture permission, the displays, and the environment variables Arin
+  reads.
+
+  It prints to the terminal rather than writing a file, because a report you have to open
+  to see is one people attach unread, and this one is meant to be read. `--output` writes a
+  file for the cases where that is easier.
+
+  Secrets are reported as set or not set with a length, never quoted, and the rule is
+  matched on the variable's name rather than on what the value looks like. A bundle exists
+  to be pasted into a public issue, and a heuristic over values would eventually be wrong in
+  the direction that costs someone a key.
+
+  What it deliberately does not claim to know is the configuration of a *running* daemon.
+  Nothing on the wire asks, so the section says it is reporting what a daemon started here
+  right now would use, which is exactly the thing that differs in the case somebody is
+  filing a bug about.
+- **The security model, settled and implemented.** `plan/SECURITY.md` holds the argument.
+  The finding is that Arin is a confused deputy for Screen Recording: Arin holds that grant
+  and a client does not, so a client with no screen access of its own can ask where
+  something is and read coordinates and a confidence back out of the ack. That is screen
+  content laundered through Arin's permission, and on macOS it is a real privilege
+  escalation.
+
+  The answer is a capability split. **Drawing stays open to any peer that passes the uid
+  check**, because a process running as the user could open its own always-on-top window and
+  draw anyway, so gating it would cost every client a setup step and buy nothing. **Grounding
+  is gated**, because it is the only capability Arin actually holds. `--grounding-consent`
+  takes `ask`, the default, `always`, or `never`, and a refused query answers with a new
+  `not_permitted` error code rather than `no_resolver`: one says grounding is not set up and
+  the other says it was declined, and a client can act on exactly one of those.
+
+  Permission is granted for a window of time rather than to a client, because there is
+  nothing trustworthy to grant it to. `client_name` is self declared and binding to a peer
+  pid is platform specific work in a crate that has no platform code, so that decision is
+  deferred. A window also happens to be the only shape that works with the CLI, where every
+  command is a new session: per-session approval would mean a prompt for every
+  `arin point "the Submit button"`, and a control people turn off is worse than a weaker one
+  they leave on. What it does not do is distinguish clients, and that is written down where
+  it is implemented rather than only in the plan.
+
+  `Approver` is a fourth platform seam beside `Renderer`, `Capture` and `Resolver`. Core
+  decides when to ask and what an answer means. macOS decides what asking looks like, which
+  is an `NSAlert` naming the client, quoting the query, and saying whether the screenshot
+  leaves the machine, since granting a local model a look and a hosted one a copy are
+  different decisions. The menu bar shows a live grant and revokes it, which is the promise
+  the prompt makes.
+
+  With `ask` and no approver wired, such as `--headless`, the answer is no rather than yes.
+  A gate that opens when nobody is watching is not a gate, so an unattended daemon has to
+  say `--grounding-consent always` out loud, and the daemon warns at startup when it does.
+
+  Nothing here touches `session_start`, so the handshake is unchanged and `arin-protocol`
+  needs no republish. That was the constraint the shape was chosen under.
+- Two more things `plan/SECURITY.md` listed as owed. The egress warning now fires at the
+  moment a screenshot goes out, not only at startup: "a remote resolver is configured" and
+  "a picture of this display is leaving now" are different claims, and the second is the one
+  worth finding in a log. And a session is capped at 256 annotations, so a runaway client
+  cannot paper the screen. Per session rather than global, so one badly behaved client
+  cannot refuse marks to a well behaved one sharing the daemon.
 
 ### Changed
 

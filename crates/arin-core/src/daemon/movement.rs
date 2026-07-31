@@ -81,9 +81,12 @@ impl Daemon {
             parsed
         });
 
+        let palette = &self.config.palette;
+        let preferred = palette.preferred();
+
         if !self.config.adaptive_color {
             return Appearance {
-                color: named.unwrap_or(contrast::DEFAULT),
+                color: named.unwrap_or(preferred),
                 fingerprint: None,
             };
         }
@@ -93,12 +96,12 @@ impl Daemon {
         match self.capture.capture(screen) {
             Ok(frame) => Appearance {
                 color: named.unwrap_or_else(|| {
-                    let picked = contrast::pick(&frame, footprint);
+                    let picked = contrast::pick(&frame, footprint, palette);
                     // Otherwise unobservable: colour management alters the pixels on the
                     // way out, so they cannot be compared against the palette.
                     tracing::debug!(
                         color = %picked,
-                        adapted = picked != contrast::DEFAULT,
+                        adapted = picked != preferred,
                         "chose an annotation colour"
                     );
                     picked
@@ -108,7 +111,7 @@ impl Daemon {
             Err(e) => {
                 tracing::debug!(%screen, error = %e, "no frame to sample, using the default colour");
                 Appearance {
-                    color: named.unwrap_or(contrast::DEFAULT),
+                    color: named.unwrap_or(preferred),
                     fingerprint: None,
                 }
             }

@@ -19,6 +19,7 @@ pub(crate) fn list_resolvers() -> Result<()> {
         return Ok(());
     }
     println!("Pass one to `arin daemon --resolver <NAME>`. None is used unless you name it.\n");
+    let mut local_failed = false;
     for name in registry.names() {
         // Built rather than described, so what is printed is what would actually run.
         // A resolver that cannot be constructed says why here rather than at first use.
@@ -27,10 +28,33 @@ pub(crate) fn list_resolvers() -> Result<()> {
                 println!("{name}\tready, and SENDS SCREENSHOTS OFF THIS MACHINE");
             }
             Ok(_) => println!("{name}\tready, and runs entirely on this machine"),
-            Err(e) => println!("{name}\tunavailable: {e}"),
+            Err(e) => {
+                println!("{name}\tunavailable: {e}");
+                local_failed |= name == "local";
+            }
         }
     }
+    if local_failed {
+        local_resolver_hint();
+    }
     Ok(())
+}
+
+/// What to do about a local resolver that did not build.
+///
+/// Printed alongside the list rather than as its own command, because the failure it
+/// explains is almost never Arin's: somebody has no model server running, or has one on a
+/// port other than the one guessed at. One line saying the resolver is unavailable does not
+/// get anyone from there to a working daemon.
+fn local_resolver_hint() {
+    println!("\nThe local resolver looks for an OpenAI shaped chat completions endpoint on");
+    println!("loopback. Ports the runtimes it speaks to use out of the box:\n");
+    for (runtime, port) in arin_resolve::local::OTHER_PORTS {
+        println!("  {port}\t{runtime}");
+    }
+    println!("\nPoint it at yours and load a UI TARS class grounding model:\n");
+    println!("  export ARIN_LOCAL_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions");
+    println!("  export ARIN_LOCAL_MODEL=ui-tars-1.5-7b");
 }
 
 /// Print the displays the overlay would cover.
@@ -108,13 +132,20 @@ pub(crate) fn check_permissions(config: &Config, open: bool) -> Result<()> {
 /// Runs off the main thread on purpose. Capture blocks until ScreenCaptureKit answers,
 /// and its handlers want a thread that is not sitting in a join.
 #[cfg(target_os = "macos")]
-pub(crate) fn capture_once(display: u32, probe: Option<String>) -> Result<()> {
+pub(crate) fn capture_once(
+    display: u32,
+    probe: Option<String>,
+    save: Option<&std::path::Path>,
+) -> Result<()> {
     use arin_core::Capture as _;
 
     // Two frames a moment apart, so the report says not just what one looks like but how
     // much a still screen drifts between captures. That number is what scroll detection
     // has to see past.
     let (frame, second) = std::thread::spawn(move || {
+        // Full resolution, which is also what a corpus wants: the daemon downscales for
+        // scroll detection because it reads coarse statistics twice a second, and a corpus
+        // built from thumbnails would cap every experiment ever run against it.
         let backend = arin_mac::MacCapture::default();
         let first = backend.capture(DisplayId(display))?;
         std::thread::sleep(std::time::Duration::from_millis(400));
@@ -168,5 +199,44 @@ pub(crate) fn capture_once(display: u32, probe: Option<String>) -> Result<()> {
         }
     }
 
+    if let Some(dir) = save {
+        // Numbered from what is already there, so repeated captures build one corpus
+        // rather than overwriting each other.
+        let stem = format!("{:03}-display{display}", next_index(dir));
+        let written = arin_resolve::eval::save_frame(dir, &stem, &frame)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!("\nsaved       {}", dir.join(&stem).display());
+        for path in &written {
+            println!(
+                "  {}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
+        }
+        println!(
+            "\nOpen the png, read off where each target is in image pixels, and add it to\n\
+             {}. Then score a resolver against it:\n  \
+             cargo run --release -p arin-resolve --example eval -- {} local",
+            dir.join("cases.json").display(),
+            dir.display()
+        );
+    }
+
     Ok(())
+}
+
+/// The next free number in a corpus directory.
+///
+/// Counting manifests rather than tracking state, so a directory built over several
+/// sessions keeps going up instead of overwriting what is already there.
+#[cfg(target_os = "macos")]
+fn next_index(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                .filter(|entry| entry.file_name() != "cases.json")
+                .count()
+        })
+        .unwrap_or(0)
 }

@@ -7,9 +7,14 @@
 //!
 //! # Status
 //!
-//! One adapter, [`ClaudeResolver`], which grounds against a hosted model with the user's
-//! own API key. A local grounding model lands in 0.5 and removes the key and the
-//! screenshot egress along with it.
+//! Two adapters. [`ClaudeResolver`] grounds against a hosted model with the user's own API
+//! key. [`LocalResolver`] grounds against a model served on this machine, which is what
+//! removes both the key and the screenshot egress.
+//!
+//! They share everything except how they reach a model: the instructions, the schema, the
+//! range checks, and the one conversion out of image pixels all live in [`grounding`]. Two
+//! adapters quietly disagreeing about which corner a coordinate is measured from is the
+//! failure that module exists to prevent.
 //!
 //! # Why the registry holds builders rather than resolvers
 //!
@@ -34,9 +39,13 @@
 #![warn(missing_docs)]
 
 pub mod claude;
+pub mod eval;
+pub mod grounding;
+pub mod local;
 pub mod screenshot;
 
 pub use claude::ClaudeResolver;
+pub use local::LocalResolver;
 
 use arin_core::{Error, Resolver, Result};
 use std::collections::HashMap;
@@ -65,6 +74,9 @@ impl Registry {
         let mut registry = Self::new();
         registry.register("claude", || {
             Ok(Arc::new(ClaudeResolver::from_env()?) as Arc<dyn Resolver>)
+        });
+        registry.register("local", || {
+            Ok(Arc::new(LocalResolver::from_env()?) as Arc<dyn Resolver>)
         });
         registry
     }
@@ -246,6 +258,7 @@ mod tests {
     fn the_builtins_are_registered_without_being_built() {
         let registry = Registry::with_builtins();
         assert!(registry.contains("claude"));
-        assert_eq!(registry.names(), vec!["claude"]);
+        assert!(registry.contains("local"));
+        assert_eq!(registry.names(), vec!["claude", "local"]);
     }
 }

@@ -264,10 +264,35 @@ impl Connection {
     /// detail it needs and the daemon is what decides how to get it.
     async fn resolve(&self, query: &str, display: DisplayId) -> Result<crate::traits::Resolution> {
         let resolver = self.daemon.resolver.clone().ok_or(Error::NoResolver)?;
+
+        // Before the capture, not after. The whole finding is that grounding makes Arin
+        // look at the screen on a client's behalf, so a refused request must not have taken
+        // a frame first. Asking afterwards would leave the screen already read by the time
+        // the user says no.
+        let session = self.require_session()?;
+        self.daemon
+            .permit_grounding(&session, query, resolver.as_ref())
+            .await?;
+
         let frame = self
             .daemon
             .capture
             .capture_detailed(display, resolver.detail())?;
+
+        // At the moment it happens, not only at startup. The startup line says a resolver
+        // that leaves the machine is configured, which is a different claim from a
+        // screenshot of this display going out right now, and it is the second one somebody
+        // scrolling back through a log needs to find.
+        if resolver.is_remote() {
+            // Bound out here because `tracing` brings its own `display` into scope inside
+            // the macro, which shadows the parameter.
+            let display_id = display.0;
+            tracing::warn!(
+                resolver = resolver.name(),
+                display_id,
+                "sending a screenshot of this display off the machine"
+            );
+        }
 
         self.daemon.renderer.set_orb_state(OrbState::Thinking)?;
         let outcome = resolver.resolve(query, &frame).await;

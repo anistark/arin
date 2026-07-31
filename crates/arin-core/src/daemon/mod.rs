@@ -7,7 +7,7 @@
 use crate::annotation::Annotation;
 use crate::config::Config;
 use crate::contrast::Rgb;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::fingerprint::Fingerprint;
 use crate::session::Session;
 use crate::traits::{Capture, Renderer, Resolver};
@@ -45,6 +45,14 @@ pub struct Daemon {
     renderer: Arc<dyn Renderer>,
     capture: Arc<dyn Capture>,
     resolver: Option<Arc<dyn Resolver>>,
+    /// How the user is asked whether to ground. `None` means nobody is there to ask.
+    approver: Option<Arc<dyn crate::Approver>>,
+    /// The grounding permission currently in force.
+    ///
+    /// Held on the daemon rather than on a session, because there is nothing trustworthy to
+    /// attach it to a client with. See [`crate::consent`] for why that is deferred rather
+    /// than solved, and what it costs.
+    grant: Mutex<crate::consent::Grant>,
     state: Mutex<State>,
     /// Bumped every time the daemon changes what is on screen.
     ///
@@ -85,6 +93,8 @@ impl Daemon {
             renderer,
             capture,
             resolver: None,
+            approver: None,
+            grant: Mutex::new(crate::consent::Grant::new()),
             state: Mutex::new(State::default()),
             drawn: AtomicU64::new(0),
             announcements: broadcast::channel(ANNOUNCEMENT_BACKLOG).0,
@@ -125,9 +135,122 @@ impl Daemon {
         &self.config
     }
 
+    /// Attach the way the user is asked whether to ground.
+    ///
+    /// Optional, and its absence is not a fallback to yes. A daemon with no approver under
+    /// [`crate::Consent::Ask`] refuses every query, because the only thing worse than no
+    /// consent prompt is one that answers itself.
+    #[must_use]
+    pub fn with_approver(mut self, approver: Arc<dyn crate::Approver>) -> Self {
+        self.approver = Some(approver);
+        self
+    }
+
     /// The configured resolver, if any.
     pub fn resolver(&self) -> Option<&Arc<dyn Resolver>> {
         self.resolver.as_ref()
+    }
+
+    /// How much of a grounding grant is left, if any.
+    ///
+    /// Read by the menu bar, which is where a grant can be seen and taken back.
+    pub fn grounding_grant(&self) -> Option<std::time::Duration> {
+        self.grant.lock().expect("grant lock").remaining()
+    }
+
+    /// Take back any grounding permission currently in force.
+    ///
+    /// The user's own route out, so granting an hour is a decision they can reverse rather
+    /// than one they have to wait out. Returns whether anything was actually revoked.
+    pub fn revoke_grounding(&self) -> bool {
+        let mut grant = self.grant.lock().expect("grant lock");
+        let was_open = grant.is_open();
+        grant.revoke();
+        if was_open {
+            tracing::info!("grounding permission revoked");
+        }
+        was_open
+    }
+
+    /// Decide whether a query may be grounded, asking the user if that is the policy.
+    ///
+    /// Called before the capture rather than after it. The finding this implements is that
+    /// grounding makes Arin read the screen on a client's behalf, so a refused request must
+    /// not have already read it.
+    pub(super) async fn permit_grounding(
+        &self,
+        session: &SessionId,
+        query: &str,
+        resolver: &dyn Resolver,
+    ) -> Result<()> {
+        match self.config.grounding {
+            crate::Consent::Always => return Ok(()),
+            crate::Consent::Never => {
+                return Err(Error::NotPermitted(
+                    "this daemon was started with grounding refused. Restart it with \
+                     --grounding-consent ask to be asked instead"
+                        .into(),
+                ));
+            }
+            crate::Consent::Ask => {}
+        }
+
+        // Scoped, because the guard must not be held across the await below.
+        if self.grant.lock().expect("grant lock").is_open() {
+            return Ok(());
+        }
+
+        let Some(approver) = self.approver.clone() else {
+            return Err(Error::NotPermitted(
+                "there is no way to ask you about this, so the answer is no. A daemon with \
+                 no interface cannot prompt. Start it with --grounding-consent always if \
+                 you meant to allow grounding unattended"
+                    .into(),
+            ));
+        };
+
+        let request = crate::consent::Request {
+            client_name: self.client_name(session),
+            query: query.to_owned(),
+            resolver: resolver.name().to_owned(),
+            remote: resolver.is_remote(),
+        };
+        tracing::info!(
+            client = %request.client_name,
+            resolver = %request.resolver,
+            remote = request.remote,
+            "asking whether to ground a query"
+        );
+
+        let decision = approver.ask(&request).await;
+        let allowed = self.grant.lock().expect("grant lock").record(decision);
+
+        tracing::info!(
+            client = %request.client_name,
+            ?decision,
+            allowed,
+            "grounding decision"
+        );
+        if allowed {
+            Ok(())
+        } else {
+            Err(Error::NotPermitted("you declined this request".into()))
+        }
+    }
+
+    /// What a session called itself, for showing to a person.
+    ///
+    /// Self declared and never trusted for authorisation, which is exactly why it only ever
+    /// reaches a prompt: a person reading a name is better placed to smell a lie than the
+    /// daemon is, and worse off with no name at all.
+    fn client_name(&self, session: &SessionId) -> String {
+        self.state
+            .lock()
+            .expect("state lock")
+            .sessions
+            .get(session)
+            .map(|s| s.client_name.clone())
+            .unwrap_or_else(|| "an unnamed client".to_owned())
     }
 
     /// How many annotations are currently on screen.
@@ -278,7 +401,32 @@ impl Daemon {
             .or(self.config.default_ttl)
     }
 
+    /// Store a mark, refusing once a session is holding too many.
+    ///
+    /// The cap `plan/SECURITY.md` calls owed. Nothing bounded how many annotations a client
+    /// could hold, so one could paper the screen. It is a nuisance rather than a hole, since
+    /// the clear affordance and the TTL sweep both already exist and belong to the user, but
+    /// it is cheap to bound and expensive to explain afterwards.
+    ///
+    /// Counted per session rather than globally, so a well behaved client is never refused
+    /// because of a badly behaved one sharing the daemon. Checked before the renderer is
+    /// asked to draw, so a refused mark never reaches the screen at all.
     fn store(&self, annotation: Annotation) -> Result<AnnotationId> {
+        let session = annotation.session.clone();
+        let held = self
+            .state
+            .lock()
+            .expect("state lock")
+            .annotations
+            .values()
+            .filter(|held| held.session == session)
+            .count();
+        if held >= self.config.max_annotations_per_session {
+            return Err(Error::TooManyAnnotations(
+                self.config.max_annotations_per_session,
+            ));
+        }
+
         let id = annotation.id.clone();
         self.renderer.draw(&annotation)?;
         self.mark_drawn();

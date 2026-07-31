@@ -43,6 +43,14 @@ pub enum Error {
     #[error("query form requires a configured resolver")]
     NoResolver,
 
+    /// A resolver exists and the user has not permitted grounding.
+    ///
+    /// Separate from [`Self::NoResolver`] on purpose. One says grounding is not set up and
+    /// the other says it is set up and was declined, and a client can do something about
+    /// exactly one of those.
+    #[error("grounding is not permitted: {0}")]
+    NotPermitted(String),
+
     /// A resolver ran and could not ground the query.
     #[error("could not resolve {query:?}: {reason}")]
     ResolveFailed {
@@ -69,6 +77,18 @@ pub enum Error {
     #[error("annotation belongs to another session")]
     NotOwner,
 
+    /// The session is already holding as many annotations as it may.
+    ///
+    /// Reported as `bad_schema` rather than getting a code of its own. A client that has
+    /// filled its allowance has sent a request the daemon cannot act on, which is what that
+    /// code means, and a new code is wire surface that cannot be taken back for a condition
+    /// nothing has hit yet.
+    #[error(
+        "this session already holds {0} annotations, which is the limit. Clear some before \
+         drawing more"
+    )]
+    TooManyAnnotations(usize),
+
     /// A platform renderer failed.
     #[error("renderer: {0}")]
     Renderer(String),
@@ -94,14 +114,17 @@ impl Error {
             Self::PayloadTooLarge => ErrorCode::PayloadTooLarge,
             Self::VersionUnsupported(_) => ErrorCode::VersionUnsupported,
             Self::NoResolver => ErrorCode::NoResolver,
+            Self::NotPermitted(_) => ErrorCode::NotPermitted,
             Self::ResolveFailed { .. } | Self::Resolver(_) => ErrorCode::ResolveFailed,
             Self::UnknownDisplay(_) => ErrorCode::UnknownDisplay,
             Self::NotOwner => ErrorCode::NotOwner,
             // Internal faults are not the client's fault, but there is no wire code for
             // "our problem" and inventing one would be a protocol change.
-            Self::Io(_) | Self::Renderer(_) | Self::Capture(_) | Self::PeerRejected(_) => {
-                ErrorCode::BadSchema
-            }
+            Self::Io(_)
+            | Self::Renderer(_)
+            | Self::Capture(_)
+            | Self::PeerRejected(_)
+            | Self::TooManyAnnotations(_) => ErrorCode::BadSchema,
         }
     }
 

@@ -1,11 +1,44 @@
 # Writing a resolver
 
-A resolver turns `"the Submit button"` into coordinates. Arin ships one, which asks a
-hosted Claude model. This is how to add another.
+A resolver turns `"the Submit button"` into coordinates. Arin ships two: `local`, which
+asks a model served on the same machine, and `claude`, which asks a hosted one with your
+own API key. This is how to add another.
 
 The whole surface is one trait and one registration call. If adding an adapter needs a
 change anywhere else in the tree, that is a bug in the seam rather than in your adapter,
 and it is worth reporting.
+
+## Using the ones that ship
+
+```sh
+arin resolvers                        # what this build has, and whether each one works
+arin daemon --resolver local          # grounds on this machine, sends nothing anywhere
+arin daemon --resolver claude         # grounds against a hosted model, uploads screenshots
+```
+
+Neither is on by default and neither is chosen by inference. A key in your environment is
+not consent, and nor is a model server happening to be running.
+
+`local` speaks the OpenAI shaped `/v1/chat/completions` API, which LM Studio, Ollama, vLLM,
+SGLang and llama.cpp's server all serve, so it works with whichever of those you already
+have. Load a UI TARS class grounding model and point it at the right port:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `ARIN_LOCAL_ENDPOINT` | `http://127.0.0.1:1234/v1/chat/completions` | Where your model server listens. Must be loopback. |
+| `ARIN_LOCAL_MODEL` | `ui-tars-1.5-7b` | The model name your server knows it by. |
+| `ARIN_LOCAL_COORDS` | `pixels` | `normalized` for a model that answers in thousandths, which UI TARS 1.0 does and 1.5 does not. |
+| `ARIN_LOCAL_STRUCTURED` | on | Set to `0` for a server that rejects `response_format`. Costs the confidence field, so every mark becomes a region. |
+
+An endpoint that is not `127.0.0.1`, `::1` or `localhost` is refused at startup rather than
+used, because `local` reports `is_remote() == false` and that has to be a fact about the
+resolver rather than a claim it makes.
+
+A UI TARS checkpoint answers with an action, `click(point='<point>512 384</point>')`,
+rather than with a rated JSON object. That is accepted, and it is also why marks from one
+come out as regions: an action carries no confidence, so there is no honest number to draw
+a precise mark from. A general vision model constrained to the schema reports one and gets
+the precise mark.
 
 ## The contract
 
@@ -60,8 +93,10 @@ bug in software of this kind, and it fails silently: every mark lands somewhere 
 and slightly wrong. Do the conversion in exactly one place and test it against a frame
 whose dimensions differ from its logical size in both axes.
 
-`arin_resolve::screenshot::Encoded` does this for the shipped adapter and is worth reading
-even if you do not use it.
+`arin_resolve::screenshot::Encoded` does this for both shipped adapters and is worth
+reading even if you do not use it. It is shared between them on purpose: two adapters
+quietly disagreeing about which corner a coordinate is measured from is exactly the bug
+this section is about, and one of them is always the one you did not test.
 
 ### Confidence decides what gets drawn
 
@@ -71,7 +106,10 @@ resolver that reports `1.0` for everything has turned the safety net off, and th
 it protects against is an orb sitting confidently on the wrong button.
 
 If your model does not produce a calibrated number, produce an honest uncalibrated one.
-Low is better than wrong.
+Low is better than wrong. The `local` adapter is the worked example: a UI TARS action has
+nowhere to put a confidence, so every one of them gets a constant below the threshold and
+draws a region. That is a placeholder for a measurement rather than a measurement, and it
+is documented as such where it is defined.
 
 ### Not finding it is a legitimate answer
 
@@ -102,14 +140,16 @@ startup that something is missing, with your own message, rather than at first u
 
 ## Testing it
 
-Everything except the network is testable without one, and the shipped adapter is laid out
-so that it is: `body()` builds a request, `read_answer()` parses a reply, and
-`into_resolution()` converts coordinates, none of which touch a socket. `resolve()` is a
-thin thing that calls them in order.
+Everything except the network is testable without one, and the shipped adapters are laid
+out so that it is: `body()` builds a request, `read_answer()` parses a reply, and
+`grounding::into_resolution()` converts coordinates, none of which touch a socket.
+`resolve()` is a thin thing that calls them in order.
 
 For the part that does need a socket, `crates/arin-resolve/tests/round_trip.rs` stands up
-a one-shot HTTP server on loopback and points the adapter at it, which covers the headers,
-the body, and the reply for the cost of forty lines and no API key. Copy it.
+a one-shot HTTP server on loopback and points an adapter at it, which covers the headers,
+the body, and the reply for the cost of forty lines and no API key. Copy it. Note that for
+`local` this is not a stand-in for anything: loopback HTTP is what it speaks in production,
+so the only thing being faked there is the model.
 
 Worth covering, because all of these have been wrong at some point:
 

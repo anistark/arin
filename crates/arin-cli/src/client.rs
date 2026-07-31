@@ -144,7 +144,11 @@ pub(crate) async fn run_client(config: Config, command: Command) -> Result<()> {
         Command::Displays | Command::Capture { .. } | Command::Permissions { .. } => {
             unreachable!("handled above")
         }
-        Command::Daemon { .. } | Command::Resolvers | Command::Status | Command::Mcp => {
+        Command::Daemon { .. }
+        | Command::Resolvers
+        | Command::Status
+        | Command::Mcp
+        | Command::Diagnose { .. } => {
             unreachable!("handled above")
         }
     };

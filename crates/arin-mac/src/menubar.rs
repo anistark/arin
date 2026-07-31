@@ -25,6 +25,7 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 /// What the menu bar calls when the user asks for a clear.
 ///
@@ -47,12 +48,25 @@ static QUIT: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 /// session or an annotation is, and the daemon has no business knowing about menus.
 static STATUS: OnceLock<Box<dyn Fn() -> String + Send + Sync>> = OnceLock::new();
 
-/// Where the two live lines sit in the menu, so the delegate can find them again.
+/// What the menu bar asks for the state of the grounding permission.
+///
+/// `None` means nothing is granted. A duration means a grant is running down, and the item
+/// becomes a way to take it back.
+static GROUNDING: OnceLock<Box<dyn Fn() -> Option<Duration> + Send + Sync>> = OnceLock::new();
+
+/// What the menu bar calls to take a grounding grant back.
+///
+/// The promise the consent prompt makes. A grant nobody can revoke is one people will not
+/// give in the first place, so this is part of the prompt working rather than a nicety.
+static REVOKE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// Where the live lines sit in the menu, so the delegate can find them again.
 ///
 /// Positions rather than retained handles, because `menuNeedsUpdate:` is handed the menu
 /// and nothing else. Keep these in step with `MenuBar::install`.
 const STATUS_INDEX: isize = 1;
 const PERMISSION_INDEX: isize = 2;
+const GROUNDING_INDEX: isize = 3;
 
 /// Retitle a menu item, doing nothing if the menu has been rearranged underneath us.
 fn set_title(menu: &NSMenu, index: isize, title: &str) {
@@ -75,6 +89,19 @@ pub fn on_clear(handler: impl Fn() + Send + Sync + 'static) {
 pub fn on_quit(handler: impl Fn() + Send + Sync + 'static) {
     if QUIT.set(Box::new(handler)).is_err() {
         tracing::warn!("a quit handler was already registered");
+    }
+}
+
+/// Register how to read and revoke the grounding permission.
+///
+/// Two halves of one item: it reports what is granted and, when something is, clicking it
+/// takes that back.
+pub fn on_grounding(
+    state: impl Fn() -> Option<Duration> + Send + Sync + 'static,
+    revoke: impl Fn() + Send + Sync + 'static,
+) {
+    if GROUNDING.set(Box::new(state)).is_err() || REVOKE.set(Box::new(revoke)).is_err() {
+        tracing::warn!("a grounding handler was already registered");
     }
 }
 
@@ -126,6 +153,24 @@ define_class!(
                 // Only actionable when there is something to fix.
                 item.setEnabled(!granted);
             }
+
+            // The other half of the consent prompt's promise. It says a grant can be taken
+            // back from here, so here has to show one and take it back.
+            let grant = GROUNDING.get().and_then(|state| state());
+            set_title(
+                menu,
+                GROUNDING_INDEX,
+                &match grant {
+                    Some(left) => format!(
+                        "Screen access granted, {} left. Revoke",
+                        remaining(left)
+                    ),
+                    None => "Screen access: asks each time".to_owned(),
+                },
+            );
+            if let Some(item) = menu.itemAtIndex(GROUNDING_INDEX) {
+                item.setEnabled(grant.is_some());
+            }
         }
     }
 
@@ -137,6 +182,14 @@ define_class!(
                 // The menu is built before the daemon, so this is reachable only if the
                 // daemon failed to start. Saying so beats a menu item that does nothing.
                 None => tracing::warn!("clear requested before the daemon was ready"),
+            }
+        }
+
+        #[unsafe(method(revokeGrounding:))]
+        fn revoke_grounding(&self, _sender: Option<&AnyObject>) {
+            match REVOKE.get() {
+                Some(revoke) => revoke(),
+                None => tracing::warn!("revoke requested before the daemon was ready"),
             }
         }
 
@@ -214,6 +267,11 @@ impl MenuBar {
         );
         unsafe { permission.setTarget(Some(&actions)) };
         menu.addItem(&permission);
+
+        // Index 3, also rewritten every time the menu opens.
+        let grounding = menu_item(mtm, "Screen access", Some(sel!(revokeGrounding:)), "");
+        unsafe { grounding.setTarget(Some(&actions)) };
+        menu.addItem(&grounding);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
@@ -325,4 +383,30 @@ fn template_icon() -> Option<Retained<NSImage>> {
         &cg,
         CGSize::new(POINTS, POINTS),
     ))
+}
+
+/// How long a grant has left, in words rather than seconds.
+///
+/// A menu item is read at a glance, and "3512s" is not something anyone converts in their
+/// head while deciding whether to revoke something.
+fn remaining(left: Duration) -> String {
+    let seconds = left.as_secs();
+    if seconds >= 90 {
+        format!("{} min", seconds.div_ceil(60))
+    } else {
+        format!("{seconds} sec")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_grant_is_described_in_units_somebody_can_read_at_a_glance() {
+        assert_eq!(remaining(Duration::from_secs(3600)), "60 min");
+        assert_eq!(remaining(Duration::from_secs(90)), "2 min");
+        assert_eq!(remaining(Duration::from_secs(89)), "89 sec");
+        assert_eq!(remaining(Duration::from_secs(1)), "1 sec");
+    }
 }

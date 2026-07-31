@@ -51,6 +51,11 @@
 //! Blue belongs to the orb. An annotation in the orb's own colour reads as part of the
 //! orb rather than as a separate mark, and the whole visual grammar rests on those being
 //! two different things.
+//!
+//! This survives configuration. A [`Palette`] a user writes is checked the same way the
+//! built-in one is tested, and a blue entry is refused with an explanation rather than
+//! accepted and quietly dropped. Refusing is the honest answer: silently removing the
+//! colour someone asked for leaves them watching marks come out amber and wondering why.
 
 use crate::traits::Frame;
 use arin_protocol::{LogicalPoint, LogicalRect};
@@ -187,6 +192,103 @@ pub const PALETTE: &[Rgb] = &[
     Rgb::new(0xF5, 0xF5, 0xF7), // near white
     Rgb::new(0x1C, 0x1C, 0x1E), // near black
 ];
+
+/// Why a configured palette was refused.
+///
+/// Its own error type rather than a variant of [`crate::Error`], which exists to map onto
+/// the wire. A palette is read once at startup and a bad one never reaches a client, so
+/// giving it a wire code would mean inventing a code no client can ever receive.
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum PaletteError {
+    /// A colour was not `#RRGGBB`.
+    #[error("{0:?} is not a colour. Colours are written #RRGGBB, for example #FFB020")]
+    NotAColor(String),
+
+    /// A colour was in the range reserved for the orb.
+    #[error(
+        "{0} is in the blue family, which belongs to the orb. A mark in the orb's own \
+         colour reads as part of the orb rather than as a separate mark, so blue is \
+         reserved. Pick a hue outside 185 to 265 degrees, or desaturate it below 20 percent"
+    )]
+    ReservedBlue(Rgb),
+
+    /// Nothing was given.
+    #[error("a palette needs at least one colour")]
+    Empty,
+}
+
+/// The colours a daemon may draw a mark in, in preference order.
+///
+/// The first entry is what marks are drawn in unless it cannot be seen against what is
+/// under them, and the rest are what the picker may fall back to. That ordering is not a
+/// convention this type imposes on the built-in palette: it is the same rule, which is why
+/// there is one list rather than a preferred colour and a separate set of alternatives.
+///
+/// Every entry is checked once, here, so nothing downstream re-validates. In particular
+/// [`pick`] can assume no candidate is blue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Palette {
+    colors: Vec<Rgb>,
+}
+
+impl Default for Palette {
+    fn default() -> Self {
+        Self {
+            colors: PALETTE.to_vec(),
+        }
+    }
+}
+
+impl Palette {
+    /// Build a palette in preference order.
+    pub fn new(colors: Vec<Rgb>) -> Result<Self, PaletteError> {
+        if colors.is_empty() {
+            return Err(PaletteError::Empty);
+        }
+        if let Some(blue) = colors.iter().find(|color| color.is_blue_family()) {
+            return Err(PaletteError::ReservedBlue(*blue));
+        }
+        Ok(Self { colors })
+    }
+
+    /// Read a comma separated list of `#RRGGBB`, in preference order.
+    pub fn parse(spec: &str) -> Result<Self, PaletteError> {
+        let colors = spec
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| Rgb::parse(entry).ok_or_else(|| PaletteError::NotAColor(entry.to_owned())))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::new(colors)
+    }
+
+    /// The built-in palette, with `color` moved to the front.
+    ///
+    /// What someone naming one colour almost always means. They want their marks drawn in
+    /// it, not to give up every fallback the picker has, so the alternatives stay and only
+    /// the preference changes.
+    pub fn preferring(color: Rgb) -> Result<Self, PaletteError> {
+        let mut colors = vec![color];
+        colors.extend(PALETTE.iter().copied().filter(|entry| *entry != color));
+        Self::new(colors)
+    }
+
+    /// The colour marks are drawn in unless it cannot be seen.
+    pub fn preferred(&self) -> Rgb {
+        // Non-empty by construction, and `new` is the only way in.
+        self.colors[0]
+    }
+
+    /// Every colour the picker may choose, preferred first.
+    pub fn candidates(&self) -> &[Rgb] {
+        &self.colors
+    }
+
+    /// Whether this is what ships, rather than something configured.
+    pub fn is_builtin(&self) -> bool {
+        self.colors == PALETTE
+    }
+}
 
 /// Samples taken across a filled area, per axis.
 ///
@@ -412,9 +514,10 @@ const LEGIBLE: f64 = 3.0;
 /// Within a part the score is the median, so a minority of awkward pixels is outvoted.
 /// Across parts it is the worst, so an edge that has gone invisible is not.
 ///
-/// Returns [`DEFAULT`] when the frame is empty or unreadable, since a mark in the usual
-/// colour beats no mark at all.
-pub fn pick(frame: &Frame, footprint: &Footprint) -> Rgb {
+/// Returns the palette's preferred colour when the frame is empty or unreadable, since a
+/// mark in the usual colour beats no mark at all.
+pub fn pick(frame: &Frame, footprint: &Footprint, palette: &Palette) -> Rgb {
+    let preferred = palette.preferred();
     let parts: Vec<Vec<Rgb>> = footprint
         .parts()
         .iter()
@@ -422,7 +525,7 @@ pub fn pick(frame: &Frame, footprint: &Footprint) -> Rgb {
         .filter(|samples| !samples.is_empty())
         .collect();
     if parts.is_empty() {
-        return DEFAULT;
+        return preferred;
     }
 
     // The typical pixel of the least forgiving part. See the module docs for why the
@@ -438,15 +541,16 @@ pub fn pick(frame: &Frame, footprint: &Footprint) -> Rgb {
             .fold(f64::INFINITY, f64::min)
     };
 
-    if score(&DEFAULT) >= LEGIBLE {
-        return DEFAULT;
+    if score(&preferred) >= LEGIBLE {
+        return preferred;
     }
 
-    PALETTE
+    palette
+        .candidates()
         .iter()
         .copied()
         .max_by(|a, b| score(a).total_cmp(&score(b)))
-        .unwrap_or(DEFAULT)
+        .unwrap_or(preferred)
 }
 
 /// Read the frame at a set of logical positions.
@@ -493,6 +597,12 @@ mod tests {
     use super::*;
     use arin_protocol::DisplayId;
     use std::sync::Arc;
+
+    /// Every test below is about the built-in palette unless it says otherwise, so this
+    /// shadows [`super::pick`] rather than repeating the argument three dozen times.
+    fn pick(frame: &Frame, footprint: &Footprint) -> Rgb {
+        super::pick(frame, footprint, &Palette::default())
+    }
 
     /// A frame filled with one colour.
     fn flat(color: Rgb) -> Frame {
@@ -960,5 +1070,164 @@ mod tests {
         for bad in ["FFB020", "#FFB", "#GGGGGG", "#FFB0200", "", "#"] {
             assert_eq!(Rgb::parse(bad), None, "{bad:?} should not parse");
         }
+    }
+
+    // configured palettes
+
+    #[test]
+    fn the_default_palette_is_what_ships() {
+        let palette = Palette::default();
+        assert_eq!(palette.preferred(), DEFAULT);
+        assert_eq!(palette.candidates(), PALETTE);
+        assert!(palette.is_builtin());
+    }
+
+    #[test]
+    fn a_palette_is_read_in_preference_order() {
+        let palette = Palette::parse("#FF2D95, #30D158,#F5F5F7").expect("all three are colours");
+        assert_eq!(palette.preferred(), Rgb::new(0xFF, 0x2D, 0x95));
+        assert_eq!(palette.candidates().len(), 3);
+        assert!(!palette.is_builtin());
+    }
+
+    /// The reservation rule, which is the whole reason this is validated rather than
+    /// accepted. A mark in the orb's own colour reads as part of the orb.
+    #[test]
+    fn a_configured_blue_is_refused_and_says_why() {
+        // The orb's own three, and a blue nobody would think twice about.
+        for blue in ["#1E3A8A", "#3B82F6", "#7FE3FF", "#0000FF"] {
+            let error = Palette::parse(blue)
+                .err()
+                .unwrap_or_else(|| panic!("{blue} must be refused"));
+            assert!(
+                matches!(error, PaletteError::ReservedBlue(_)),
+                "{blue} got {error:?}"
+            );
+            assert!(
+                error.to_string().contains("belongs to the orb"),
+                "the reason is the useful part, got {error}"
+            );
+        }
+    }
+
+    /// Refused, not silently dropped. Removing the colour someone asked for and carrying
+    /// on leaves them watching marks come out amber with nothing to explain it.
+    #[test]
+    fn a_blue_anywhere_in_a_palette_refuses_the_whole_palette() {
+        let error = Palette::parse("#FFB020,#3B82F6,#30D158").unwrap_err();
+        assert_eq!(
+            error,
+            PaletteError::ReservedBlue(Rgb::new(0x3B, 0x82, 0xF6))
+        );
+    }
+
+    /// A grey has no meaningful hue, so it is not caught by the blue rule however its
+    /// components fall. Near white and near black are both in the built-in palette.
+    #[test]
+    fn a_grey_is_not_caught_by_the_blue_rule() {
+        assert!(Palette::parse("#1C1C1E,#F5F5F7").is_ok());
+    }
+
+    #[test]
+    fn a_malformed_colour_names_itself() {
+        let error = Palette::parse("#FFB020,not-a-colour").unwrap_err();
+        assert_eq!(error, PaletteError::NotAColor("not-a-colour".into()));
+        assert!(error.to_string().contains("#RRGGBB"), "got {error}");
+    }
+
+    #[test]
+    fn an_empty_palette_is_refused() {
+        assert_eq!(Palette::parse("").unwrap_err(), PaletteError::Empty);
+        assert_eq!(Palette::parse(" , , ").unwrap_err(), PaletteError::Empty);
+        assert_eq!(Palette::new(Vec::new()).unwrap_err(), PaletteError::Empty);
+    }
+
+    /// Naming one colour means "draw my marks in this", not "give up every alternative
+    /// when this cannot be seen".
+    #[test]
+    fn preferring_a_colour_keeps_the_fallbacks() {
+        let green = Rgb::new(0x30, 0xD1, 0x58);
+        let palette = Palette::preferring(green).expect("green is not blue");
+
+        assert_eq!(palette.preferred(), green);
+        assert_eq!(
+            palette.candidates().len(),
+            PALETTE.len(),
+            "green was already in the built-in palette and must not appear twice"
+        );
+        for fallback in PALETTE {
+            assert!(
+                palette.candidates().contains(fallback),
+                "{fallback} was lost"
+            );
+        }
+    }
+
+    #[test]
+    fn preferring_a_colour_from_outside_the_palette_adds_it() {
+        let teal = Rgb::new(0x00, 0xC7, 0xA8);
+        let palette = Palette::preferring(teal).expect("teal is not blue");
+        assert_eq!(palette.preferred(), teal);
+        assert_eq!(palette.candidates().len(), PALETTE.len() + 1);
+    }
+
+    #[test]
+    fn preferring_a_blue_is_refused_like_any_other() {
+        assert!(matches!(
+            Palette::preferring(Rgb::new(0x3B, 0x82, 0xF6)),
+            Err(PaletteError::ReservedBlue(_))
+        ));
+    }
+
+    /// The picker answers to the configured palette rather than to the constants, which is
+    /// the only thing about this feature a user can actually see.
+    #[test]
+    fn a_configured_palette_decides_what_gets_drawn() {
+        let green = Rgb::new(0x30, 0xD1, 0x58);
+        let palette = Palette::preferring(green).expect("green is not blue");
+        let dark = flat(Rgb::new(0x1E, 0x1E, 0x1E));
+
+        assert_eq!(
+            super::pick(&dark, &whole(&dark), &palette),
+            green,
+            "a legible preferred colour is kept, whoever chose it"
+        );
+
+        // And it still moves off green when green is what is underneath.
+        let on_green = flat(green);
+        assert_ne!(super::pick(&on_green, &whole(&on_green), &palette), green);
+    }
+
+    /// A palette of one has nowhere to fall back to, which is a legitimate thing to ask
+    /// for and must not be mistaken for a reason to reach for the built-in list.
+    #[test]
+    fn a_single_colour_palette_stays_on_that_colour() {
+        let palette = Palette::parse("#FF3B30").expect("red is a colour");
+        let red = Rgb::new(0xFF, 0x3B, 0x30);
+        let on_red = flat(red);
+        assert_eq!(super::pick(&on_red, &whole(&on_red), &palette), red);
+    }
+
+    /// An empty frame falls back to the palette's own preferred colour rather than to
+    /// amber, which would be the built-in default leaking through.
+    #[test]
+    fn an_unreadable_frame_falls_back_to_the_configured_colour() {
+        let palette = Palette::parse("#FF3B30,#30D158").expect("both are colours");
+        let empty = Frame {
+            display: DisplayId(1),
+            scale: 1.0,
+            logical_size: [0.0, 0.0],
+            width: 0,
+            height: 0,
+            pixels: Arc::from(Vec::new()),
+        };
+        assert_eq!(
+            super::pick(
+                &empty,
+                &Footprint::Area(LogicalRect::new(0.0, 0.0, 10.0, 10.0)),
+                &palette
+            ),
+            Rgb::new(0xFF, 0x3B, 0x30)
+        );
     }
 }

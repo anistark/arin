@@ -4,6 +4,7 @@
 //! client subcommands speak the same protocol an agent would, which makes them the
 //! quickest way to check that a change actually works.
 
+mod bundle;
 mod cli;
 mod client;
 mod daemon;
@@ -38,11 +39,36 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Command::Daemon { headless, resolver } => {
+        Command::Daemon {
+            headless,
+            resolver,
+            color,
+            palette,
+            grounding_consent,
+            no_adaptive_color,
+        } => {
             config.resolver = resolver;
+            config.adaptive_color = !no_adaptive_color;
+            config.palette = configured_palette(color.as_deref(), palette.as_deref())?;
+            if let Some(consent) = grounding_consent {
+                config.grounding =
+                    arin_core::Consent::parse(&consent).map_err(|e| anyhow::anyhow!(e))?;
+            }
             daemon::start_daemon(config, headless)
         }
         Command::Resolvers => diagnose::list_resolvers(),
+        // Reads the same settings a daemon started here would, so a palette or a resolver
+        // named in the environment shows up in the report rather than being invisible to
+        // it. Nothing is sent anywhere.
+        Command::Diagnose { output } => {
+            config.resolver = std::env::var("ARIN_RESOLVER").ok();
+            config.palette = configured_palette(
+                std::env::var("ARIN_COLOR").ok().as_deref(),
+                std::env::var("ARIN_PALETTE").ok().as_deref(),
+            )
+            .unwrap_or_default();
+            bundle::diagnose(&config, output.as_deref())
+        }
         // Its own session, its own transport, and stdout it must not share. Logging is
         // already on stderr above, which is what makes that safe.
         Command::Mcp => block_on(arin_mcp::serve(&config.socket_path)),
@@ -51,9 +77,36 @@ fn main() -> Result<()> {
         #[cfg(target_os = "macos")]
         Command::Permissions { open } => diagnose::check_permissions(&config, open),
         #[cfg(target_os = "macos")]
-        Command::Capture { display, probe } => diagnose::capture_once(display, probe),
+        Command::Capture {
+            display,
+            probe,
+            save,
+        } => diagnose::capture_once(display, probe, save.as_deref()),
         other => block_on(client::run_client(config, other)),
     }
+}
+
+/// Work out the palette from what was asked for on the command line.
+///
+/// A full palette wins over a single colour, because someone who wrote both has said the
+/// more specific thing. A single colour keeps the built-in fallbacks and only moves to the
+/// front of them, which is what naming one colour nearly always means: draw my marks in
+/// this, not give up every alternative when this cannot be seen.
+///
+/// A refusal is fatal rather than a warning. Starting anyway would mean drawing in a colour
+/// nobody chose, and the person who typed it is watching this terminal right now.
+fn configured_palette(color: Option<&str>, palette: Option<&str>) -> Result<arin_core::Palette> {
+    use arin_core::{Palette, Rgb};
+
+    if let Some(spec) = palette {
+        return Ok(Palette::parse(spec)?);
+    }
+    let Some(color) = color else {
+        return Ok(Palette::default());
+    };
+    let parsed = Rgb::parse(color)
+        .with_context(|| format!("{color:?} is not a colour. Colours are written #RRGGBB"))?;
+    Ok(Palette::preferring(parsed)?)
 }
 
 fn block_on<F: std::future::Future<Output = Result<()>>>(future: F) -> Result<()> {

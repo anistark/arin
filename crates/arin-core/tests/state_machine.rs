@@ -4,8 +4,8 @@
 //! daemon is exercised here through the platform traits, on any target, in milliseconds.
 
 use arin_core::{
-    Annotation, Capture, Config, Connection, Daemon, Error, Frame, OrbState, Renderer, Rendering,
-    Resolution, Resolver, Result, Rgb, ScrollWatcher,
+    Annotation, Approver, Capture, Config, Connection, Consent, Daemon, Decision, Error, Frame,
+    OrbState, Renderer, Rendering, Resolution, Resolver, Result, Rgb, ScrollWatcher,
 };
 use arin_protocol::*;
 use futures::future::BoxFuture;
@@ -75,6 +75,29 @@ impl Capture for FakeCapture {
     }
 }
 
+/// The same frames, plus a tally of how many were asked for.
+///
+/// The only way to assert that a refused request never read the screen. An approver saying
+/// no and a capture never happening are two different claims, and the second is the one the
+/// security finding is about.
+#[derive(Default)]
+struct CountingCapture {
+    taken: Mutex<usize>,
+}
+
+impl CountingCapture {
+    fn count(&self) -> usize {
+        *self.taken.lock().unwrap()
+    }
+}
+
+impl Capture for CountingCapture {
+    fn capture(&self, display: DisplayId) -> Result<Frame> {
+        *self.taken.lock().unwrap() += 1;
+        FakeCapture.capture(display)
+    }
+}
+
 struct FakeResolver {
     confidence: f64,
 }
@@ -100,6 +123,64 @@ impl Resolver for FakeResolver {
                 confidence: self.confidence,
             })
         })
+    }
+}
+
+/// An approver that answers the same way every time, and counts how often it was asked.
+///
+/// The count is the interesting half. Whether a grant actually spares the user a second
+/// prompt is not visible from the answer, only from how many times the question was put.
+struct FakeApprover {
+    answer: Decision,
+    asked: Mutex<Vec<String>>,
+}
+
+impl FakeApprover {
+    fn new(answer: Decision) -> Arc<Self> {
+        Arc::new(Self {
+            answer,
+            asked: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn times_asked(&self) -> usize {
+        self.asked.lock().unwrap().len()
+    }
+}
+
+impl Approver for FakeApprover {
+    fn ask<'a>(&'a self, request: &'a arin_core::consent::Request) -> BoxFuture<'a, Decision> {
+        self.asked.lock().unwrap().push(request.query.clone());
+        Box::pin(async move { self.answer })
+    }
+}
+
+/// A daemon that will ground if the user says so, with a resolver behind it.
+fn asking(approver: Arc<FakeApprover>) -> Arc<Daemon> {
+    Arc::new(
+        Daemon::new(
+            Config {
+                grounding: Consent::Ask,
+                ..Config::with_socket_path("/tmp/arin-test.sock")
+            },
+            Arc::new(FakeRenderer::default()),
+            Arc::new(FakeCapture),
+        )
+        .with_resolver(Arc::new(FakeResolver { confidence: 0.94 }))
+        .with_approver(approver),
+    )
+}
+
+/// A config that grounds without asking.
+///
+/// Spelled out in every test that grounds, rather than being the default, because the
+/// default is to ask and a test has nobody to ask. Making the tests say so is what stops
+/// the gate quietly regressing to open: a test that grounded because consent defaulted to
+/// yes would pass for the wrong reason.
+fn grounding_allowed() -> Config {
+    Config {
+        grounding: Consent::Always,
+        ..Config::with_socket_path("/tmp/arin-test.sock")
     }
 }
 
@@ -225,12 +306,8 @@ async fn the_query_form_needs_a_resolver() {
 async fn a_confident_resolution_points_precisely() {
     let renderer = Arc::new(FakeRenderer::default());
     let daemon = Arc::new(
-        Daemon::new(
-            Config::with_socket_path("/tmp/arin-test.sock"),
-            renderer.clone(),
-            Arc::new(FakeCapture),
-        )
-        .with_resolver(Arc::new(FakeResolver { confidence: 0.94 })),
+        Daemon::new(grounding_allowed(), renderer.clone(), Arc::new(FakeCapture))
+            .with_resolver(Arc::new(FakeResolver { confidence: 0.94 })),
     );
     let mut conn = started(daemon).await;
 
@@ -259,12 +336,8 @@ async fn a_confident_resolution_points_precisely() {
 async fn an_unsure_resolution_falls_back_to_a_region() {
     let renderer = Arc::new(FakeRenderer::default());
     let daemon = Arc::new(
-        Daemon::new(
-            Config::with_socket_path("/tmp/arin-test.sock"),
-            renderer.clone(),
-            Arc::new(FakeCapture),
-        )
-        .with_resolver(Arc::new(FakeResolver { confidence: 0.42 })),
+        Daemon::new(grounding_allowed(), renderer.clone(), Arc::new(FakeCapture))
+            .with_resolver(Arc::new(FakeResolver { confidence: 0.42 })),
     );
     let mut conn = started(daemon).await;
 
@@ -1258,13 +1331,24 @@ async fn without_a_capture_marks_are_followed_unverified() {
 /// than backing the daemon up behind it.
 #[tokio::test]
 async fn a_client_that_stops_reading_loses_the_oldest_and_is_told() {
-    let (daemon, _) = daemon();
+    // Comfortably past the backlog, which is 256.
+    const MARKS: usize = 300;
+
+    // The per-session cap is lifted here rather than the default being raised, because the
+    // two limits are the same size on purpose: 256 marks from one session is already far
+    // past anything real, so a single session cannot overflow the backlog by drawing. This
+    // is deliberately reaching a path that a well behaved client cannot.
+    let daemon = Arc::new(Daemon::new(
+        Config {
+            max_annotations_per_session: MARKS,
+            ..Config::with_socket_path("/tmp/arin-test.sock")
+        },
+        Arc::new(FakeRenderer::default()),
+        Arc::new(FakeCapture),
+    ));
     let mut conn = started(daemon.clone()).await;
     // Subscribed and then deliberately never drained.
     let mut listener = daemon.subscribe();
-
-    // Comfortably past the backlog, which is 256.
-    const MARKS: usize = 300;
     for i in 0..MARKS {
         conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
             LogicalRect::new(i as f64, 1.0, 10.0, 10.0),
@@ -1316,4 +1400,320 @@ fn anchor_of(renderer: &FakeRenderer, id: &AnnotationId) -> LogicalRect {
         .get(id)
         .copied()
         .expect("the mark has been drawn at least once")
+}
+
+// the capability split
+
+/// The finding this whole gate exists for. A client with no screen access of its own can
+/// ask the daemon what is on screen, and the daemon holds the Screen Recording grant.
+#[tokio::test]
+async fn grounding_is_refused_until_the_user_allows_it() {
+    let approver = FakeApprover::new(Decision::Deny);
+    let mut conn = started(asking(approver.clone())).await;
+
+    let error = conn
+        .handle(wrap(ClientMessage::Point(Point::query(
+            "the row showing the account balance",
+            DISPLAY,
+        ))))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::NotPermitted);
+    assert_eq!(
+        approver.times_asked(),
+        1,
+        "the user has to actually be asked"
+    );
+}
+
+/// The other half of the split, and the reason drawing is not gated: a same-uid process
+/// could open its own window and draw anyway, so gating it costs a setup step and buys
+/// nothing. A daemon that refuses grounding must still draw.
+#[tokio::test]
+async fn drawing_is_never_gated_even_when_grounding_is_refused() {
+    let approver = FakeApprover::new(Decision::Deny);
+    let mut conn = started(asking(approver.clone())).await;
+
+    for message in [
+        ClientMessage::Point(Point::at(412.0, 88.0, DISPLAY)),
+        ClientMessage::Highlight(Highlight::over(
+            LogicalRect::new(10.0, 10.0, 100.0, 40.0),
+            DISPLAY,
+        )),
+    ] {
+        conn.handle(wrap(message))
+            .await
+            .expect("drawing is not a privilege and must not be gated");
+    }
+    assert_eq!(
+        approver.times_asked(),
+        0,
+        "drawing must not put a consent prompt in front of anyone"
+    );
+}
+
+#[tokio::test]
+async fn an_allowed_query_grounds() {
+    let approver = FakeApprover::new(Decision::Once);
+    let mut conn = started(asking(approver.clone())).await;
+
+    let reply = conn
+        .handle(wrap(ClientMessage::Point(Point::query(
+            "the Submit button",
+            DISPLAY,
+        ))))
+        .await
+        .expect("the user said yes");
+
+    let DaemonMessage::Ack(ack) = reply else {
+        panic!("expected an ack, got {reply:?}");
+    };
+    assert_eq!(ack.confidence, Some(0.94));
+}
+
+/// Allowing once means once. Treating it as a window would silently widen what somebody
+/// agreed to, which is the failure mode a consent prompt cannot afford.
+#[tokio::test]
+async fn allowing_once_asks_again_next_time() {
+    let approver = FakeApprover::new(Decision::Once);
+    let mut conn = started(asking(approver.clone())).await;
+
+    for _ in 0..3 {
+        conn.handle(wrap(ClientMessage::Point(Point::query("a thing", DISPLAY))))
+            .await
+            .expect("allowed each time");
+    }
+    assert_eq!(approver.times_asked(), 3);
+}
+
+/// The shape that makes this usable at all. Every CLI command is a new session, so an
+/// approval that did not outlive one would mean a prompt per command, and a control people
+/// turn off is worse than a weaker one they leave on.
+#[tokio::test]
+async fn a_granted_window_covers_later_requests_and_survives_a_new_session() {
+    let approver = FakeApprover::new(Decision::For(std::time::Duration::from_secs(3600)));
+    let daemon = asking(approver.clone());
+
+    let mut first = started(daemon.clone()).await;
+    first
+        .handle(wrap(ClientMessage::Point(Point::query("a thing", DISPLAY))))
+        .await
+        .expect("the user granted an hour");
+
+    // A different connection, a different session, the same daemon. This is what a second
+    // `arin point "..."` looks like from here.
+    let mut second = started(daemon.clone()).await;
+    second
+        .handle(wrap(ClientMessage::Point(Point::query(
+            "another thing",
+            DISPLAY,
+        ))))
+        .await
+        .expect("still inside the window");
+
+    assert_eq!(
+        approver.times_asked(),
+        1,
+        "a granted window must not re-prompt, or nobody will leave it on"
+    );
+    assert!(daemon.grounding_grant().is_some());
+}
+
+/// The user's route out. Granting an hour has to be a decision they can take back rather
+/// than one they have to wait out, which is what the menu bar item is for.
+#[tokio::test]
+async fn a_grant_can_be_revoked_and_then_the_user_is_asked_again() {
+    let approver = FakeApprover::new(Decision::For(std::time::Duration::from_secs(3600)));
+    let daemon = asking(approver.clone());
+    let mut conn = started(daemon.clone()).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::query("a thing", DISPLAY))))
+        .await
+        .unwrap();
+    assert_eq!(approver.times_asked(), 1);
+
+    assert!(daemon.revoke_grounding());
+    assert!(daemon.grounding_grant().is_none());
+    assert!(!daemon.revoke_grounding(), "revoking twice reports nothing");
+
+    conn.handle(wrap(ClientMessage::Point(Point::query("a thing", DISPLAY))))
+        .await
+        .unwrap();
+    assert_eq!(
+        approver.times_asked(),
+        2,
+        "the window is gone, so ask again"
+    );
+}
+
+/// A gate that opens when nobody is watching is not a gate. This is the case that matters
+/// most, because it is what a daemon started by a script looks like.
+#[tokio::test]
+async fn a_daemon_with_nobody_to_ask_refuses_rather_than_assuming_yes() {
+    let daemon = Arc::new(
+        Daemon::new(
+            Config {
+                grounding: Consent::Ask,
+                ..Config::with_socket_path("/tmp/arin-test.sock")
+            },
+            Arc::new(FakeRenderer::default()),
+            Arc::new(FakeCapture),
+        )
+        .with_resolver(Arc::new(FakeResolver { confidence: 0.94 })),
+    );
+    let mut conn = started(daemon).await;
+
+    let error = conn
+        .handle(wrap(ClientMessage::Point(Point::query("a thing", DISPLAY))))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::NotPermitted);
+    assert!(
+        error.to_string().contains("--grounding-consent always"),
+        "the refusal has to say how to allow it, got {error}"
+    );
+}
+
+/// `never` and "no resolver configured" are different states and a client can do something
+/// about exactly one of them, so they must not report the same code.
+#[tokio::test]
+async fn a_refusal_is_distinguishable_from_having_no_resolver() {
+    let refusing = Arc::new(
+        Daemon::new(
+            Config {
+                grounding: Consent::Never,
+                ..Config::with_socket_path("/tmp/arin-test.sock")
+            },
+            Arc::new(FakeRenderer::default()),
+            Arc::new(FakeCapture),
+        )
+        .with_resolver(Arc::new(FakeResolver { confidence: 0.94 })),
+    );
+    let mut conn = started(refusing).await;
+    let refused = conn
+        .handle(wrap(ClientMessage::Point(Point::query("a thing", DISPLAY))))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::NotPermitted);
+
+    // Whereas a daemon with no resolver at all still says so.
+    let (bare, _) = daemon();
+    let mut conn = started(bare).await;
+    let missing = conn
+        .handle(wrap(ClientMessage::Point(Point::query("a thing", DISPLAY))))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), ErrorCode::NoResolver);
+}
+
+/// The ordering the finding turns on. Grounding is a privilege because it makes Arin read
+/// the screen, so a refused request must not have read it already.
+#[tokio::test]
+async fn a_refused_request_never_captures_the_screen() {
+    let approver = FakeApprover::new(Decision::Deny);
+    let capture = Arc::new(CountingCapture::default());
+    let daemon = Arc::new(
+        Daemon::new(
+            Config {
+                grounding: Consent::Ask,
+                // Off, so the only thing that could take a frame is the resolve itself.
+                adaptive_color: false,
+                ..Config::with_socket_path("/tmp/arin-test.sock")
+            },
+            Arc::new(FakeRenderer::default()),
+            capture.clone(),
+        )
+        .with_resolver(Arc::new(FakeResolver { confidence: 0.94 }))
+        .with_approver(approver),
+    );
+    let mut conn = started(daemon).await;
+
+    conn.handle(wrap(ClientMessage::Point(Point::query(
+        "the row showing the account balance",
+        DISPLAY,
+    ))))
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        capture.count(),
+        0,
+        "the screen was read for a request the user refused"
+    );
+}
+
+/// A bound on how much of the screen one client can paper over. A nuisance rather than a
+/// hole, since the clear affordance and the TTL sweep both belong to the user, but cheap to
+/// bound and awkward to explain afterwards.
+#[tokio::test]
+async fn a_session_cannot_hold_unlimited_annotations() {
+    let renderer = Arc::new(FakeRenderer::default());
+    let daemon = Arc::new(Daemon::new(
+        Config {
+            max_annotations_per_session: 3,
+            ..Config::with_socket_path("/tmp/arin-test.sock")
+        },
+        renderer.clone(),
+        Arc::new(FakeCapture),
+    ));
+    let mut conn = started(daemon.clone()).await;
+
+    for _ in 0..3 {
+        conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+            .await
+            .expect("inside the allowance");
+    }
+
+    let error = conn
+        .handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("limit"), "got {error}");
+
+    // Refused before the renderer was asked, so nothing was drawn and then forgotten.
+    assert_eq!(renderer.drawn.lock().unwrap().len(), 3);
+    assert_eq!(daemon.annotation_count(), 3);
+
+    // And clearing makes room again, which is what the message tells the client to do.
+    conn.handle(wrap(ClientMessage::Clear(Clear::all())))
+        .await
+        .unwrap();
+    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .expect("room was made");
+}
+
+/// Per session, so one runaway client cannot refuse marks to a well behaved one that
+/// happens to share a daemon.
+#[tokio::test]
+async fn one_session_filling_up_does_not_refuse_another() {
+    let daemon = Arc::new(Daemon::new(
+        Config {
+            max_annotations_per_session: 2,
+            ..Config::with_socket_path("/tmp/arin-test.sock")
+        },
+        Arc::new(FakeRenderer::default()),
+        Arc::new(FakeCapture),
+    ));
+
+    let mut greedy = started(daemon.clone()).await;
+    for _ in 0..2 {
+        greedy
+            .handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+            .await
+            .unwrap();
+    }
+    assert!(
+        greedy
+            .handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+            .await
+            .is_err()
+    );
+
+    let mut polite = started(daemon.clone()).await;
+    polite
+        .handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
+        .await
+        .expect("another session's allowance is its own");
 }

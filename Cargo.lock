@@ -134,6 +134,7 @@ dependencies = [
  "arin-protocol",
  "block2",
  "dispatch2",
+ "futures",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",

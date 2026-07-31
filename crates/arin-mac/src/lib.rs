@@ -33,6 +33,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+mod approval;
 mod caption;
 mod capture;
 mod display;
@@ -43,10 +44,11 @@ mod orb;
 mod panel;
 mod permission;
 
+pub use approval::{AlertApprover, WINDOW as GROUNDING_WINDOW, approver};
 pub use capture::MacCapture;
 pub use display::Screen;
 pub use host::{MacRenderer, known_screens, on_displays_changed};
-pub use menubar::{MenuBar, on_clear, on_quit, on_status};
+pub use menubar::{MenuBar, on_clear, on_grounding, on_quit, on_status};
 pub use orb::MINIMUM_FEATURED_SIZE;
 pub use permission::{
     SCREEN_RECORDING_HELP, ScreenRecording, begin_screen_recording_flow,
