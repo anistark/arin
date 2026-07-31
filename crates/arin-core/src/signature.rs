@@ -391,8 +391,9 @@ fn region_profile(frame: &Frame, area: Area, axis: Axis) -> Vec<u8> {
             }
             minor += stride;
         }
-        if taken > 0 {
-            *value = (total / taken) as u8;
+        // A band that read no pixels keeps its zero, rather than dividing by none of them.
+        if let Some(mean) = total.checked_div(taken) {
+            *value = mean as u8;
         }
     }
     values

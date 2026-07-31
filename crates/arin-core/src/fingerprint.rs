@@ -117,8 +117,10 @@ impl Fingerprint {
                         }
                     }
                 }
-                if taken > 0 {
-                    samples[row * GRID + col] = (total / taken) as u8;
+                // A cell that fell entirely outside the frame read no pixels and keeps
+                // its zero, rather than dividing by none of them.
+                if let Some(mean) = total.checked_div(taken) {
+                    samples[row * GRID + col] = mean as u8;
                 }
             }
         }

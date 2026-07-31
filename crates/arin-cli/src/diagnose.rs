@@ -3,8 +3,15 @@
 //! What this build can ground with, what displays are attached, whether the capture
 //! permission is granted, and what a capture actually looks like. All read only.
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
+
+// Everything below the resolver listing needs a screen to ask about, so on a platform
+// with no renderer this module is `list_resolvers` and nothing else.
+#[cfg(target_os = "macos")]
+use anyhow::{Context, bail};
+#[cfg(target_os = "macos")]
 use arin_core::Config;
+#[cfg(target_os = "macos")]
 use arin_protocol::DisplayId;
 
 /// Print what this build can ground queries with.

@@ -380,7 +380,8 @@ fn plural(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
 }
 
-#[cfg(test)]
+// The status line is the menu bar's, so it only exists where there is a menu bar.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

@@ -37,10 +37,13 @@ impl Rendering {
 ///
 /// A circle has no facing, so travel reads through stretch along the velocity vector,
 /// never through rotation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OrbState {
     /// Parked. Slow pulse, sparse embers.
+    ///
+    /// The default, which is what an orb nobody has pointed anywhere is doing.
+    #[default]
     Idle,
     /// A resolve or stream is in flight. Faster pulse, denser embers, stationary.
     Thinking,
@@ -50,12 +53,6 @@ pub enum OrbState {
     Pointing,
     /// Winding down. Dims to a faint core, embers stop, fades out.
     Ending,
-}
-
-impl Default for OrbState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[cfg(test)]
