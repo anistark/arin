@@ -40,6 +40,11 @@ pub(crate) struct Cli {
 /// Duplicated here because the Rust side has to recognise its own bundle at runtime and
 /// cannot read a plist it may not be inside of. `the_bundle_identifier_matches_the_plist`
 /// keeps the two honest.
+///
+/// Gated to exactly where it is read. `Launch::detect` only consults it on macOS, and the
+/// drift test is worth running everywhere because comparing two strings needs no window
+/// server. Without the `test` arm this is dead code on Linux, which CI denies.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) const BUNDLE_ID: &str = "com.anistark.arin";
 
 /// How this process was started, which is what a bare `arin` means.

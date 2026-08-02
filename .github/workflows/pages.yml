@@ -23,7 +23,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # Pointed at docs/package.json, because that is where `packageManager` lives and the
+      # action looks in the repository root by default. Without this it finds no version
+      # and fails before installing anything. Reading the pin rather than naming a version
+      # here keeps CI on the same pnpm the lockfile was written by.
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: docs/package.json
+
       - uses: actions/setup-node@v5
         with:
           node-version: 24
