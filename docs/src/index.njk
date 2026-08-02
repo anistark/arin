@@ -1,0 +1,232 @@
+---
+layout: layouts/base.njk
+description: Arin is a local daemon that draws on your screen. Any AI can point, highlight, and explain over MCP or a small JSON protocol. It draws. It never clicks.
+---
+
+<section class="relative mx-auto max-w-7xl px-6 pb-16 pt-36 lg:pt-44">
+  <div class="grid items-center gap-12 lg:grid-cols-2">
+    <div class="min-w-0">
+      <p class="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs font-medium tracking-wide text-secondary-soft">
+        <span class="h-1.5 w-1.5 rounded-full bg-secondary"></span>
+        Local daemon for macOS
+      </p>
+      <h1 class="font-display text-4xl font-bold leading-[1.05] tracking-tight text-frost sm:text-5xl lg:text-6xl">
+        An annotation layer any agent can
+        <span class="bg-gradient-to-r from-primary-soft via-secondary-soft to-tertiary-soft bg-clip-text text-transparent">draw on</span>.
+      </h1>
+      <p class="mt-6 max-w-xl text-lg leading-relaxed text-mist">
+        Arin draws on your screen. Agents point at things, highlight regions, and write
+        explanations over MCP or a small JSON protocol. It draws. It never clicks.
+      </p>
+      <div class="mt-8 flex flex-wrap items-center gap-4">
+        <a href="/docs/building/" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-abyss shadow-lg shadow-primary/25 transition hover:bg-primary-soft">
+          Get started
+        </a>
+        <a href="/docs/" class="glass rounded-xl px-5 py-2.5 text-sm font-semibold text-frost transition hover:border-white/20">
+          Read the docs
+        </a>
+      </div>
+      <div class="glass mt-8 inline-flex max-w-full items-center gap-3 rounded-xl px-4 py-3 font-mono text-sm text-secondary-soft">
+        <span class="select-none text-mist">$</span>
+        <code class="overflow-x-auto whitespace-nowrap">brew install anistark/tools/arin</code>
+      </div>
+    </div>
+
+    <div class="glass glass-edge min-w-0 rounded-3xl p-3 sm:p-4">
+      {% include "partials/hero-canvas.njk" %}
+    </div>
+  </div>
+</section>
+
+<section class="mx-auto max-w-7xl px-6 py-16">
+  <div class="mx-auto max-w-2xl text-center" data-reveal>
+    <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">It draws. It never clicks.</h2>
+    <p class="mt-4 text-mist">
+      Arin never synthesises input. No clicks, no keystrokes, no scrolling. That boundary
+      is the point.
+    </p>
+  </div>
+  <div class="mt-12 grid gap-6 md:grid-cols-3">
+    <div class="glass glass-edge rounded-2xl p-6" data-reveal style="--reveal-delay: 0">
+      <div class="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/15 text-primary-soft">
+        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19c-4 0-7-3-7-7s3-7 7-7 7 3 7 7"/><path d="m15 15 6 6"/><path d="M12 9v0M12 12v0"/></svg>
+      </div>
+      <h3 class="font-display text-lg font-semibold text-frost">Safe to leave running</h3>
+      <p class="mt-2 text-sm leading-relaxed text-mist">
+        A tool that can only render pixels cannot act on your behalf. Agents that need to
+        click should compose Arin with a separate actuator.
+      </p>
+    </div>
+    <div class="glass glass-edge rounded-2xl p-6" data-reveal style="--reveal-delay: 1">
+      <div class="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-secondary/15 text-secondary-soft">
+        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h3 class="font-display text-lg font-semibold text-frost">No Accessibility permission</h3>
+      <p class="mt-2 text-sm leading-relaxed text-mist">
+        Screen Recording is the only permission Arin asks for, and frames are compared in
+        memory rather than written or sent anywhere.
+      </p>
+    </div>
+    <div class="glass glass-edge rounded-2xl p-6" data-reveal style="--reveal-delay: 2">
+      <div class="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-tertiary/15 text-tertiary-soft">
+        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>
+      </div>
+      <h3 class="font-display text-lg font-semibold text-frost">Auditable in an afternoon</h3>
+      <p class="mt-2 text-sm leading-relaxed text-mist">
+        Arin holds no model and makes no decisions. The intelligence is your agent. Arin
+        is the chalk.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="mx-auto max-w-7xl px-6 py-16">
+  <div class="mx-auto max-w-2xl text-center" data-reveal>
+    <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">From tool call to pixels</h2>
+    <p class="mt-4 text-mist">
+      One round trip, entirely on your machine.
+    </p>
+  </div>
+  <ol class="relative mx-auto mt-14 grid max-w-5xl gap-10 lg:grid-cols-4 lg:gap-6">
+    <div class="pointer-events-none absolute left-6 top-0 h-full w-px bg-gradient-to-b from-primary/60 via-secondary/40 to-tertiary/60 lg:left-0 lg:top-6 lg:h-px lg:w-full lg:bg-gradient-to-r" aria-hidden="true"></div>
+    <li class="relative pl-16 lg:pl-0 lg:pt-16" data-reveal style="--reveal-delay: 0">
+      <span class="absolute left-0 top-0 flex h-12 w-12 items-center justify-center rounded-full border border-primary/40 bg-abyss font-mono text-sm text-primary-soft shadow-lg shadow-primary/20">01</span>
+      <h3 class="font-display text-base font-semibold text-frost">Your agent decides</h3>
+      <p class="mt-2 text-sm leading-relaxed text-mist">A model wants to show you something and calls a tool instead of describing a location in prose.</p>
+    </li>
+    <li class="relative pl-16 lg:pl-0 lg:pt-16" data-reveal style="--reveal-delay: 1">
+      <span class="absolute left-0 top-0 flex h-12 w-12 items-center justify-center rounded-full border border-secondary/40 bg-abyss font-mono text-sm text-secondary-soft shadow-lg shadow-secondary/20">02</span>
+      <h3 class="font-display text-base font-semibold text-frost">Arin places it</h3>
+      <p class="mt-2 text-sm leading-relaxed text-mist">Coordinates, a named anchor, or a described target through a resolver all land on the right display.</p>
+    </li>
+    <li class="relative pl-16 lg:pl-0 lg:pt-16" data-reveal style="--reveal-delay: 2">
+      <span class="absolute left-0 top-0 flex h-12 w-12 items-center justify-center rounded-full border border-tertiary/40 bg-abyss font-mono text-sm text-tertiary-soft shadow-lg shadow-tertiary/20">03</span>
+      <h3 class="font-display text-base font-semibold text-frost">The mark renders</h3>
+      <p class="mt-2 text-sm leading-relaxed text-mist">Arin picks a colour that stays visible against whatever is underneath and draws above every window.</p>
+    </li>
+    <li class="relative pl-16 lg:pl-0 lg:pt-16" data-reveal style="--reveal-delay: 3">
+      <span class="absolute left-0 top-0 flex h-12 w-12 items-center justify-center rounded-full border border-primary/40 bg-abyss font-mono text-sm text-primary-soft shadow-lg shadow-primary/20">04</span>
+      <h3 class="font-display text-base font-semibold text-frost">It cleans up</h3>
+      <p class="mt-2 text-sm leading-relaxed text-mist">Marks expire on TTL, leave with their session, and are invalidated the moment content scrolls away.</p>
+    </li>
+  </ol>
+</section>
+
+<section class="mx-auto max-w-7xl px-6 py-16">
+  <div class="mx-auto max-w-2xl text-center" data-reveal>
+    <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">Four marks, one vocabulary</h2>
+    <p class="mt-4 text-mist">
+      An agent explaining an article can circle each section as it talks about it. A
+      reviewer can point at the exact line it means.
+    </p>
+  </div>
+  <div class="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 0">
+      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
+        <circle cx="60" cy="28" r="18" fill="#4C8DFF" opacity="0.15" class="transition-transform duration-500 group-hover:scale-125" style="transform-origin: center"/>
+        <circle cx="60" cy="28" r="9" fill="#4C8DFF" opacity="0.45"/>
+        <circle cx="60" cy="28" r="4" fill="#A9DCFF"/>
+      </svg>
+      <p class="font-mono text-sm text-primary-soft">point_at</p>
+      <p class="mt-2 text-sm leading-relaxed text-mist">Puts the orb on a position, with an optional caption.</p>
+    </div>
+    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 1">
+      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
+        <rect x="22" y="12" width="76" height="32" rx="8" stroke="#3DDC97" stroke-width="2" fill="#3DDC97" fill-opacity="0.08" class="transition-transform duration-500 group-hover:scale-105" style="transform-origin: center"/>
+        <rect x="32" y="24" width="44" height="4" rx="2" fill="#3DDC97" opacity="0.35"/>
+        <rect x="32" y="32" width="30" height="4" rx="2" fill="#3DDC97" opacity="0.2"/>
+      </svg>
+      <p class="font-mono text-sm text-secondary-soft">highlight</p>
+      <p class="mt-2 text-sm leading-relaxed text-mist">Frames a region of the screen so it stands out.</p>
+    </div>
+    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 2">
+      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
+        <rect x="30" y="10" width="60" height="30" rx="6" stroke="#A78BFA" stroke-opacity="0.6" fill="#0A1020"/>
+        <rect x="38" y="18" width="44" height="3.5" rx="1.75" fill="#C9B8FF" opacity="0.7"/>
+        <rect x="38" y="26" width="32" height="3.5" rx="1.75" fill="#C9B8FF" opacity="0.4"/>
+        <path d="M52 40 L46 48" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" class="transition-transform duration-500 group-hover:translate-y-0.5"/>
+      </svg>
+      <p class="font-mono text-sm text-tertiary-soft">annotate</p>
+      <p class="mt-2 text-sm leading-relaxed text-mist">Writes a short explanation next to the thing it explains.</p>
+    </div>
+    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 3">
+      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
+        <path d="M20 38 C 36 14, 50 44, 66 24 S 96 22, 102 30" stroke="#4C8DFF" stroke-width="2.5" stroke-linecap="round" pathLength="100" class="draw-glyph"/>
+      </svg>
+      <p class="font-mono text-sm text-primary-soft">draw</p>
+      <p class="mt-2 text-sm leading-relaxed text-mist">Freehand paths for circles, arrows, and underlines.</p>
+    </div>
+  </div>
+</section>
+
+<section class="mx-auto max-w-7xl px-6 py-16">
+  <div class="mx-auto max-w-2xl text-center" data-reveal>
+    <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">Drive it your way</h2>
+    <p class="mt-4 text-mist">
+      One binary speaks MCP for agents, a CLI for your shell, and newline-delimited JSON
+      for everything else.
+    </p>
+  </div>
+  <div class="mt-12 grid gap-6 lg:grid-cols-3">
+    <div class="glass glass-edge flex flex-col overflow-hidden rounded-2xl" data-reveal style="--reveal-delay: 0">
+      <div class="flex items-center gap-2 border-b border-white/10 bg-deep/60 px-4 py-3">
+        <span class="h-2.5 w-2.5 rounded-full bg-[#FF5F57]/80"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#FEBC2E]/80"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#28C840]/80"></span>
+        <span class="ml-2 font-mono text-xs text-mist">agent</span>
+      </div>
+      <div class="flex flex-1 flex-col p-6 pt-5">
+        <h3 class="font-display text-lg font-semibold text-frost">From an agent</h3>
+        <pre class="mt-4 flex-1 overflow-x-auto rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code><span class="text-mist"># Claude Code, one line</span>
+claude mcp add arin -- arin mcp</code></pre>
+        <a href="/docs/mcp/" class="mt-4 text-sm font-medium text-primary-soft transition hover:text-frost">MCP docs &rarr;</a>
+      </div>
+    </div>
+    <div class="glass glass-edge flex flex-col overflow-hidden rounded-2xl" data-reveal style="--reveal-delay: 1">
+      <div class="flex items-center gap-2 border-b border-white/10 bg-deep/60 px-4 py-3">
+        <span class="h-2.5 w-2.5 rounded-full bg-[#FF5F57]/80"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#FEBC2E]/80"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#28C840]/80"></span>
+        <span class="ml-2 font-mono text-xs text-mist">zsh</span>
+      </div>
+      <div class="flex flex-1 flex-col p-6 pt-5">
+        <h3 class="font-display text-lg font-semibold text-frost">From a shell</h3>
+        <pre class="mt-4 flex-1 overflow-x-auto rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code>arin point --at top-right \
+  --label "the close button"</code></pre>
+        <a href="/docs/cli/" class="mt-4 text-sm font-medium text-secondary-soft transition hover:text-frost">CLI docs &rarr;</a>
+      </div>
+    </div>
+    <div class="glass glass-edge flex flex-col overflow-hidden rounded-2xl" data-reveal style="--reveal-delay: 2">
+      <div class="flex items-center gap-2 border-b border-white/10 bg-deep/60 px-4 py-3">
+        <span class="h-2.5 w-2.5 rounded-full bg-[#FF5F57]/80"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#FEBC2E]/80"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#28C840]/80"></span>
+        <span class="ml-2 font-mono text-xs text-mist">socket</span>
+      </div>
+      <div class="flex flex-1 flex-col p-6 pt-5">
+        <h3 class="font-display text-lg font-semibold text-frost">From anything</h3>
+        <pre class="mt-4 flex-1 overflow-x-auto rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code>{"v":"0.1","type":"point",
+ "x":412,"y":88,"label":"Save"}</code></pre>
+        <a href="/docs/protocol/" class="mt-4 text-sm font-medium text-tertiary-soft transition hover:text-frost">Protocol docs &rarr;</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="mx-auto max-w-7xl px-6 py-16">
+  <div class="glass glass-edge rounded-3xl px-8 py-12 text-center sm:px-16" data-reveal>
+    <img src="/assets/brand/logo.png" alt="" class="mx-auto mb-6 h-16 w-16">
+    <h2 class="font-display text-3xl font-bold tracking-tight text-frost">Give your agent some chalk</h2>
+    <p class="mx-auto mt-4 max-w-xl text-mist">
+      One brew install away. Needs macOS 14.2 or newer.
+    </p>
+    <div class="mt-8 flex flex-wrap items-center justify-center gap-4">
+      <a href="/docs/building/" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-abyss shadow-lg shadow-primary/25 transition hover:bg-primary-soft">
+        Install Arin
+      </a>
+      <a href="{{ site.repo }}" class="glass rounded-xl px-5 py-2.5 text-sm font-semibold text-frost transition hover:border-white/20">
+        Star on GitHub
+      </a>
+    </div>
+  </div>
+</section>

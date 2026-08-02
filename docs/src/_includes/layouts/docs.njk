@@ -1,0 +1,57 @@
+---
+layout: layouts/base.njk
+---
+
+<div class="mx-auto max-w-7xl px-6 pb-16 pt-32">
+  <div class="grid gap-10 lg:grid-cols-[240px_minmax(0,1fr)]">
+
+    <aside class="lg:sticky lg:top-28 lg:self-start">
+      <details class="glass rounded-2xl">
+        <summary class="cursor-pointer list-none px-5 py-4 font-display text-sm font-semibold uppercase tracking-widest text-mist lg:cursor-default lg:pb-2 [&::-webkit-details-marker]:hidden">
+          Documentation
+        </summary>
+        <nav class="flex flex-col gap-1 px-3 pb-3 lg:pb-1">
+          {% for doc in docsNav %}
+          <a href="/docs/{{ doc.slug }}/"
+             class="rounded-lg px-3 py-2 text-sm transition {% if slug == doc.slug %}bg-primary/15 font-semibold text-primary-soft{% else %}text-fog hover:bg-white/5 hover:text-frost{% endif %}">
+            {{ doc.title }}
+          </a>
+          {% endfor %}
+        </nav>
+      </details>
+      <script>
+        if (window.matchMedia("(min-width: 1024px)").matches) {
+          document.currentScript.previousElementSibling.setAttribute("open", "");
+        }
+      </script>
+    </aside>
+
+    <article class="glass glass-edge min-w-0 rounded-3xl px-6 py-8 sm:px-10 sm:py-10">
+      <div class="prose prose-invert prose-arin max-w-none">
+        {{ content | safe }}
+      </div>
+
+      {% for doc in docsNav %}
+        {% if doc.slug == slug %}
+        <div class="mt-12 flex flex-col gap-4 border-t border-white/10 pt-6 sm:flex-row sm:justify-between">
+          {% if loop.index0 > 0 %}
+          {% set prev = docsNav[loop.index0 - 1] %}
+          <a href="/docs/{{ prev.slug }}/" class="group text-sm">
+            <span class="text-mist">&larr; Previous</span>
+            <span class="block font-medium text-fog transition group-hover:text-frost">{{ prev.title }}</span>
+          </a>
+          {% else %}<span></span>{% endif %}
+          {% if not loop.last %}
+          {% set next = docsNav[loop.index0 + 1] %}
+          <a href="/docs/{{ next.slug }}/" class="group text-sm sm:text-right">
+            <span class="text-mist">Next &rarr;</span>
+            <span class="block font-medium text-fog transition group-hover:text-frost">{{ next.title }}</span>
+          </a>
+          {% endif %}
+        </div>
+        {% endif %}
+      {% endfor %}
+    </article>
+
+  </div>
+</div>

@@ -1,0 +1,25 @@
+---
+layout: layouts/base.njk
+title: Documentation
+description: Everything you need to build, run, and drive Arin.
+permalink: /docs/
+---
+
+<div class="mx-auto max-w-7xl px-6 pb-16 pt-36">
+  <div class="max-w-2xl">
+    <h1 class="font-display text-4xl font-bold tracking-tight text-frost sm:text-5xl">Documentation</h1>
+    <p class="mt-4 text-lg text-mist">
+      Everything you need to build Arin, run the daemon, and drive it from an agent, a
+      shell, or raw JSON.
+    </p>
+  </div>
+  <div class="mt-12 grid gap-6 sm:grid-cols-2">
+    {% for doc in docsNav %}
+    <a href="/docs/{{ doc.slug }}/" class="glass glass-edge group rounded-2xl p-6 transition hover:border-white/20">
+      <h2 class="font-display text-xl font-semibold text-frost transition group-hover:text-primary-soft">{{ doc.title }}</h2>
+      <p class="mt-2 text-sm leading-relaxed text-mist">{{ doc.description }}</p>
+      <span class="mt-4 inline-block text-sm font-medium text-primary-soft">Read &rarr;</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>

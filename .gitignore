@@ -11,3 +11,7 @@
 *.swp
 .idea/
 .vscode/
+
+# Docs site build
+/docs/node_modules
+/docs/_site

@@ -11,6 +11,8 @@ write explanations. Any AI can drive it over MCP or a small JSON protocol.
 
 It draws. It never clicks.
 
+[Website](https://anistark.github.io/arin/) · [Docs](https://anistark.github.io/arin/docs/)
+
 </div>
 
 ---

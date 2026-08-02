@@ -46,6 +46,20 @@ test:
 doc:
     cargo doc --workspace --no-deps --open
 
+# docs site
+# The Eleventy site in docs/ that GitHub Pages publishes. Both recipes install on first
+# run and rebuild on change.
+
+# Serve the docs site at http://localhost:8080.
+docs:
+    pnpm --dir docs install
+    pnpm --dir docs dev
+
+# Serve the docs site on every interface, and print the LAN and tailscale URLs.
+docs-host:
+    pnpm --dir docs install
+    DOCS_SHOW_HOSTS=1 pnpm --dir docs dev
+
 clean:
     cargo clean
 
