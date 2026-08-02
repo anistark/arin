@@ -31,14 +31,23 @@ draws nothing, which is how the daemon is exercised before a platform backend ex
 
 ## Distribution
 
-GitHub releases and a brew tap at `anistark/homebrew-tools` land at 0.5, making
-`brew install anistark/tools/arin` the install line. That formula compiles from source on
-your machine, which is deliberate: an unsigned app that was *downloaded* is quarantined and
-refused by Gatekeeper, and one compiled locally is not.
+Three stages, in this order. No dates, because each one depends on the last.
 
-Signing and notarization follow at 0.7, and the formula is replaced by a cask,
-`brew install --cask anistark/tools/arin`. That is when installing stops requiring a
-compile and the Screen Recording grant starts surviving upgrades.
+**Now: build it yourself,** with the steps above.
 
-Nix arrives at 0.6. Linux packages, `deb`, `rpm` and AUR, come with the Linux port rather
-than before it. Until 0.5, building from source by hand is the only route.
+**Next: a brew tap** at `anistark/homebrew-tools`, making
+`brew install anistark/tools/arin` the install line. That formula still compiles from
+source on your machine, which is deliberate rather than lazy: an unsigned app that was
+*downloaded* is quarantined and refused by Gatekeeper, and one compiled locally is not. So
+building from source is the only route that installs cleanly before there is a signing
+certificate, not merely the cheaper one.
+
+**Then: signed and notarized,** at which point the formula is replaced by a cask,
+`brew install --cask anistark/tools/arin`, and the formula is removed so there is only ever
+one build to install. This is when installing stops needing a compile, when the app can
+live in `/Applications` where Spotlight will find it, and when the Screen Recording grant
+starts surviving upgrades. Unsigned code is identified by its hash, so today every new
+build asks for that permission again.
+
+Nix follows. Linux packages, `deb`, `rpm` and AUR, come with the Linux port rather than
+before it.

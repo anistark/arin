@@ -13,8 +13,13 @@ implement the protocol somewhere else with the type definitions as the reference
 
 ```toml
 [dependencies]
-arin-protocol = "0.1"
+arin-protocol = "0.2"
 ```
+
+**The crate version is not the wire version.** This crate is 0.2 while the format it
+describes is 0.1, and they move independently: a Rust API change bumps the crate, a wire
+format change bumps `PROTOCOL_VERSION`. Compatibility checks go against that constant, not
+against the version in your `Cargo.toml`.
 
 ## The shape of it
 
@@ -47,10 +52,20 @@ Changes are additive within a major version, and reserved fields exist so that s
 
 ## Stability
 
-The protocol is not frozen. It freezes at Arin 1.0, after which changes are additive only.
-Until then the crate follows SemVer as a Rust API, but the wire format it describes may
-still move. The open question blocking the freeze is authentication, which affects the
-`session_start` handshake.
+The protocol is not frozen. Until it is, the crate follows SemVer as a Rust API while the
+wire format it describes may still move.
+
+**Authentication no longer blocks the freeze.** That was the open question, and it is
+settled: permission is a capability split rather than a handshake. Drawing is open to any
+process running as you, since one could draw on its own window anyway. Grounding, which is
+the only thing Arin can do that its clients cannot, is gated behind a consent prompt. None
+of that changed `session_start`, so nothing here moved.
+
+What is still open is *when* to freeze. Freezing is a promise to people writing clients,
+and a second implementation is what proves a protocol is a protocol rather than a
+description of one renderer. Only one renderer has ever spoken this format, so the freeze
+may wait for a second one rather than landing with Arin 1.0. Assume additive-only changes
+are not guaranteed until this section says otherwise.
 
 ## Licence
 

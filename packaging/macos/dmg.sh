@@ -44,7 +44,28 @@ if [ ! -d "$app" ]; then
 fi
 
 version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist")"
-dmg="$output_dir/Arin-$version-universal.dmg"
+
+# Named after what is actually inside, asked of the binary rather than assumed.
+#
+# `bundle.sh` falls back to a host-only build when the cross targets are not installed, so
+# a machine with one target produces a single-slice app. Hardcoding `universal` here would
+# put that in a file whose name promises both, and the person who finds out is whoever
+# downloads it onto the other architecture.
+#
+# CI never reaches the fallback: the release workflow checks for both slices and fails the
+# job before this runs. This is for everyone building by hand.
+archs="$(lipo -archs "$app/Contents/MacOS/arin")"
+case "$archs" in
+*arm64*x86_64* | *x86_64*arm64*) slice="universal" ;;
+*arm64*) slice="arm64" ;;
+*x86_64*) slice="x86_64" ;;
+*)
+	echo "unrecognised architectures in the binary: $archs" >&2
+	exit 1
+	;;
+esac
+
+dmg="$output_dir/Arin-$version-$slice.dmg"
 
 # Staged in a scratch directory so the image contains exactly two entries and nothing the
 # working tree happens to have lying around.
@@ -63,4 +84,5 @@ hdiutil create \
 	"$dmg" >/dev/null
 
 echo "$dmg"
+echo "    architectures: $archs"
 shasum -a 256 "$dmg" | sed 's/^/sha256  /'

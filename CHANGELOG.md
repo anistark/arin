@@ -3,12 +3,33 @@
 All notable changes to this project are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
-project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Minors
-ship biweekly, but nothing is tagged before 1.0: 0.x versions are cycle boundaries rather
-than releases, so everything below stays under `[Unreleased]` until `v1.0.0`. 1.0 is the
-protocol freeze, after which protocol changes are additive only.
+project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+**`0.2.0` is the first tagged release**, and the first build anyone outside can install.
+The plan had been to tag nothing before 1.0, on the grounds that 0.x versions are cycle
+boundaries rather than releases. That bent for a practical reason: a release pipeline
+cannot be rehearsed without a tag, and running it for the first time on launch day is the
+failure it exists to prevent.
+
+Two things it is worth knowing before reading the versions below.
+
+**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.2 while
+the protocol they describe is at 0.1. A Rust API change bumps the crate; a wire format
+change bumps `PROTOCOL_VERSION`. The protocol is not frozen, and freezing it may wait for a
+second renderer rather than landing at 1.0, since one implementation cannot prove a format
+is a format.
+
+**Versions are not cycle numbers either.** Development runs in numbered cycles that reach
+0.7 and beyond in the plan; those never appear here. Only released versions do.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-08-02
+
+`arin-protocol` and `arin` were published to crates.io at `0.1.0` on 2026-07-30 with no tag
+and no section here. Everything from then is folded into this release rather than
+reconstructed after the fact, since no application was released at 0.1.0 and the version
+could not be reused.
 
 ### Added
 
@@ -341,9 +362,48 @@ protocol freeze, after which protocol changes are additive only.
   worth finding in a log. And a session is capped at 256 annotations, so a runaway client
   cannot paper the screen. Per session rather than global, so one badly behaved client
   cannot refuse marks to a well behaved one sharing the daemon.
+- **Arin.app**, an `LSUIElement` bundle, which is what makes Arin installable rather than
+  merely buildable. A menu bar item and no Dock icon, built by `just bundle` into a
+  universal binary with an icon generated from the same logo the README uses.
+
+  The bundle is not cosmetic. macOS attributes the Screen Recording grant to a signed
+  bundle identity rather than to a path, so a bare binary in `~/.cargo/bin` cannot hold
+  that permission across an update. It also fixed `arin capture` failing beside a live
+  daemon, without anybody writing code for it: ScreenCaptureKit was refusing one client
+  identity twice, and the bundle is a second identity.
+- A launch agent, so Arin can start at login. `just startup-enable`, or
+  `launch-agent.sh enable` from inside an installed app. It points at the binary inside the
+  bundle rather than the one on `PATH`, because an agent running some other build comes up
+  unable to see the screen and unable to say why. Starting at login stays something the
+  user turns on: a screen annotation daemon that added itself to login items unasked would
+  be doing the thing people reasonably object to.
+- A disk image, and a release workflow that builds, checks, signs, notarizes and publishes
+  it. The workflow refuses to build when the tag and `[workspace.package].version` disagree,
+  and refuses to publish a binary missing either architecture slice. **Signing and
+  notarization are written and have never run**: they need an Apple Developer certificate,
+  and the workflow skips them when the secrets are absent, which is how an unsigned build
+  ships through the same path.
+- A Homebrew formula, at `anistark/tools/arin`, and a `tap` job that opens a pull request
+  against the tap on every release. It builds from source deliberately: Homebrew
+  quarantines what it downloads, an unsigned app plus quarantine is a Gatekeeper block, and
+  something compiled on the machine it runs on was never downloaded. So building from
+  source is the only route that installs cleanly before there is a certificate, rather than
+  the worse of two. A signed cask replaces it later.
 
 ### Changed
 
+- **Bare `arin` prints help instead of failing**, because the subcommand is now optional,
+  and `arin -d` runs the daemon in the foreground. It is built by parsing `arin daemon`
+  rather than by constructing the variant, so the environment variables read for
+  `--resolver` and the rest reach both spellings; a hand-built default would have honoured
+  `ARIN_RESOLVER` under one and ignored it under the other. It takes no options of its own,
+  and `arin -d clear` is refused rather than resolved by precedence.
+
+  Opening Arin.app and typing `arin` are the same binary with the same empty argument list,
+  and they now mean opposite things. They are told apart by `__CFBundleIdentifier`, which
+  LaunchServices sets and a shell does not, matched against Arin's own identifier rather
+  than merely tested for presence, with a terminal on stdin overriding it. Both guards fail
+  towards printing help rather than towards starting a daemon nobody asked for.
 - There is one orb for the whole system rather than one per display. Arin is a single
   agent, so it has a single presence: it points at one place at a time and moves between
   screens the way a mouse pointer does, and it belongs to the renderer host rather than to
@@ -420,6 +480,17 @@ protocol freeze, after which protocol changes are additive only.
 
 ### Fixed
 
+- `arin capture` works alongside a live daemon again, and nobody wrote code for it. The
+  failure was ScreenCaptureKit dropping the second request, deallocating the completion
+  handler without ever calling it, so it failed in about 200ms rather than hanging.
+
+  It was described for a while as the machine allowing only one capturer, and that was
+  wrong: Apple's own `screencapture` takes a frame quite happily while the daemon runs. The
+  hypothesis that fit every measurement was narrower, that the daemon and the CLI were the
+  same binary at the same path with no bundle, so ScreenCaptureKit could not tell the two
+  clients apart. Confirmed twice, first by running the CLI from a different path, then by
+  the app bundle, which is a second identity by construction. Two wrong explanations
+  preceded the right one and the measurements are what separated them.
 - The macOS renderer left a layer on screen when an annotation was drawn twice under the
   same id. `Renderer::draw` has always been documented as "draw or redraw", but the host
   only replaced its map entry, so the previous layer stayed in the tree with nothing left
@@ -454,17 +525,18 @@ protocol freeze, after which protocol changes are additive only.
 
 ### Known gaps
 
-- `arin capture` does not work alongside a live daemon. ScreenCaptureKit drops the second
-  request, deallocating the completion handler without ever calling it, so it fails in
-  about 200ms rather than hanging. The daemon is unaffected, and `arin permissions` defers
-  to it rather than reading the failure as a denied permission.
-
-  This is **not** the machine allowing only one capturer, which is how it was described
-  until it was measured. Apple's own `screencapture` takes a frame quite happily while the
-  daemon runs, and that is where the screenshots in the vision-client work came from. What
-  collides looks narrower: the daemon and the CLI are the same binary at the same path with
-  no bundle, so ScreenCaptureKit cannot tell the two clients apart. A different binary is
-  not affected. Untested, and it is the hypothesis that fits every measurement so far.
+- **Signing and notarization have never run.** The release workflow imports a certificate,
+  signs with the hardened runtime, notarizes, staples, and asks `spctl` what a user's
+  machine would conclude. None of it has executed, because it needs an Apple Developer
+  membership that does not exist yet. Until it does, the dmg on the release page is
+  unsigned and macOS will refuse it on first open; `brew install anistark/tools/arin`
+  builds locally and avoids that entirely, which is why it is the documented route.
+- **`--resolver local` has never been run against a real model.** The adapter is covered
+  end to end over real loopback HTTP with a real captured frame, against a stub server. Its
+  two answer formats, both coordinate spaces and the whole conversion chain are exercised.
+  What is unproven is whether a UI TARS class model is any good at this, and the confidence
+  threshold is still a guess at 0.85 with no eval corpus behind it. Treat the resolver as
+  experimental in the literal sense: nobody has watched it ground anything.
 - Thin content still cannot decide a colour on its own, and this is the design rather
   than a limitation of the capture. A five point bar reaches about a fifth of the samples
   even at 512 pixels, and the median the picker scores by comes out at 9.12 against it at
@@ -536,8 +608,14 @@ protocol freeze, after which protocol changes are additive only.
 
 ### Notes
 
-0.1 is feature complete. Every annotation kind draws on macOS, capture is wired to
-ScreenCaptureKit with a first run permission flow, and the marks can be cleared from the
-menu bar or a global hotkey.
+Feature complete on macOS, and now installable. Every annotation kind draws, capture is
+wired to ScreenCaptureKit with a first run permission flow, marks can be cleared from the
+menu bar or a global hotkey, grounding asks before it reads the screen, and the whole thing
+ships as an app bundle with a Homebrew formula and a launch agent.
 
-[Unreleased]: https://github.com/anistark/arin/commits/main
+macOS only. Linux and Windows are planned and nothing of either is in this release; the
+core and the protocol build and test on Linux with no platform crate in the tree, which is
+what keeps that port cheap to pick up rather than evidence it works.
+
+[Unreleased]: https://github.com/anistark/arin/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/anistark/arin/releases/tag/v0.2.0

@@ -3,12 +3,16 @@
 //!
 //! # This crate is not the application
 //!
-//! Arin is a daemon that draws on your screen, and it is installed as an application
-//! rather than with Cargo:
+//! Arin is a menu bar app and a daemon that draws on your screen, and it is installed as
+//! an application rather than with Cargo:
 //!
 //! ```text
-//! brew install --cask arin
+//! brew install anistark/tools/arin
 //! ```
+//!
+//! That compiles from source, which is deliberate: an unsigned app that was downloaded is
+//! quarantined and refused by Gatekeeper, while one compiled on your own machine is not. A
+//! signed cask replaces it later, and the install line gains `--cask` when it does.
 //!
 //! `cargo install arin` will not work and is not meant to. There is no binary here. What
 //! is here is the contract for talking to the daemon from Rust, which is everything in
