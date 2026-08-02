@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Deliberately almost empty, and that is the claim worth making.
+
+	     Screen Recording is not an entitlement. It is a TCC permission the user grants at
+	     runtime and can revoke in System Settings, which is the only privileged thing Arin
+	     ever holds. Nothing here can grant it.
+
+	     Not present, and each absence is load bearing:
+
+	       - No App Sandbox. A cask-installed app is not sandboxed, and claiming the
+	         sandbox while reading a Unix socket in the user's temporary directory would
+	         mean asking for exceptions that add up to more than not claiming it.
+	       - No Accessibility, and no way to ask for it. Accessibility is what would let
+	         Arin click and type, and never needing it is the product boundary CI enforces.
+	       - No `com.apple.security.cs.allow-unsigned-executable-memory` or
+	         `disable-library-validation`. The hardened runtime is on with no holes in it. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<false/>
+</dict>
+</plist>

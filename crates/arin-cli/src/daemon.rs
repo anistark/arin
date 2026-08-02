@@ -47,10 +47,14 @@ pub(crate) fn start_daemon(config: Config, headless: bool) -> Result<()> {
 
 /// Build the configured resolver, and say plainly what enabling it means.
 ///
-/// The security model is unresolved and consent is one of the open questions in it. Until
-/// that is settled, the honest minimum is that the daemon cannot be made to send anything
-/// off the machine without someone having named the thing that does it, and that it says
-/// so where the person who started it will see it.
+/// Naming a resolver is the only way grounding turns on, and this line is where the person
+/// who started the daemon finds out what they turned on. That was the whole security model
+/// until the capability split landed; it is now the outer of two gates, with the consent
+/// prompt asking again at the moment a query actually wants the screen.
+///
+/// Both are kept because they answer different questions. This one says a resolver that
+/// leaves the machine is configured, which someone reads once at startup. The prompt says a
+/// screenshot of this display is about to go out, which someone reads when it matters.
 fn wire_resolver(config: &Config) -> Result<Option<Arc<dyn arin_core::Resolver>>> {
     let Some(name) = config.resolver.as_deref() else {
         return Ok(None);

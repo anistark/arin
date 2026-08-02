@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.anistark.arin</string>
+
+	<!-- The binary inside the bundle, not a copy of it and not the one on PATH.
+	     TCC attributes the Screen Recording grant to the signed bundle, so a launch agent
+	     that ran some other build would come up unable to see the screen and unable to say
+	     why. @ARIN_BINARY@ is substituted by launch-agent.sh from the app it was pointed at.
+
+	     `daemon` rather than `-d`, spelled out. This file is read by people debugging why
+	     Arin did or did not start, and the long form says what it does. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>@ARIN_BINARY@</string>
+		<string>daemon</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Restart if it dies, but not if it dies immediately and repeatedly: a daemon that
+	     cannot bind its socket should not be respawned into a loop that fills the log. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>ProcessType</key>
+	<string>Interactive</string>
+
+	<key>StandardOutPath</key>
+	<string>@LOG_DIR@/arin.log</string>
+	<key>StandardErrorPath</key>
+	<string>@LOG_DIR@/arin.log</string>
+</dict>
+</plist>

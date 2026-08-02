@@ -1,0 +1,177 @@
+# Build, sign, notarize, and publish the Mac app.
+#
+# Triggered by a tag, because the tag is the version. `packaging/macos/bundle.sh` reads the
+# version out of Cargo.toml rather than out of the tag, and the first job checks the two
+# agree: a release whose dmg claims a different version than the tag that built it is worse
+# than a release that failed.
+#
+# Nothing here runs on a pull request. Signing needs the certificate, and a fork's PR must
+# never be able to reach it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # For rehearsing the build without publishing. Signing and notarization are skipped when
+  # the secrets are absent, so this is also how a fork can check the packaging still works.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS universal
+    runs-on: macos-14
+    # At job level, so the steps below can test it in an `if:`. A step's own `env:` is not
+    # in scope for that step's `if:`, which fails silently by skipping forever.
+    env:
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The tag says what this release is called and Cargo.toml says what the binary will
+      # report. They have to be the same string before anything is built.
+      - name: Check the tag matches the manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(awk '/^\[workspace.package\]/{f=1} f&&/^version = /{gsub(/[",]/,"",$3); print $3; exit}' Cargo.toml)
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag $GITHUB_REF_NAME says $tag, Cargo.toml says $manifest"
+            exit 1
+          fi
+          echo "version $manifest"
+
+      - name: Test
+        run: cargo test --workspace
+
+      # A Developer ID certificate, imported into a keychain that exists only for this job.
+      # Skipped without the secret, which is what makes workflow_dispatch useful on a fork.
+      - name: Import the signing certificate
+        id: signing
+        if: env.MACOS_CERTIFICATE_P12_BASE64 != ''
+        env:
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/build.keychain"
+          password="$(uuidgen)"
+
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Without this, codesign blocks on a GUI prompt that no runner can answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$password" "$keychain" >/dev/null
+
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build Arin.app
+        env:
+          ARIN_SIGN_IDENTITY: ${{ steps.signing.outputs.signed == 'true' && secrets.MACOS_SIGN_IDENTITY || '' }}
+        run: packaging/macos/bundle.sh
+
+      # Universal is a promise the dmg makes, so it is checked rather than assumed. A
+      # runner missing a target would otherwise produce a single-slice binary quietly.
+      # The formula makes no such promise: a user's machine builds for the machine it is.
+      - name: Check the binary is universal
+        run: |
+          archs=$(lipo -archs target/bundle/Arin.app/Contents/MacOS/arin)
+          echo "architectures: $archs"
+          for want in arm64 x86_64; do
+            case "$archs" in *"$want"*) ;; *)
+              echo "::error::$want slice missing"; exit 1 ;;
+            esac
+          done
+
+      - name: Package the dmg
+        run: packaging/macos/dmg.sh
+
+      # Notarization is what stops Gatekeeper refusing the app on a machine that has never
+      # seen it. Stapling attaches the ticket so the check works offline afterwards.
+      - name: Notarize and staple
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          dmg=$(ls target/bundle/Arin-*-universal.dmg)
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+
+          # What a user's machine will actually conclude, asked directly rather than
+          # inferred from the steps above having exited zero.
+          spctl --assess --type open --context context:primary-signature -vv "$dmg"
+
+      - name: Checksums
+        run: |
+          cd target/bundle
+          shasum -a 256 Arin-*-universal.dmg | tee checksums.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: |
+            target/bundle/Arin-*-universal.dmg
+            target/bundle/checksums.txt
+
+      # The cask needs the sha256 of the published dmg, so the release body carries it
+      # rather than leaving somebody to download the file and compute it by hand.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sha=$(shasum -a 256 target/bundle/Arin-*-universal.dmg | cut -d' ' -f1)
+
+          cat > notes.md <<EOF
+          ## Install
+
+          \`\`\`
+          brew install anistark/tools/arin
+          \`\`\`
+
+          This compiles from source, which takes a minute or two and needs no Apple
+          signing. That is deliberate until 0.7: a downloaded app that is not signed gets
+          quarantined and refused by Gatekeeper, and one built on your own machine does not.
+
+          The dmg below is **unsigned**. It works, but macOS will refuse it on first open
+          and you will have to allow it in System Settings > Privacy & Security. If that is
+          not something you want to do, use the brew line above.
+
+          Arin is a menu bar app with no Dock icon. After the first launch, grant Screen
+          Recording in System Settings > Privacy & Security, then run \`arin -d\` or start
+          it at login with the launch agent.
+
+          ## Checksum
+
+          \`\`\`
+          $sha  Arin-$version-universal.dmg
+          \`\`\`
+          EOF
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Arin $version" \
+            --notes-file notes.md \
+            target/bundle/Arin-*-universal.dmg \
+            target/bundle/checksums.txt

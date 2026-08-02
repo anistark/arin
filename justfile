@@ -23,6 +23,19 @@ build:
 release:
     cargo build --workspace --release
 
+# packaging
+# Build Arin.app into target/bundle. Universal when both darwin targets are installed.
+# Pass an identity to sign it: `just bundle --sign "Developer ID Application: ..."`.
+bundle *ARGS:
+    packaging/macos/bundle.sh {{ ARGS }}
+
+# Start Arin at login, from the bundle so the Screen Recording grant sticks.
+startup-enable app="/Applications/Arin.app":
+    packaging/macos/launch-agent.sh enable {{ app }}
+
+startup-disable:
+    packaging/macos/launch-agent.sh disable
+
 test:
     cargo test --workspace
 

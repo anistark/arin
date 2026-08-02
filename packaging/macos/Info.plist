@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Arin</string>
+	<key>CFBundleDisplayName</key>
+	<string>Arin</string>
+
+	<!-- The binary is `arin`, lowercase, because it is also what a user types. One file
+	     serves as the app and the command line tool, and the cask puts this same path on
+	     PATH rather than shipping a second copy that could drift. -->
+	<key>CFBundleExecutable</key>
+	<string>arin</string>
+
+	<key>CFBundleIdentifier</key>
+	<string>com.anistark.arin</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+
+	<!-- Both are rewritten by packaging/macos/bundle.sh from [workspace.package].version,
+	     so the manifest stays the one place a version is written down. -->
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+
+	<!-- The whole point of the bundle. No Dock icon and no menu bar takeover: Arin is a
+	     status item and an overlay, and an app that draws on top of what you are doing must
+	     not also appear to be the thing you are doing. This is also what makes the Screen
+	     Recording grant stick to a stable identity across updates, which a bare binary in
+	     ~/.cargo/bin does not. -->
+	<key>LSUIElement</key>
+	<true/>
+
+	<!-- ScreenCaptureKit's SCScreenshotManager arrived in 14.0, and capture is not optional
+	     here: it is how colours are chosen and how scrolls are followed. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Kumar Anirudha. MIT licensed.</string>
+</dict>
+</plist>

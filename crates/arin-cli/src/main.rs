@@ -34,11 +34,20 @@ fn main() -> Result<()> {
         .init();
 
     let mut config = Config::default();
-    if let Some(path) = cli.socket {
+    if let Some(path) = cli.socket.clone() {
         config.socket_path = path;
     }
 
-    match cli.command {
+    // Nothing asked for. Say what the tool is rather than failing, which is the whole
+    // reason the subcommand is optional. Opening the app bundle lands here too, and means
+    // the opposite: run the daemon.
+    let Some(command) = cli.action(cli::Launch::detect())? else {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        return Ok(());
+    };
+
+    match command {
         Command::Daemon {
             headless,
             resolver,

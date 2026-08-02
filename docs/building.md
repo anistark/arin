@@ -31,5 +31,14 @@ draws nothing, which is how the daemon is exercised before a platform backend ex
 
 ## Distribution
 
-A signed and notarized dmg, a brew tap, GitHub releases and distro packages all land
-together at 0.5. Before then, building from source is the only route.
+GitHub releases and a brew tap at `anistark/homebrew-tools` land at 0.5, making
+`brew install anistark/tools/arin` the install line. That formula compiles from source on
+your machine, which is deliberate: an unsigned app that was *downloaded* is quarantined and
+refused by Gatekeeper, and one compiled locally is not.
+
+Signing and notarization follow at 0.7, and the formula is replaced by a cask,
+`brew install --cask anistark/tools/arin`. That is when installing stops requiring a
+compile and the Screen Recording grant starts surviving upgrades.
+
+Nix arrives at 0.6. Linux packages, `deb`, `rpm` and AUR, come with the Linux port rather
+than before it. Until 0.5, building from source by hand is the only route.

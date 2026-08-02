@@ -17,8 +17,106 @@ pub(crate) struct Cli {
     #[arg(long, global = true, env = "ARIN_SOCKET")]
     pub(crate) socket: Option<PathBuf>,
 
+    /// Run the daemon in the foreground. The same as `arin daemon`.
+    ///
+    /// Starting the daemon is the first thing anyone does after installing, so it has a
+    /// short spelling. It runs in the foreground and stops on Ctrl-C: starting at login is
+    /// the launchd agent's job, deliberately, so that `-d` never leaves something behind
+    /// after the terminal closes.
+    ///
+    /// It takes no options of its own. Anything beyond a default daemon wants the
+    /// subcommand, as in `arin daemon --resolver local`. Keeping the flag bare is what
+    /// stops it drifting into a second copy of the daemon's command line.
+    #[arg(short = 'd', long = "daemon")]
+    pub(crate) daemon: bool,
+
+    /// Optional, so bare `arin` prints help instead of failing.
     #[command(subcommand)]
-    pub(crate) command: Command,
+    pub(crate) command: Option<Command>,
+}
+
+/// The bundle identifier in `packaging/macos/Info.plist`.
+///
+/// Duplicated here because the Rust side has to recognise its own bundle at runtime and
+/// cannot read a plist it may not be inside of. `the_bundle_identifier_matches_the_plist`
+/// keeps the two honest.
+pub(crate) const BUNDLE_ID: &str = "com.anistark.arin";
+
+/// How this process was started, which is what a bare `arin` means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Launch {
+    /// Typed at a shell. A bare invocation is somebody looking around, so print help.
+    Shell,
+    /// Opened by LaunchServices, from Finder, Spotlight, or `open -a Arin`. Nobody is
+    /// reading a terminal, so a bare invocation is the app being opened and it runs the
+    /// daemon.
+    Bundle,
+}
+
+impl Launch {
+    /// Tell a double click apart from a shell prompt.
+    ///
+    /// Both arrive as the same binary with an empty argument list, so something outside the
+    /// arguments has to decide. LaunchServices puts the identifier of whatever it opened
+    /// into the environment and a shell does not.
+    ///
+    /// That variable is undocumented, so it is matched against our own identifier rather
+    /// than merely tested for presence, and a terminal on stdin overrides it. Both guards
+    /// fail in the same direction: printing help into a window nobody is looking at is a
+    /// wasted double click, while starting a daemon somebody did not ask for leaves a
+    /// process running with a Screen Recording grant behind it.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn detect() -> Self {
+        use std::io::IsTerminal;
+
+        let opened = std::env::var("__CFBundleIdentifier").is_ok_and(|id| id == BUNDLE_ID);
+        if opened && !std::io::stdin().is_terminal() {
+            Self::Bundle
+        } else {
+            Self::Shell
+        }
+    }
+
+    /// No bundles anywhere else, so nothing can be opened rather than typed.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn detect() -> Self {
+        Self::Shell
+    }
+}
+
+impl Cli {
+    /// Reconcile `-d`, the subcommand, and how the process was started into the one thing
+    /// to do.
+    ///
+    /// `Ok(None)` means nothing was asked for and the caller should print help. That is a
+    /// success rather than an error: someone typing `arin` to see what it is has not made
+    /// a mistake.
+    pub(crate) fn action(self, launch: Launch) -> Result<Option<Command>> {
+        match (self.daemon, self.command) {
+            (true, Some(_)) => bail!(
+                "-d already runs the daemon, so it cannot be combined with a subcommand. \
+                 Use `arin -d` on its own, or name the subcommand you meant."
+            ),
+            (true, None) => Self::daemon_defaults().map(Some),
+            // Opening the app is asking for the daemon. There is no other reason to open
+            // something with no Dock icon and no window.
+            (false, None) if launch == Launch::Bundle => Self::daemon_defaults().map(Some),
+            (false, command) => Ok(command),
+        }
+    }
+
+    /// `-d` is `arin daemon` with nothing else said, and it has to stay exactly that.
+    ///
+    /// Built by parsing the subcommand rather than by constructing the variant, so that the
+    /// environment variables clap reads for `--resolver`, `--color` and the rest reach both
+    /// spellings. A hand-built default would ignore `ARIN_RESOLVER` while `arin daemon`
+    /// honoured it, which is the kind of difference nobody finds until it matters.
+    fn daemon_defaults() -> Result<Command> {
+        Self::try_parse_from(["arin", "daemon"])
+            .context("building the default daemon command for -d")?
+            .command
+            .context("`arin daemon` parsed without a subcommand")
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -325,7 +423,7 @@ mod tests {
             at,
             label,
             target,
-        } = cli.command
+        } = cli.command.expect("a subcommand was given")
         else {
             panic!("expected point");
         };
@@ -340,7 +438,7 @@ mod tests {
         let cli = Cli::parse_from(["arin", "point", "--at", "top-left"]);
         let Command::Point {
             position, y, at, ..
-        } = cli.command
+        } = cli.command.expect("a subcommand was given")
         else {
             panic!("expected point");
         };
@@ -354,7 +452,7 @@ mod tests {
         let cli = Cli::parse_from(["arin", "point", "the Submit button"]);
         let Command::Point {
             position, y, at, ..
-        } = cli.command
+        } = cli.command.expect("a subcommand was given")
         else {
             panic!("expected point");
         };
@@ -372,7 +470,7 @@ mod tests {
             width,
             height,
             ..
-        } = cli.command
+        } = cli.command.expect("a subcommand was given")
         else {
             panic!("expected highlight");
         };
@@ -386,7 +484,7 @@ mod tests {
     #[test]
     fn half_a_coordinate_pair_is_refused_rather_than_grounded() {
         let cli = Cli::parse_from(["arin", "point", "412"]);
-        let Command::Point { position, .. } = cli.command else {
+        let Command::Point { position, .. } = cli.command.expect("a subcommand was given") else {
             panic!("expected point");
         };
         // Clap accepts it. The refusal is the client's, where the message can explain.
@@ -401,12 +499,113 @@ mod tests {
         );
     }
 
+    /// The runtime cannot read the plist of a bundle it may not be inside, so the
+    /// identifier is written twice. This is the only thing stopping the copies drifting,
+    /// and a drift would be silent: `Launch::detect` would stop recognising its own bundle
+    /// and opening the app from Spotlight would quietly print help to nowhere.
+    #[test]
+    fn the_bundle_identifier_matches_the_plist() {
+        let plist = include_str!("../../../packaging/macos/Info.plist");
+        let marker = "<key>CFBundleIdentifier</key>";
+        let rest = plist
+            .split_once(marker)
+            .expect("Info.plist declares a bundle identifier")
+            .1;
+        let declared = rest
+            .split_once("<string>")
+            .and_then(|(_, tail)| tail.split_once("</string>"))
+            .expect("the identifier is a string value")
+            .0
+            .trim();
+
+        assert_eq!(
+            declared, BUNDLE_ID,
+            "packaging/macos/Info.plist and cli::BUNDLE_ID disagree, so the app would not \
+             recognise itself when opened from Finder"
+        );
+    }
+
+    /// Opening something with no Dock icon and no window is asking for the daemon. There
+    /// is nothing else it could mean, and no terminal to print help into.
+    #[test]
+    fn opening_the_app_runs_the_daemon_where_a_shell_would_get_help() {
+        let opened = Cli::parse_from(["arin"])
+            .action(Launch::Bundle)
+            .expect("opening the app is a valid way to start")
+            .expect("opening the app runs something");
+        let Command::Daemon { .. } = opened else {
+            panic!("opening the app has to reach the daemon");
+        };
+
+        assert!(
+            Cli::parse_from(["arin"])
+                .action(Launch::Shell)
+                .expect("bare `arin` is not an error")
+                .is_none(),
+            "the same empty command line typed at a shell still prints help"
+        );
+    }
+
+    /// Someone typing `arin` to find out what it is has not made a mistake, so this parses
+    /// and the caller prints help. The check is that no subcommand is demanded.
+    #[test]
+    fn bare_arin_is_not_an_error() {
+        let cli = Cli::try_parse_from(["arin"]).expect("bare `arin` must parse");
+        assert!(cli.command.is_none());
+        assert!(!cli.daemon);
+        assert!(
+            cli.action(Launch::Shell)
+                .expect("bare `arin` is not an error")
+                .is_none(),
+            "nothing was asked for, so there is nothing to run"
+        );
+    }
+
+    /// The two spellings must not drift. Built by parsing rather than by constructing the
+    /// variant, so this also covers the environment variables reaching both.
+    #[test]
+    fn dash_d_is_exactly_the_daemon_subcommand() {
+        let short = Cli::parse_from(["arin", "-d"])
+            .action(Launch::Shell)
+            .expect("-d is a valid line")
+            .expect("-d runs something");
+        let long = Cli::parse_from(["arin", "daemon"])
+            .action(Launch::Shell)
+            .expect("the subcommand is a valid line")
+            .expect("the subcommand runs something");
+
+        let (Command::Daemon { .. }, Command::Daemon { .. }) = (&short, &long) else {
+            panic!("both spellings must reach the daemon");
+        };
+        assert_eq!(
+            format!("{short:?}"),
+            format!("{long:?}"),
+            "`arin -d` and `arin daemon` must agree on every option, or one of them is a \
+             second daemon command line that nobody is maintaining"
+        );
+    }
+
+    /// `-d` runs the daemon, and the one shot commands connect, send, and exit. Combining
+    /// them asks for two different programs at once, so it is refused rather than
+    /// resolved by precedence.
+    #[test]
+    fn dash_d_refuses_to_be_a_modifier_on_a_subcommand() {
+        let cli = Cli::parse_from(["arin", "-d", "clear"]);
+        let error = cli
+            .action(Launch::Shell)
+            .expect_err("-d with a subcommand is refused");
+        assert!(
+            error.to_string().contains("cannot be combined"),
+            "the error has to say what is wrong with the line, got: {error}"
+        );
+    }
+
     /// The daemon has to be told to ground, and the flag reads as a switch rather than as
     /// a model name so that turning it on is a decision about egress rather than a tweak.
     #[test]
     fn the_daemon_takes_a_named_resolver_and_defaults_to_none() {
         let cli = Cli::parse_from(["arin", "daemon"]);
-        let Command::Daemon { resolver, .. } = cli.command else {
+        let Command::Daemon { resolver, .. } = cli.command.expect("a subcommand was given") else {
             panic!("expected daemon");
         };
         assert_eq!(
@@ -415,7 +614,7 @@ mod tests {
         );
 
         let cli = Cli::parse_from(["arin", "daemon", "--resolver", "claude"]);
-        let Command::Daemon { resolver, .. } = cli.command else {
+        let Command::Daemon { resolver, .. } = cli.command.expect("a subcommand was given") else {
             panic!("expected daemon");
         };
         assert_eq!(resolver.as_deref(), Some("claude"));
@@ -435,7 +634,7 @@ mod tests {
     #[test]
     fn clear_defaults_to_everything() {
         let cli = Cli::parse_from(["arin", "clear"]);
-        let Command::Clear { annotation_id } = cli.command else {
+        let Command::Clear { annotation_id } = cli.command.expect("a subcommand was given") else {
             panic!("expected clear");
         };
         assert_eq!(annotation_id, None);
