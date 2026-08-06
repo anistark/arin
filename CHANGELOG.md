@@ -24,6 +24,28 @@ is a format.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-03
+
+Nothing in the application changed. This exists to exercise the release path, which is
+what the fix below is about.
+
+### Fixed
+
+- The release workflow's Homebrew tap job opened no pull request, and reported success
+  while doing it. It copied the rendered formula into a clone of the tap and then asked
+  `git diff --quiet` whether anything had changed. The tap had no `Formula/arin.rb` yet, so
+  the copy was an untracked file, and `git diff` does not see untracked files. It concluded
+  there was nothing to do and exited zero. `git commit -am` would have staged nothing for
+  the same reason, so even reaching that line would not have helped.
+
+  The formula is now staged before it is compared, and the comparison is `git diff --cached
+  --quiet`. A job that does nothing is worse than one that fails, because nothing draws
+  attention to it.
+- The job also ran with an empty token. `HOMEBREW_TAP_TOKEN` was never set, and cloning a
+  public repository works without one, so the failure would have surfaced several steps
+  later as a push rejection that reads like a branch permission problem. It now checks for
+  the secret first and says what it is and what scopes it needs.
+
 ## [0.2.0] - 2026-08-02
 
 `arin-protocol` and `arin` were published to crates.io at `0.1.0` on 2026-07-30 with no tag
@@ -617,5 +639,6 @@ macOS only. Linux and Windows are planned and nothing of either is in this relea
 core and the protocol build and test on Linux with no platform crate in the tree, which is
 what keeps that port cheap to pick up rather than evidence it works.
 
-[Unreleased]: https://github.com/anistark/arin/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/anistark/arin/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/anistark/arin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/anistark/arin/releases/tag/v0.2.0

@@ -84,14 +84,14 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arin"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arin-protocol",
 ]
 
 [[package]]
 name = "arin-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arin-core",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "arin-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arin-protocol",
  "futures",
@@ -124,11 +124,11 @@ dependencies = [
 
 [[package]]
 name = "arin-linux"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "arin-mac"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arin-core",
  "arin-protocol",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "arin-mcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arin-core",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "arin-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "arin-resolve"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arin-core",
  "arin-protocol",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "arin-win"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "async-trait"
