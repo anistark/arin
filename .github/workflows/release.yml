@@ -245,6 +245,15 @@ jobs:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.tarball.outputs.version }}
         run: |
+          # Checked first, because without it the clone still succeeds against a public
+          # repository and the failure surfaces several steps later as a push rejection,
+          # which reads like a permissions problem with the branch rather than a missing
+          # secret.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. It needs contents and pull-requests write on anistark/homebrew-tools."
+            exit 1
+          fi
+
           git clone --depth 1 \
             "https://x-access-token:${GH_TOKEN}@github.com/anistark/homebrew-tools.git" tap
           cd tap
@@ -254,16 +263,24 @@ jobs:
 
           branch="arin-$VERSION"
           git checkout -b "$branch"
+          mkdir -p Formula
           cp ../rendered.rb Formula/arin.rb
 
-          # Nothing to say if the render is identical to what is already there, which
-          # happens when a tag is re-pushed.
-          if git diff --quiet; then
+          # Staged before it is compared, because both `git diff` and `commit -a` are blind
+          # to a file that is not tracked yet. Before the first release the tap has no
+          # Formula/arin.rb at all, so the unstaged forms of these reported nothing to do
+          # and the job went green having done nothing, which is how v0.2.0 shipped with no
+          # tap pull request.
+          git add Formula/arin.rb
+
+          # Nothing to say if the render matches what is already there, which happens when
+          # a tag is re-pushed.
+          if git diff --cached --quiet; then
             echo "formula already matches this tag, nothing to open"
             exit 0
           fi
 
-          git commit -am "arin $VERSION"
+          git commit -m "arin $VERSION"
           git push -u origin "$branch"
 
           gh pr create \
