@@ -23,6 +23,11 @@
   darwinMinVersionHook,
   imagemagick,
   libicns,
+
+  # Run the workspace tests as part of the build. Off by default and exposed as
+  # `packages.arin-tested`, so wanting them is `nix run github:anistark/arin#arin-tested`
+  # rather than an override nobody can be expected to spell from memory.
+  runTests ? false,
 }:
 
 let
@@ -76,8 +81,13 @@ rustPlatform.buildRustPackage {
   # It was `--workspace` first, which meant every person installing Arin compiled and ran
   # the whole suite, a good share of a nine minute build, to learn what CI already checked
   # on every pull request against the same code. What it costs is a build at a commit CI
-  # never saw, which is somebody installing from a branch, and they have `cargo test`.
-  doCheck = false;
+  # never saw, which is somebody installing from a branch, and `arin-tested` is for them.
+  #
+  # The suite is headless by design: platform behaviour arrives through traits and the tests
+  # wire up fakes, so nothing in it wants a window server, which is what makes it runnable
+  # inside a build at all.
+  doCheck = runTests;
+  cargoTestFlags = [ "--workspace" ];
 
   postInstall = ''
     app=$out/Applications/Arin.app

@@ -28,11 +28,19 @@
 
       forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      packageFor = pkgs: pkgs.callPackage ./packaging/nix/package.nix { };
+      packageFor = pkgs: args: pkgs.callPackage ./packaging/nix/package.nix args;
     in
     {
       packages = forEachSystem (pkgs: rec {
-        arin = packageFor pkgs;
+        arin = packageFor pkgs { };
+
+        # The same build with the workspace tests run inside it, for anyone who would
+        # rather pay the minutes than take CI's word for a commit. A separate attribute
+        # rather than an override, so it is `nix run github:anistark/arin#arin-tested` and
+        # shows up in `nix flake show`. `doCheck` is part of the derivation, so this
+        # compiles from scratch rather than reusing the untested build.
+        arin-tested = packageFor pkgs { runTests = true; };
+
         default = arin;
       });
 
@@ -54,7 +62,7 @@
         }
       );
 
-      overlays.default = final: _prev: { arin = packageFor final; };
+      overlays.default = final: _prev: { arin = packageFor final { }; };
 
       # `services.arin.enable = true` in a nix-darwin configuration. Takes `self` so the
       # daemon it starts is built from the same revision as the module describing it.
@@ -87,8 +95,11 @@
         };
       });
 
+      # Both, so `nix flake check` is what runs the tests through Nix and the opt-in build
+      # cannot rot unnoticed. It costs a second full compile, which is why the workflow that
+      # runs it is gated on the paths that can break a Nix build in the first place.
       checks = forEachSystem (pkgs: {
-        inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) arin;
+        inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) arin arin-tested;
       });
 
       # The one output that is not macOS only. Formatting is not platform specific, and

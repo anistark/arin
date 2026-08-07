@@ -46,7 +46,7 @@ startup-disable:
 nix-build:
     nix build --print-build-logs
 
-# Build the flake and run the workspace tests inside it.
+# Build it both ways, with the workspace tests run inside the build and without.
 nix-check:
     nix flake check --print-build-logs
 

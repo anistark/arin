@@ -139,8 +139,19 @@ nix fmt          # nixfmt
 
 Building the package does not run the test suite. CI runs it on every pull request against
 the same code, and making every person who installs Arin run it again is most of the
-difference between a slow install and a quick one. `cargo test --workspace` inside
-`nix develop` is the same suite if you want it.
+difference between a slow install and a quick one.
+
+If you would rather pay the minutes than take CI's word for it, there is a second package
+that runs the whole workspace suite inside the build:
+
+```sh
+nix run github:anistark/arin#arin-tested -- -d
+nix build github:anistark/arin#arin-tested
+```
+
+It is the same Arin. `doCheck` is part of a derivation, so it compiles from scratch rather
+than reusing the untested build, and it is worth it mainly when you are installing from a
+branch or a commit CI has never seen. `nix flake check` builds both.
 
 The dev shell is offered rather than required. Arin is developed here with rustup and the
 system Xcode, and what the shell has to stay is one in which `just ci` passes.
