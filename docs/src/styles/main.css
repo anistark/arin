@@ -164,6 +164,72 @@ body {
   }
 }
 
+/* Pointer reveal on the documentation cards.
+   The card is a screen and the cursor is the orb: a halo travels with the pointer, and the
+   grid of points underneath surfaces only where it falls. That is the whole product in a
+   hover state, which is why the reveal follows the pointer rather than fading the card in
+   as a block. Blue throughout, because the orb is blue and this is Arin's own chrome. */
+.reveal-card {
+  --reveal-x: 50%;
+  --reveal-y: 0%;
+  overflow: hidden;
+}
+
+.reveal-card__glow,
+.reveal-card__field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.reveal-card__glow {
+  background: radial-gradient(
+    circle 11rem at var(--reveal-x) var(--reveal-y),
+    color-mix(in srgb, var(--color-primary) 20%, transparent),
+    transparent 68%
+  );
+}
+
+/* The mask is what makes this a reveal rather than an overlay: the dots are always there
+   and the halo decides which of them you can see. */
+.reveal-card__field {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--color-primary-soft) 62%, transparent) 1px,
+    transparent 1.5px
+  );
+  background-size: 13px 13px;
+  --reveal-mask: radial-gradient(
+    circle 8.5rem at var(--reveal-x) var(--reveal-y),
+    rgb(0 0 0 / 1),
+    rgb(0 0 0 / 0.28) 46%,
+    transparent 70%
+  );
+  -webkit-mask-image: var(--reveal-mask);
+  mask-image: var(--reveal-mask);
+}
+
+/* Touch has no pointer to follow, so it gets the plain card rather than a glow parked in
+   whatever corner the last tap landed in. */
+@media (hover: hover) {
+  .reveal-card:hover .reveal-card__glow,
+  .reveal-card:hover .reveal-card__field,
+  .reveal-card:focus-within .reveal-card__glow,
+  .reveal-card:focus-within .reveal-card__field {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .reveal-card__glow,
+  .reveal-card__field {
+    transition: opacity 0.45s ease;
+  }
+}
+
 /* Docs prose */
 .prose-arin {
   --tw-prose-body: var(--color-fog);
