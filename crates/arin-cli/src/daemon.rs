@@ -52,45 +52,6 @@ pub(crate) fn start_daemon(config: Config, headless: bool, check_updates: bool) 
     }
 }
 
-#[cfg(test)]
-mod exit_tests {
-    use super::already_serving;
-
-    /// The whole point of the distinction: this exit code decides whether launchd tries
-    /// again. A daemon that cannot bind because one is already running must not be
-    /// respawned, or `KeepAlive` turns it into a loop.
-    #[test]
-    fn a_socket_someone_else_owns_is_not_a_failure() {
-        let taken = anyhow::Error::new(arin_core::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::AddrInUse,
-            "another daemon is already listening on /tmp/arin.sock",
-        )))
-        .context("could not bind the socket");
-
-        assert!(
-            already_serving(&taken),
-            "the reason is wrapped in context, so it has to be found down the chain \
-             rather than on the outermost error"
-        );
-    }
-
-    /// Every other failure still exits non-zero, because those are worth retrying and
-    /// worth seeing.
-    #[test]
-    fn other_failures_still_report_as_failures() {
-        let denied = anyhow::Error::new(arin_core::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "permission denied",
-        )))
-        .context("could not bind the socket");
-        assert!(!already_serving(&denied));
-
-        assert!(!already_serving(&anyhow::anyhow!(
-            "something else entirely"
-        )));
-    }
-}
-
 /// End the process with the code the reason deserves, and say the whole reason first.
 ///
 /// Two things were wrong with `exit(1)` and a one line message.
@@ -488,10 +449,49 @@ fn plural(count: usize) -> &'static str {
 }
 
 // The status line is the menu bar's, so it only exists where there is a menu bar.
-#[cfg(all(test, target_os = "macos"))]
+// One module rather than two, and at the end of the file rather than in the middle of it.
+// Clippy denies an item declared after a `#[cfg(test)]` module, which is a readability rule
+// worth keeping: tests belong under the code they cover, not between two halves of it.
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The whole point of the distinction: this exit code decides whether launchd tries
+    /// again. A daemon that cannot bind because one is already running must not be
+    /// respawned, or `KeepAlive` turns it into a loop.
+    #[test]
+    fn a_socket_someone_else_owns_is_not_a_failure() {
+        let taken = anyhow::Error::new(arin_core::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "another daemon is already listening on /tmp/arin.sock",
+        )))
+        .context("could not bind the socket");
+
+        assert!(
+            already_serving(&taken),
+            "the reason is wrapped in context, so it has to be found down the chain \
+             rather than on the outermost error"
+        );
+    }
+
+    /// Every other failure still exits non-zero, because those are worth retrying and
+    /// worth seeing.
+    #[test]
+    fn other_failures_still_report_as_failures() {
+        let denied = anyhow::Error::new(arin_core::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )))
+        .context("could not bind the socket");
+        assert!(!already_serving(&denied));
+
+        assert!(!already_serving(&anyhow::anyhow!(
+            "something else entirely"
+        )));
+    }
+
+    /// The status line is the menu bar's, so it only exists where there is a menu bar.
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_status_line_reads_as_a_sentence() {
         assert_eq!(status_line(0, 0), "idle, no clients");
