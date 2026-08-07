@@ -126,11 +126,13 @@ sync-version:
 # release rather than creating a second one, but it will write its own notes if it gets
 # there first. It spends minutes building before it looks, so it never does.
 #
-# `just gh-release` titles the release `v{version}`. Pass a title to override:
-# `just gh-release "Arin, now installable"`.
+# The title and the notes are both asked for rather than taken as arguments. `just publish`
+# ends by cutting the release too, so an argument here is an argument there as well, threaded
+# through a second recipe to reach one prompt. Asking puts the question in the one place that
+# needs the answer, and both ways in get it.
 
-# Tag the current version and cut a GitHub release. Asks where the notes come from.
-gh-release title="":
+# Tag the current version and cut a GitHub release. Asks for the title and the notes.
+gh-release:
     #!/usr/bin/env sh
     set -eu
 
@@ -140,8 +142,6 @@ gh-release title="":
         exit 1
     fi
     tag="v$version"
-    title="{{ title }}"
-    [ -n "$title" ] || title="$tag"
 
     # Each guard below is something that cannot be undone from here. A tag points at a
     # commit forever, and a release cut from a tree that does not match what was tested is
@@ -164,6 +164,13 @@ gh-release title="":
         read -r reply
         case "$reply" in y | Y) ;; *) exit 1 ;; esac
     fi
+
+    # A default in the prompt rather than a numbered menu like the notes below, because there
+    # are only two answers and return is one of them. A menu would ask twice to reach the
+    # same place: pick "write your own", then write it.
+    printf 'title [%s]: ' "$tag"
+    read -r title
+    [ -n "$title" ] || title="$tag"
 
     notes_file=$(mktemp)
     trap 'rm -f "$notes_file"' EXIT
