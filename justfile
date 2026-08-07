@@ -39,6 +39,17 @@ startup-enable app="/Applications/Arin.app":
 startup-disable:
     packaging/macos/launch-agent.sh disable
 
+# The flake builds the same bundle without a Rust toolchain on the machine. macOS only,
+# and it needs Nix, which is why neither recipe is part of `just ci`.
+
+# Build Arin.app through the flake, into ./result.
+nix-build:
+    nix build --print-build-logs
+
+# Build it both ways, with the workspace tests run inside the build and without.
+nix-check:
+    nix flake check --print-build-logs
+
 test:
     cargo test --workspace
 

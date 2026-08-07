@@ -24,6 +24,48 @@ is a format.
 
 ## [Unreleased]
 
+### Added
+
+- **Arin installs with Nix**, which makes two ways onto a Mac rather than one.
+
+  ```sh
+  nix run github:anistark/arin -- -d
+  ```
+
+  The flake exposes the package for `aarch64-darwin` and `x86_64-darwin`, an overlay, a dev
+  shell, and a nix-darwin module. It builds `Arin.app` rather than a bare binary, for the
+  same reasons the Homebrew formula does: the Screen Recording grant belongs to a bundle,
+  the missing Dock icon is a property of `Info.plist`, and one binary serves as the app and
+  the command line tool with `bin/arin` a symlink into the bundle.
+
+  It is not `packaging/macos/bundle.sh`. That script reaches for `sips`, `iconutil`, `lipo`
+  and `rustup`, none of which a Nix build may assume, so the bundle is assembled twice on
+  purpose and the two are held together by sharing one `Info.plist`, one launch agent
+  template, and one logo. The visible differences are that Nix builds one architecture
+  instead of a universal binary, and that the icon carries no retina entries.
+
+  ```nix
+  services.arin = {
+    enable = true;
+    resolver = "local";
+  };
+  ```
+
+  The nix-darwin module writes the same launch agent, under the same label, that
+  `launch-agent.sh enable` installs, so the two collide loudly instead of running two
+  daemons against one socket. What it adds is the daemon's command line under version
+  control: the script installs a plist that runs `arin daemon` with nothing else said, and
+  anything past that is hand editing a generated file that the next `enable` overwrites.
+
+  There is no checksum to rewrite at release time, which is the one way this is simpler
+  than the formula. A flake reference names a git revision and Nix checksums what it
+  fetched, so `packaging/nix/` can change on any commit without a release job keeping a
+  copy of it in step somewhere else.
+
+  Unsigned, like everything else until 0.7, with one consequence a store path makes
+  unusually visible: every update is a new path and a new hash, so macOS asks for Screen
+  Recording again. Signing is what fixes that, not Nix.
+
 ## [0.3.0] - 2026-08-07
 
 ### Added

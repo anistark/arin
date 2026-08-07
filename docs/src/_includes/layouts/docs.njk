@@ -10,12 +10,19 @@ layout: layouts/base.njk
         <summary class="cursor-pointer list-none px-5 py-4 font-display text-sm font-semibold uppercase tracking-widest text-mist lg:cursor-default lg:pb-2 [&::-webkit-details-marker]:hidden">
           Documentation
         </summary>
-        <nav class="flex flex-col gap-1 px-3 pb-3 lg:pb-1">
-          {% for doc in docsNav %}
-          <a href="/docs/{{ doc.slug }}/"
-             class="rounded-lg px-3 py-2 text-sm transition {% if slug == doc.slug %}bg-primary/15 font-semibold text-primary-soft{% else %}text-fog hover:bg-white/5 hover:text-frost{% endif %}">
-            {{ doc.title }}
-          </a>
+        <nav class="flex flex-col gap-4 px-3 pb-3 lg:pb-1">
+          {% for section in docsSections %}
+          <div class="flex flex-col gap-1">
+            <span class="px-3 pt-1 text-[0.7rem] font-semibold uppercase tracking-widest text-mist/70">
+              {{ section.name }}
+            </span>
+            {% for doc in section.docs %}
+            <a href="/docs/{{ doc.slug }}/"
+               class="rounded-lg px-3 py-2 text-sm transition {% if slug == doc.slug %}bg-primary/15 font-semibold text-primary-soft{% else %}text-fog hover:bg-white/5 hover:text-frost{% endif %}">
+              {{ doc.title }}
+            </a>
+            {% endfor %}
+          </div>
           {% endfor %}
         </nav>
       </details>

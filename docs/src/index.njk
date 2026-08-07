@@ -14,12 +14,12 @@ description: Arin is a local daemon that draws on your screen. Any AI can point,
         An annotation layer any agent can
         <span class="bg-gradient-to-r from-primary-soft via-secondary-soft to-tertiary-soft bg-clip-text text-transparent">draw on</span>.
       </h1>
-      <p class="mt-6 max-w-xl text-lg leading-relaxed text-mist">
+      <p class="mt-6 max-w-measure-tight text-lg leading-relaxed text-mist">
         Arin draws on your screen. Agents point at things, highlight regions, and write
         explanations over MCP or a small JSON protocol. It draws. It never clicks.
       </p>
       <div class="mt-8 flex flex-wrap items-center gap-4">
-        <a href="/docs/building/" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-abyss shadow-lg shadow-primary/25 transition hover:bg-primary-soft">
+        <a href="/docs/quickstart/" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-abyss shadow-lg shadow-primary/25 transition hover:bg-primary-soft">
           Get started
         </a>
         <a href="/docs/" class="glass rounded-xl px-5 py-2.5 text-sm font-semibold text-frost transition hover:border-white/20">
@@ -28,7 +28,7 @@ description: Arin is a local daemon that draws on your screen. Any AI can point,
       </div>
       <div class="glass mt-8 inline-flex max-w-full items-center gap-3 rounded-xl px-4 py-3 font-mono text-sm text-secondary-soft">
         <span class="select-none text-mist">$</span>
-        <code class="overflow-x-auto whitespace-nowrap">brew install anistark/tools/arin</code>
+        <code class="break-words">brew install anistark/tools/arin</code>
       </div>
     </div>
 
@@ -39,7 +39,7 @@ description: Arin is a local daemon that draws on your screen. Any AI can point,
 </section>
 
 <section class="mx-auto max-w-7xl px-6 py-16">
-  <div class="mx-auto max-w-2xl text-center" data-reveal>
+  <div class="mx-auto max-w-measure-tight text-center" data-reveal>
     <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">It draws. It never clicks.</h2>
     <p class="mt-4 text-mist">
       Arin never synthesises input. No clicks, no keystrokes, no scrolling. That boundary
@@ -81,7 +81,7 @@ description: Arin is a local daemon that draws on your screen. Any AI can point,
 </section>
 
 <section class="mx-auto max-w-7xl px-6 py-16">
-  <div class="mx-auto max-w-2xl text-center" data-reveal>
+  <div class="mx-auto max-w-measure-tight text-center" data-reveal>
     <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">From tool call to pixels</h2>
     <p class="mt-4 text-mist">
       One round trip, entirely on your machine.
@@ -113,100 +113,172 @@ description: Arin is a local daemon that draws on your screen. Any AI can point,
 </section>
 
 <section class="mx-auto max-w-7xl px-6 py-16">
-  <div class="mx-auto max-w-2xl text-center" data-reveal>
-    <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">Four marks, one vocabulary</h2>
+  <div class="mx-auto max-w-measure-tight text-center" data-reveal>
+    <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">Two ways in, three ways to drive</h2>
     <p class="mt-4 text-mist">
-      An agent explaining an article can circle each section as it talks about it. A
-      reviewer can point at the exact line it means.
+      One binary is the daemon, the MCP server, and the command line tool. However you
+      install it and whatever talks to it, that is the same build.
     </p>
   </div>
-  <div class="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 0">
-      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
-        <circle cx="60" cy="28" r="18" fill="#4C8DFF" opacity="0.15" class="transition-transform duration-500 group-hover:scale-125" style="transform-origin: center"/>
-        <circle cx="60" cy="28" r="9" fill="#4C8DFF" opacity="0.45"/>
-        <circle cx="60" cy="28" r="4" fill="#A9DCFF"/>
-      </svg>
-      <p class="font-mono text-sm text-primary-soft">point_at</p>
-      <p class="mt-2 text-sm leading-relaxed text-mist">Puts the orb on a position, with an optional caption.</p>
-    </div>
-    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 1">
-      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
-        <rect x="22" y="12" width="76" height="32" rx="8" stroke="#3DDC97" stroke-width="2" fill="#3DDC97" fill-opacity="0.08" class="transition-transform duration-500 group-hover:scale-105" style="transform-origin: center"/>
-        <rect x="32" y="24" width="44" height="4" rx="2" fill="#3DDC97" opacity="0.35"/>
-        <rect x="32" y="32" width="30" height="4" rx="2" fill="#3DDC97" opacity="0.2"/>
-      </svg>
-      <p class="font-mono text-sm text-secondary-soft">highlight</p>
-      <p class="mt-2 text-sm leading-relaxed text-mist">Frames a region of the screen so it stands out.</p>
-    </div>
-    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 2">
-      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
-        <rect x="30" y="10" width="60" height="30" rx="6" stroke="#A78BFA" stroke-opacity="0.6" fill="#0A1020"/>
-        <rect x="38" y="18" width="44" height="3.5" rx="1.75" fill="#C9B8FF" opacity="0.7"/>
-        <rect x="38" y="26" width="32" height="3.5" rx="1.75" fill="#C9B8FF" opacity="0.4"/>
-        <path d="M52 40 L46 48" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" class="transition-transform duration-500 group-hover:translate-y-0.5"/>
-      </svg>
-      <p class="font-mono text-sm text-tertiary-soft">annotate</p>
-      <p class="mt-2 text-sm leading-relaxed text-mist">Writes a short explanation next to the thing it explains.</p>
-    </div>
-    <div class="glass group rounded-2xl p-5" data-reveal style="--reveal-delay: 3">
-      <svg viewBox="0 0 120 56" class="mb-4 h-14 w-full" fill="none" aria-hidden="true">
-        <path d="M20 38 C 36 14, 50 44, 66 24 S 96 22, 102 30" stroke="#4C8DFF" stroke-width="2.5" stroke-linecap="round" pathLength="100" class="draw-glyph"/>
-      </svg>
-      <p class="font-mono text-sm text-primary-soft">draw</p>
-      <p class="mt-2 text-sm leading-relaxed text-mist">Freehand paths for circles, arrows, and underlines.</p>
-    </div>
-  </div>
-</section>
 
-<section class="mx-auto max-w-7xl px-6 py-16">
-  <div class="mx-auto max-w-2xl text-center" data-reveal>
-    <h2 class="font-display text-3xl font-bold tracking-tight text-frost sm:text-4xl">Drive it your way</h2>
-    <p class="mt-4 text-mist">
-      One binary speaks MCP for agents, a CLI for your shell, and newline-delimited JSON
-      for everything else.
-    </p>
-  </div>
-  <div class="mt-12 grid gap-6 lg:grid-cols-3">
-    <div class="glass glass-edge flex flex-col overflow-hidden rounded-2xl" data-reveal style="--reveal-delay: 0">
-      <div class="flex items-center gap-2 border-b border-white/10 bg-deep/60 px-4 py-3">
-        <span class="h-2.5 w-2.5 rounded-full bg-[#FF5F57]/80"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-[#FEBC2E]/80"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-[#28C840]/80"></span>
-        <span class="ml-2 font-mono text-xs text-mist">agent</span>
-      </div>
-      <div class="flex flex-1 flex-col p-6 pt-5">
-        <h3 class="font-display text-lg font-semibold text-frost">From an agent</h3>
-        <pre class="mt-4 flex-1 overflow-x-auto rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code><span class="text-mist"># Claude Code, one line</span>
+  {#
+    A bento rather than a row of equal cards, because these are not equal. Installing is a
+    thing you do once and driving is a thing you do every day, and MCP is the one most
+    people arrive for, so it is the one that gets the room. The eyebrow on each card says
+    which of the two it is.
+  #}
+  <div class="mt-12 grid gap-6 lg:grid-cols-6">
+    {# The hero of the bento: two columns wide and two rows tall, because pointing at a
+       codebase while an agent explains it is the thing Arin is for. #}
+    <div class="reveal-card glass glass-edge relative flex flex-col rounded-2xl p-6 lg:col-span-4 lg:row-span-2" data-reveal data-reveal-card style="--reveal-delay: 0">
+      <span class="reveal-card__glow" aria-hidden="true"></span>
+      <span class="reveal-card__field" aria-hidden="true"></span>
+
+      <div class="relative z-10 flex flex-1 flex-col">
+        <p class="font-mono text-xs uppercase tracking-widest text-primary-soft/70">Drive</p>
+        <h3 class="mt-2 font-display text-xl font-semibold text-frost">From an agent</h3>
+        <p class="mt-2 text-sm leading-relaxed text-mist">
+          An agent explaining an article can circle each section as it talks about it. A
+          reviewer can point at the exact line it means. Four tools do all of it, named
+          after what the agent is trying to do rather than after the message underneath,
+          so a model reaches for the right one without being told.
+        </p>
+
+        {# The vocabulary, which used to be a section of its own further down the page. It
+           belongs here: these are the four tools the sentence above is counting, so the
+           list and the claim cannot drift apart. `draw` is not among them, because MCP does
+           not expose it. It is a protocol message, and it is named on the shell card. #}
+        <div class="mt-6 grid gap-3 sm:grid-cols-2">
+          <div class="group/tool rounded-xl border border-white/10 bg-deep/50 p-4">
+            <svg viewBox="0 0 120 44" class="h-11 w-full" fill="none" aria-hidden="true">
+              <circle cx="60" cy="22" r="14" fill="#4C8DFF" opacity="0.15" class="transition-transform duration-500 group-hover/tool:scale-125" style="transform-origin: center"/>
+              <circle cx="60" cy="22" r="7" fill="#4C8DFF" opacity="0.45"/>
+              <circle cx="60" cy="22" r="3" fill="#A9DCFF"/>
+            </svg>
+            <p class="mt-3 font-mono text-sm text-primary-soft">point_at</p>
+            <p class="mt-1 text-xs leading-relaxed text-mist">Puts the orb on a position, with an optional caption.</p>
+          </div>
+
+          <div class="group/tool rounded-xl border border-white/10 bg-deep/50 p-4">
+            <svg viewBox="0 0 120 44" class="h-11 w-full" fill="none" aria-hidden="true">
+              <rect x="30" y="8" width="60" height="28" rx="7" stroke="#3DDC97" stroke-width="2" fill="#3DDC97" fill-opacity="0.08" class="transition-transform duration-500 group-hover/tool:scale-105" style="transform-origin: center"/>
+              <rect x="40" y="18" width="34" height="3.5" rx="1.75" fill="#3DDC97" opacity="0.35"/>
+              <rect x="40" y="26" width="22" height="3.5" rx="1.75" fill="#3DDC97" opacity="0.2"/>
+            </svg>
+            <p class="mt-3 font-mono text-sm text-secondary-soft">highlight</p>
+            <p class="mt-1 text-xs leading-relaxed text-mist">Frames a region of the screen so it stands out.</p>
+          </div>
+
+          <div class="group/tool rounded-xl border border-white/10 bg-deep/50 p-4">
+            <svg viewBox="0 0 120 44" class="h-11 w-full" fill="none" aria-hidden="true">
+              <rect x="34" y="4" width="52" height="26" rx="6" stroke="#A78BFA" stroke-opacity="0.6" fill="#0A1020"/>
+              <rect x="42" y="12" width="36" height="3.5" rx="1.75" fill="#C9B8FF" opacity="0.7"/>
+              <rect x="42" y="20" width="24" height="3.5" rx="1.75" fill="#C9B8FF" opacity="0.4"/>
+              <path d="M54 30 L48 38" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" class="transition-transform duration-500 group-hover/tool:translate-y-0.5"/>
+            </svg>
+            <p class="mt-3 font-mono text-sm text-tertiary-soft">annotate</p>
+            <p class="mt-1 text-xs leading-relaxed text-mist">Writes a short explanation next to the thing it explains.</p>
+          </div>
+
+          {# Neutral on purpose. The other three put something on the screen and this one
+             takes it away, so it does not get a mark colour. #}
+          <div class="group/tool rounded-xl border border-white/10 bg-deep/50 p-4">
+            <svg viewBox="0 0 120 44" class="h-11 w-full" fill="none" aria-hidden="true">
+              <circle cx="34" cy="22" r="7" fill="#C3CADB" opacity="0.5" class="transition-opacity duration-500 group-hover/tool:opacity-20"/>
+              <circle cx="56" cy="22" r="5" fill="#C3CADB" opacity="0.3" class="transition-opacity duration-500 group-hover/tool:opacity-10"/>
+              <circle cx="74" cy="22" r="3.5" fill="#C3CADB" opacity="0.18" class="transition-opacity duration-500 group-hover/tool:opacity-0"/>
+              <circle cx="88" cy="22" r="2" fill="#C3CADB" opacity="0.1" class="transition-opacity duration-500 group-hover/tool:opacity-0"/>
+            </svg>
+            <p class="mt-3 font-mono text-sm text-fog">clear</p>
+            <p class="mt-1 text-xs leading-relaxed text-mist">Removes one mark, or every mark the agent drew.</p>
+          </div>
+        </div>
+
+        <pre class="mt-6 whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code><span class="text-mist"># Claude Code, one line</span>
 claude mcp add arin -- arin mcp</code></pre>
         <a href="/docs/mcp/" class="mt-4 text-sm font-medium text-primary-soft transition hover:text-frost">MCP docs &rarr;</a>
       </div>
     </div>
-    <div class="glass glass-edge flex flex-col overflow-hidden rounded-2xl" data-reveal style="--reveal-delay: 1">
-      <div class="flex items-center gap-2 border-b border-white/10 bg-deep/60 px-4 py-3">
-        <span class="h-2.5 w-2.5 rounded-full bg-[#FF5F57]/80"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-[#FEBC2E]/80"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-[#28C840]/80"></span>
-        <span class="ml-2 font-mono text-xs text-mist">zsh</span>
+
+    <div class="reveal-card glass glass-edge relative flex flex-col rounded-2xl p-6 lg:col-span-2" data-reveal data-reveal-card style="--reveal-delay: 1">
+      <span class="reveal-card__glow" aria-hidden="true"></span>
+      <span class="reveal-card__field" aria-hidden="true"></span>
+
+      <div class="group relative z-10 flex flex-1 flex-col">
+        <p class="font-mono text-xs uppercase tracking-widest text-fog/60">Install</p>
+        <h3 class="mt-2 font-display text-lg font-semibold text-frost">Homebrew</h3>
+
+        <svg viewBox="0 0 120 44" class="mt-4 h-11 w-full" fill="none" aria-hidden="true">
+          <path d="M46 12 h28 a6 6 0 0 1 6 6 v14 a6 6 0 0 1 -6 6 h-28 a6 6 0 0 1 -6 -6 v-14 a6 6 0 0 1 6 -6 z" stroke="#C3CADB" stroke-opacity="0.45" fill="#0A1020"/>
+          <path d="M40 20 h40" stroke="#C3CADB" stroke-opacity="0.3"/>
+          <path d="M60 4 v8" stroke="#8FB8FF" stroke-width="2" stroke-linecap="round" class="transition-transform duration-500 group-hover:translate-y-1"/>
+          <path d="M56 8 l4 4 l4 -4" stroke="#8FB8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform duration-500 group-hover:translate-y-1"/>
+        </svg>
+
+        <p class="mt-4 flex-1 text-sm leading-relaxed text-mist">
+          Compiles where it runs, so nothing is ever quarantined and Gatekeeper never
+          engages.
+        </p>
+        <pre class="mt-4 whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-deep/80 p-3 font-mono text-xs leading-relaxed text-fog"><code>brew install anistark/tools/arin</code></pre>
+        <a href="/docs/install/" class="mt-4 text-sm font-medium text-primary-soft transition hover:text-frost">Install docs &rarr;</a>
       </div>
-      <div class="flex flex-1 flex-col p-6 pt-5">
-        <h3 class="font-display text-lg font-semibold text-frost">From a shell</h3>
-        <pre class="mt-4 flex-1 overflow-x-auto rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code>arin point --at top-right \
-  --label "the close button"</code></pre>
+    </div>
+
+    <div class="reveal-card glass glass-edge relative flex flex-col rounded-2xl p-6 lg:col-span-2" data-reveal data-reveal-card style="--reveal-delay: 2">
+      <span class="reveal-card__glow" aria-hidden="true"></span>
+      <span class="reveal-card__field" aria-hidden="true"></span>
+
+      <div class="group relative z-10 flex flex-1 flex-col">
+        <p class="font-mono text-xs uppercase tracking-widest text-fog/60">Install</p>
+        <h3 class="mt-2 font-display text-lg font-semibold text-frost">Nix</h3>
+
+        <svg viewBox="0 0 120 44" class="mt-4 h-11 w-full" fill="none" aria-hidden="true">
+          <g stroke="#8FB8FF" stroke-width="2" stroke-linecap="round" class="transition-transform duration-700 group-hover:rotate-60" style="transform-origin: 60px 22px">
+            <path d="M60 6 v32" stroke-opacity="0.75"/>
+            <path d="M46 14 l28 16" stroke-opacity="0.5"/>
+            <path d="M74 14 l-28 16" stroke-opacity="0.5"/>
+          </g>
+          <circle cx="60" cy="22" r="3" fill="#A9DCFF"/>
+        </svg>
+
+        <p class="mt-4 flex-1 text-sm leading-relaxed text-mist">
+          A flake for both Macs, with a nix-darwin module that puts the daemon's options
+          under version control.
+        </p>
+        <pre class="mt-4 whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-deep/80 p-3 font-mono text-xs leading-relaxed text-fog"><code>nix run github:anistark/arin -- -d</code></pre>
+        <a href="/docs/nix/" class="mt-4 text-sm font-medium text-primary-soft transition hover:text-frost">Nix docs &rarr;</a>
+      </div>
+    </div>
+
+    <div class="reveal-card glass glass-edge relative flex flex-col rounded-2xl p-6 lg:col-span-3" data-reveal data-reveal-card style="--reveal-delay: 3">
+      <span class="reveal-card__glow" aria-hidden="true"></span>
+      <span class="reveal-card__field" aria-hidden="true"></span>
+
+      <div class="group relative z-10 flex flex-1 flex-col">
+        <p class="font-mono text-xs uppercase tracking-widest text-secondary-soft/70">Drive</p>
+        <h3 class="mt-2 font-display text-lg font-semibold text-frost">From a shell</h3>
+        <p class="mt-2 text-sm leading-relaxed text-mist">
+          The same protocol an agent speaks, which makes it the quickest way to see what a
+          mark actually looks like. It reaches one more than MCP does: <code class="font-mono text-secondary-soft">draw</code>,
+          for freehand circles, arrows and underlines.
+        </p>
+        <pre class="mt-4 flex-1 whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code><span class="text-secondary-soft">$</span> arin point --at top-right --label "the close button"</code></pre>
         <a href="/docs/cli/" class="mt-4 text-sm font-medium text-secondary-soft transition hover:text-frost">CLI docs &rarr;</a>
       </div>
     </div>
-    <div class="glass glass-edge flex flex-col overflow-hidden rounded-2xl" data-reveal style="--reveal-delay: 2">
-      <div class="flex items-center gap-2 border-b border-white/10 bg-deep/60 px-4 py-3">
-        <span class="h-2.5 w-2.5 rounded-full bg-[#FF5F57]/80"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-[#FEBC2E]/80"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-[#28C840]/80"></span>
-        <span class="ml-2 font-mono text-xs text-mist">socket</span>
-      </div>
-      <div class="flex flex-1 flex-col p-6 pt-5">
-        <h3 class="font-display text-lg font-semibold text-frost">From anything</h3>
-        <pre class="mt-4 flex-1 overflow-x-auto rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code>{"v":"0.1","type":"point",
- "x":412,"y":88,"label":"Save"}</code></pre>
+
+    <div class="reveal-card glass glass-edge relative flex flex-col rounded-2xl p-6 lg:col-span-3" data-reveal data-reveal-card style="--reveal-delay: 4">
+      <span class="reveal-card__glow" aria-hidden="true"></span>
+      <span class="reveal-card__field" aria-hidden="true"></span>
+
+      <div class="group relative z-10 flex flex-1 flex-col">
+        <p class="font-mono text-xs uppercase tracking-widest text-tertiary-soft/70">Drive</p>
+        <h3 class="mt-2 font-display text-lg font-semibold text-frost">From anything</h3>
+        <p class="mt-2 text-sm leading-relaxed text-mist">
+          Newline-delimited JSON over a Unix socket. No client library, and no listening
+          port to find.
+        </p>
+        <pre class="mt-4 flex-1 whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-deep/80 p-4 font-mono text-[13px] leading-relaxed text-fog"><code>{"v":"0.1","type":"point","x":412,"y":88,"label":"Save"}</code></pre>
         <a href="/docs/protocol/" class="mt-4 text-sm font-medium text-tertiary-soft transition hover:text-frost">Protocol docs &rarr;</a>
       </div>
     </div>
@@ -217,11 +289,11 @@ claude mcp add arin -- arin mcp</code></pre>
   <div class="glass glass-edge rounded-3xl px-8 py-12 text-center sm:px-16" data-reveal>
     <img src="/assets/brand/logo.png" alt="" class="mx-auto mb-6 h-16 w-16">
     <h2 class="font-display text-3xl font-bold tracking-tight text-frost">Give your agent some chalk</h2>
-    <p class="mx-auto mt-4 max-w-xl text-mist">
-      One brew install away. Needs macOS 14.2 or newer.
+    <p class="mx-auto mt-4 max-w-measure-tight text-mist">
+      One brew install away. Needs macOS 14 or newer.
     </p>
     <div class="mt-8 flex flex-wrap items-center justify-center gap-4">
-      <a href="/docs/building/" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-abyss shadow-lg shadow-primary/25 transition hover:bg-primary-soft">
+      <a href="/docs/install/" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-abyss shadow-lg shadow-primary/25 transition hover:bg-primary-soft">
         Install Arin
       </a>
       <a href="{{ site.repo }}" class="glass rounded-xl px-5 py-2.5 text-sm font-semibold text-frost transition hover:border-white/20">

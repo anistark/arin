@@ -25,7 +25,16 @@ It draws. It never clicks.
 brew install anistark/tools/arin
 ```
 
-[Website](https://anistark.github.io/arin/) · [Docs](https://anistark.github.io/arin/docs/)
+Or with [Nix](https://anistark.github.io/arin/docs/nix/):
+
+```sh
+nix run github:anistark/arin -- -d
+```
+
+[Quickstart](https://anistark.github.io/arin/docs/quickstart/) ·
+[Install](https://anistark.github.io/arin/docs/install/) ·
+[Docs](https://anistark.github.io/arin/docs/) ·
+[Website](https://anistark.github.io/arin/)
 
 </div>
 

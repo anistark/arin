@@ -6,20 +6,43 @@ permalink: /docs/
 ---
 
 <div class="mx-auto max-w-7xl px-6 pb-16 pt-36">
-  <div class="max-w-2xl">
+  <div class="max-w-measure-tight">
     <h1 class="font-display text-4xl font-bold tracking-tight text-frost sm:text-5xl">Documentation</h1>
     <p class="mt-4 text-lg text-mist">
-      Everything you need to build Arin, run the daemon, and drive it from an agent, a
-      shell, or raw JSON.
+      Everything you need to install Arin, run the daemon, drive it from an agent or a
+      shell, and work on it.
     </p>
   </div>
-  <div class="mt-12 grid gap-6 sm:grid-cols-2">
-    {% for doc in docsNav %}
-    <a href="/docs/{{ doc.slug }}/" class="glass glass-edge group rounded-2xl p-6 transition hover:border-white/20">
-      <h2 class="font-display text-xl font-semibold text-frost transition group-hover:text-primary-soft">{{ doc.title }}</h2>
-      <p class="mt-2 text-sm leading-relaxed text-mist">{{ doc.description }}</p>
-      <span class="mt-4 inline-block text-sm font-medium text-primary-soft">Read &rarr;</span>
-    </a>
+
+  <div class="mt-12 grid gap-6 lg:grid-cols-3">
+    {% for group in docsGroups %}
+    <div class="reveal-card glass glass-edge group relative flex flex-col rounded-2xl p-6 transition hover:border-white/20" data-reveal-card>
+      <span class="reveal-card__glow" aria-hidden="true"></span>
+      <span class="reveal-card__field" aria-hidden="true"></span>
+
+      <h2 class="relative z-10 font-display text-xl font-semibold text-frost transition group-hover:text-primary-soft">
+        {{ group.title }}
+      </h2>
+      <p class="relative z-10 mt-2 text-sm leading-relaxed text-mist">{{ group.description }}</p>
+
+      {# Covers the card so anywhere in it is a click, and is the only link to the section,
+         so the heading above it is not announced a second time. The page links below sit
+         over it and stay individually clickable. #}
+      <a href="/docs/{{ group.slug }}/"
+         class="absolute inset-0 z-20 rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+        <span class="sr-only">{{ group.title }}</span>
+      </a>
+
+      <ul class="relative z-30 mt-5 flex flex-col gap-1 border-t border-white/10 pt-4">
+        {% for doc in group.docs %}
+        <li>
+          <a href="/docs/{{ doc.slug }}/" class="-mx-2 block rounded-lg px-2 py-1.5 text-sm text-fog transition hover:bg-white/5 hover:text-frost">
+            {{ doc.title }}
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
     {% endfor %}
   </div>
 </div>
