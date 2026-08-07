@@ -43,6 +43,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Its own job, on Linux, because formatting is not platform specific and a nit in it must
+  # not stand between a push and finding out whether the package builds. It ran first inside
+  # the build job once, refused two files, and the macOS build never started.
+  #
+  # It formats and then diffs rather than asking `nixfmt --check`, so a failure carries the
+  # correction instead of only the verdict.
+  format:
+    name: nixfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix fmt -- flake.nix packaging/nix/package.nix packaging/nix/darwin-module.nix
+      - run: git diff --exit-code
+
   flake:
     name: nix build
     # arm64. The x86_64-darwin output is evaluated below and not built: GitHub's Intel
@@ -55,9 +70,6 @@ jobs:
       # Pinned to main because that is how this action is published and versioned tags lag
       # behind the macOS changes it exists to keep up with.
       - uses: DeterminateSystems/nix-installer-action@main
-
-      - name: Format
-        run: nix fmt -- --check flake.nix packaging/nix/package.nix packaging/nix/darwin-module.nix
 
       # Both systems, on one runner. This is evaluation only, which is all that can be said
       # about the Intel slice from an arm64 machine, and it still catches the failures that

@@ -92,6 +92,15 @@
         inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) arin;
       });
 
-      formatter = forEachSystem (pkgs: pkgs.nixfmt-rfc-style);
+      # The one output that is not macOS only. Formatting is not platform specific, and
+      # core and the protocol are worked on from Linux, which is the whole point of the
+      # rule that they build with no platform crate in the tree.
+      formatter = nixpkgs.lib.genAttrs (
+        systems
+        ++ [
+          "aarch64-linux"
+          "x86_64-linux"
+        ]
+      ) (system: nixpkgs.legacyPackages.${system}.nixfmt);
     };
 }
