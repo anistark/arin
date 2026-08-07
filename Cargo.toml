@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -14,15 +14,15 @@ categories = ["visualization", "command-line-utilities"]
 
 [workspace.dependencies]
 # Local crates.
-arin = { path = "crates/arin", version = "0.2.1" }
-arin-cli = { path = "crates/arin-cli", version = "0.2.1" }
-arin-core = { path = "crates/arin-core", version = "0.2.1" }
-arin-linux = { path = "crates/arin-linux", version = "0.2.1" }
-arin-mac = { path = "crates/arin-mac", version = "0.2.1" }
-arin-mcp = { path = "crates/arin-mcp", version = "0.2.1" }
-arin-protocol = { path = "crates/arin-protocol", version = "0.2.1" }
-arin-resolve = { path = "crates/arin-resolve", version = "0.2.1" }
-arin-win = { path = "crates/arin-win", version = "0.2.1" }
+arin = { path = "crates/arin", version = "0.3.0" }
+arin-cli = { path = "crates/arin-cli", version = "0.3.0" }
+arin-core = { path = "crates/arin-core", version = "0.3.0" }
+arin-linux = { path = "crates/arin-linux", version = "0.3.0" }
+arin-mac = { path = "crates/arin-mac", version = "0.3.0" }
+arin-mcp = { path = "crates/arin-mcp", version = "0.3.0" }
+arin-protocol = { path = "crates/arin-protocol", version = "0.3.0" }
+arin-resolve = { path = "crates/arin-resolve", version = "0.3.0" }
+arin-win = { path = "crates/arin-win", version = "0.3.0" }
 
 # Shared third party.
 anyhow = "1.0.104"

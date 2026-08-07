@@ -11,6 +11,20 @@ write explanations. Any AI can drive it over MCP or a small JSON protocol.
 
 It draws. It never clicks.
 
+[![CI](https://github.com/anistark/arin/actions/workflows/ci.yml/badge.svg)](https://github.com/anistark/arin/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/arin.svg?logo=rust&color=E5B45B)](https://crates.io/crates/arin)
+[![docs.rs](https://img.shields.io/docsrs/arin?logo=docsdotrs&label=docs.rs)](https://docs.rs/arin)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6E7DDB.svg)](LICENSE)
+
+[![macOS](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)](https://github.com/anistark/arin/releases/latest)
+[![Homebrew](https://img.shields.io/badge/brew-anistark%2Ftools%2Farin-FBB040?logo=homebrew&logoColor=white)](https://github.com/anistark/homebrew-tools)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-CE422B?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![MCP](https://img.shields.io/badge/MCP-server-6E7DDB)](https://anistark.github.io/arin/docs/mcp/)
+
+```sh
+brew install anistark/tools/arin
+```
+
 [Website](https://anistark.github.io/arin/) · [Docs](https://anistark.github.io/arin/docs/)
 
 </div>
