@@ -31,7 +31,10 @@ Or with [Nix](https://anistark.github.io/arin/docs/nix/):
 nix run github:anistark/arin -- -d
 ```
 
-[Website](https://anistark.github.io/arin/) · [Docs](https://anistark.github.io/arin/docs/)
+[Quickstart](https://anistark.github.io/arin/docs/quickstart/) ·
+[Install](https://anistark.github.io/arin/docs/install/) ·
+[Docs](https://anistark.github.io/arin/docs/) ·
+[Website](https://anistark.github.io/arin/)
 
 </div>
 
