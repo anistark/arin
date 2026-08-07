@@ -76,6 +76,39 @@ const docsSections = SECTIONS.map((name) => ({
   docs: DOCS.filter((doc) => doc.section === name),
 })).filter((section) => section.docs.length > 0);
 
+// The three doors on /docs/. The sidebar keeps all four sections, because that is
+// navigation between pages, and this is the choice somebody makes before they have any:
+// am I trying it, using it, or changing it. Installing is part of getting started rather
+// than a door of its own, which is why the first one covers two sections.
+const DOC_GROUPS = [
+  {
+    title: "Get started",
+    description:
+      "Meet Arin, put it on your machine, and have it point at something. Homebrew, Nix, the dmg, or from source.",
+    sections: ["Start", "Install"],
+  },
+  {
+    title: "Using Arin",
+    description:
+      "Drive it from an agent over MCP or from a shell, and decide whether it may read your screen to ground a phrase.",
+    sections: ["Use"],
+  },
+  {
+    title: "Contribute to Arin",
+    description:
+      "Work on it. The task runner, the invariants CI enforces, where things live, and the wire protocol underneath.",
+    sections: ["Contribute"],
+  },
+];
+
+const docsGroups = DOC_GROUPS.map((group) => {
+  const docs = group.sections.flatMap((name) => DOCS.filter((doc) => doc.section === name));
+  if (docs.length === 0) {
+    throw new Error(`the "${group.title}" card covers no pages, so it would link nowhere`);
+  }
+  return { ...group, docs, slug: docs[0].slug };
+});
+
 // A page that never reaches the nav is a page nobody finds, and the section list is the
 // only thing the templates render from.
 for (const doc of DOCS) {
@@ -100,6 +133,7 @@ export default function (eleventyConfig) {
   // Flat for the previous and next links, grouped for the sidebar and the index.
   eleventyConfig.addGlobalData("docsNav", DOCS);
   eleventyConfig.addGlobalData("docsSections", docsSections);
+  eleventyConfig.addGlobalData("docsGroups", docsGroups);
   eleventyConfig.addGlobalData("site", {
     name: "Arin",
     tagline: "An annotation layer any agent can draw on.",
