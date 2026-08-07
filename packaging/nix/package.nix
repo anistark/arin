@@ -72,10 +72,12 @@ rustPlatform.buildRustPackage {
     "arin-cli"
   ];
 
-  # The whole suite, the same set `just test` and CI run. It is headless by design: platform
-  # behaviour arrives through traits and the tests wire up fakes, so nothing here wants a
-  # window server.
-  cargoTestFlags = [ "--workspace" ];
+  # Installing does not run the test suite, and that is a trade rather than an oversight.
+  # It was `--workspace` first, which meant every person installing Arin compiled and ran
+  # the whole suite, a good share of a nine minute build, to learn what CI already checked
+  # on every pull request against the same code. What it costs is a build at a commit CI
+  # never saw, which is somebody installing from a branch, and they have `cargo test`.
+  doCheck = false;
 
   postInstall = ''
     app=$out/Applications/Arin.app

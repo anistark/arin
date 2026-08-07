@@ -133,9 +133,14 @@ Then start whichever one you meant to run.
 
 ```sh
 nix develop      # the toolchain and the tools the justfile reaches for
-nix flake check  # builds the package and runs the workspace tests
+nix flake check  # builds the package
 nix fmt          # nixfmt
 ```
+
+Building the package does not run the test suite. CI runs it on every pull request against
+the same code, and making every person who installs Arin run it again is most of the
+difference between a slow install and a quick one. `cargo test --workspace` inside
+`nix develop` is the same suite if you want it.
 
 The dev shell is offered rather than required. Arin is developed here with rustup and the
 system Xcode, and what the shell has to stay is one in which `just ci` passes.
