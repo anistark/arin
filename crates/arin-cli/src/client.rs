@@ -146,6 +146,7 @@ pub(crate) async fn run_client(config: Config, command: Command) -> Result<()> {
         }
         Command::Daemon { .. }
         | Command::Resolvers
+        | Command::Update
         | Command::Status
         | Command::Mcp
         | Command::Diagnose { .. } => {

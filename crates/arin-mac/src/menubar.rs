@@ -48,6 +48,9 @@ static QUIT: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 /// session or an annotation is, and the daemon has no business knowing about menus.
 static STATUS: OnceLock<Box<dyn Fn() -> String + Send + Sync>> = OnceLock::new();
 
+/// What the menu bar asks for a newer released version, when the user wanted checking.
+static UPDATE: OnceLock<Box<dyn Fn() -> Option<String> + Send + Sync>> = OnceLock::new();
+
 /// What the menu bar asks for the state of the grounding permission.
 ///
 /// `None` means nothing is granted. A duration means a grant is running down, and the item
@@ -64,6 +67,7 @@ static REVOKE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 ///
 /// Positions rather than retained handles, because `menuNeedsUpdate:` is handed the menu
 /// and nothing else. Keep these in step with `MenuBar::install`.
+const TITLE_INDEX: isize = 0;
 const STATUS_INDEX: isize = 1;
 const PERMISSION_INDEX: isize = 2;
 const GROUNDING_INDEX: isize = 3;
@@ -115,6 +119,18 @@ pub fn on_status(handler: impl Fn() -> String + Send + Sync + 'static) {
     }
 }
 
+/// Register how to ask whether a newer version has been released.
+///
+/// Returns the version when there is one and `None` otherwise, and it is asked only as the
+/// menu opens, so the answer is something already known rather than something fetched.
+/// Nothing registers this unless the user asked for update checks, and an unregistered
+/// handler simply leaves the title alone.
+pub fn on_update_available(handler: impl Fn() -> Option<String> + Send + Sync + 'static) {
+    if UPDATE.set(Box::new(handler)).is_err() {
+        tracing::warn!("an update handler was already registered");
+    }
+}
+
 define_class!(
     // SAFETY: NSObject has no subclassing requirements, and this type has no Drop.
     #[unsafe(super(NSObject))]
@@ -136,6 +152,15 @@ define_class!(
                 .get()
                 .map_or_else(|| "starting up".to_owned(), |status| status());
             set_title(menu, STATUS_INDEX, &status);
+
+            // On the name rather than in a line of its own. A menu item that appears and
+            // disappears moves everything under it, and the indices the rest of this
+            // delegate writes to are positional.
+            let title = match UPDATE.get().and_then(|available| available()) {
+                Some(version) => format!("Arin  ·  {version} available"),
+                None => "Arin".to_owned(),
+            };
+            set_title(menu, TITLE_INDEX, &title);
 
             // Cheap: reads the TCC answer rather than proving it with a frame, which is
             // what `arin permissions` is for and is far too slow for a menu opening.

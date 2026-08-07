@@ -24,6 +24,67 @@ is a format.
 
 ## [Unreleased]
 
+### Added
+
+- Arin can tell you when a newer version has been released. Notify only: it downloads
+  nothing and installs nothing, and that is a decision rather than a stage. Builds are
+  unsigned, so fetching one would land you in front of Gatekeeper, and replacing a running
+  app with no signature to check is a code execution path dressed as a convenience.
+
+  Two ways in, and neither happens on its own:
+
+  ```sh
+  arin update                    # ask once. Running it is how you ask
+  arin daemon --check-updates    # once a day, and the menu bar says so
+  ```
+
+  With the flag, the menu's name line becomes `Arin · 0.3.0 available` when there is one.
+  The menu never does network work; it reads what the daily check already found. Without
+  the flag nothing is spawned and no request is made, which matters for a daemon whose
+  privacy claim is that grounding is the only thing that leaves the machine.
+
+  Versions compare as numbers rather than as text, because `0.10.0` sorts before `0.9.0` as
+  a string and after it as a version. A pre-release is never offered as an upgrade to
+  somebody on a stable build, and a version that cannot be read reports nothing rather than
+  nagging.
+
+### Fixed
+
+- **A second daemon could put launchd into a restart loop.** Finding the socket already
+  served exited non-zero, and `KeepAlive` reads non-zero as a crash, so it respawned every
+  ten seconds into an instance that could never bind. Watched filling the log on
+  2026-08-06.
+
+  It now exits zero, because this is not a failure: the socket has an owner and the user
+  has what they wanted. The message also carries the whole error chain now, so the line
+  says which path and who owns it rather than only `could not bind the socket`.
+- **`arin permissions` answered for the wrong process.** It printed `screen recording is
+  granted` while the daemon was logging that it could not capture.
+  `CGPreflightScreenCaptureAccess` reports on whoever calls it, and macOS attributes a
+  command run from a terminal to the terminal, so it was reporting the terminal's grant
+  under Arin's name. It now says plainly that it cannot answer for the daemon, and points
+  at the daemon's log, which is the only honest source.
+- `packaging/macos/bundle.sh` warns when an installed `Arin.app` already exists. See
+  **Known gaps**, since the underlying collision is not fixable here.
+
+### Known gaps
+
+- **Two Arin bundles compete for one Screen Recording grant.** macOS keys the permission to
+  a bundle identifier, and for unsigned code it holds a separate record per binary behind
+  that one name. A local `just bundle` and a Homebrew install both claim
+  `com.anistark.arin`, System Settings shows a single "Arin" row for them, and toggling it
+  updates whichever record it reaches while the other keeps asking. Cost an hour on
+  2026-08-06 with the switch on and the daemon still unable to capture.
+
+  `tccutil reset ScreenCapture com.anistark.arin` clears them all, after which the next
+  start asks again. Giving development builds their own identifier would not help: the
+  identifier is how the app recognises itself when Finder opens it, so a renamed build
+  would print help instead of starting the daemon.
+
+  The same thing makes the grant fail after every upgrade, since a fresh compile is a fresh
+  binary. A Developer ID signature is what gives the app one identity across builds, and
+  that is the reason signing has a release of its own.
+
 ## [0.2.1] - 2026-08-03
 
 Nothing in the application changed. This exists to exercise the release path, which is

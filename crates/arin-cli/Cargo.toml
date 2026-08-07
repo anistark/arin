@@ -31,6 +31,11 @@ arin-mcp.workspace = true
 arin-protocol.workspace = true
 arin-resolve.workspace = true
 clap.workspace = true
+# One request to GitHub for the update check, and nothing else. Inherited rather than
+# configured here: the workspace already chooses defaults so that a distributed binary
+# does not depend on whatever OpenSSL the machine happens to have.
+reqwest.workspace = true
+serde.workspace = true
 tokio = { workspace = true, features = [
   "macros",
   "rt-multi-thread",

@@ -11,6 +11,7 @@ mod daemon;
 mod diagnose;
 #[cfg(target_os = "macos")]
 mod hotkey;
+mod update;
 
 use anyhow::{Context, Result};
 use arin_core::Config;
@@ -55,6 +56,7 @@ fn main() -> Result<()> {
             palette,
             grounding_consent,
             no_adaptive_color,
+            check_updates,
         } => {
             config.resolver = resolver;
             config.adaptive_color = !no_adaptive_color;
@@ -63,9 +65,10 @@ fn main() -> Result<()> {
                 config.grounding =
                     arin_core::Consent::parse(&consent).map_err(|e| anyhow::anyhow!(e))?;
             }
-            daemon::start_daemon(config, headless)
+            daemon::start_daemon(config, headless, check_updates)
         }
         Command::Resolvers => diagnose::list_resolvers(),
+        Command::Update => update::check(),
         // Reads the same settings a daemon started here would, so a palette or a resolver
         // named in the environment shows up in the report rather than being invisible to
         // it. Nothing is sent anywhere.

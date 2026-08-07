@@ -140,3 +140,24 @@ fi
 
 echo "==> $app"
 lipo -archs "$contents/MacOS/arin" | sed 's/^/    architectures: /'
+
+# Two bundles carrying one identifier is a permission problem, not a tidiness one.
+#
+# macOS keys Screen Recording to a bundle identifier, and for unsigned code it holds a
+# separate record per binary behind that one name. System Settings shows a single "Arin"
+# row for all of them, so toggling it updates whichever record it happens to reach and the
+# other keeps asking. Cost somebody an hour on 2026-08-06, with the row switched on and the
+# daemon still logging that it could not capture.
+#
+# A warning rather than a different identifier for dev builds: the identifier is how
+# `Launch::detect` recognises its own bundle when Finder opens it, so a build that changed
+# it would print help instead of starting the daemon, which is a worse trade.
+installed="$(ls -d /opt/homebrew/opt/arin/Arin.app /Applications/Arin.app 2>/dev/null | head -1 || true)"
+if [ -n "$installed" ]; then
+	echo
+	echo "    note: $installed also exists, and both claim com.anistark.arin."
+	echo "    Screen Recording is granted per binary, so they compete. If the daemon"
+	echo "    keeps asking after you have granted it:"
+	echo "        tccutil reset ScreenCapture com.anistark.arin"
+	echo "    then start whichever one you actually meant to run."
+fi

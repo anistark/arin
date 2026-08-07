@@ -184,6 +184,17 @@ pub(crate) enum Command {
         #[arg(long, value_name = "ask|always|never", env = "ARIN_GROUNDING_CONSENT")]
         grounding_consent: Option<String>,
 
+        /// Check GitHub once a day for a newer Arin, and say so in the menu bar.
+        ///
+        /// Off unless asked for, because it is the only thing besides a remote resolver
+        /// that makes the daemon talk to the network at all. One request a day, carrying
+        /// nothing but a version string.
+        ///
+        /// It only ever reports. Nothing is downloaded and nothing is installed.
+        /// `arin update` asks the same question once, without turning anything on.
+        #[arg(long, env = "ARIN_CHECK_UPDATES")]
+        check_updates: bool,
+
         /// Never look at the screen to choose a colour.
         ///
         /// Marks are always drawn in the preferred colour. Saves a capture per positioned
@@ -206,6 +217,17 @@ pub(crate) enum Command {
 
     /// List the resolvers this build can ground queries with.
     Resolvers,
+
+    /// Check whether a newer Arin has been released.
+    ///
+    /// Reports and stops. Nothing is downloaded and nothing is installed: builds are
+    /// unsigned, so fetching one would put you in front of Gatekeeper, and replacing a
+    /// running app without a signature to check is not something to do quietly. It prints
+    /// the upgrade command instead.
+    ///
+    /// This makes one request to GitHub. Running it is how you ask for that, which is why
+    /// there is no flag to turn it on: nothing here checks on its own.
+    Update,
 
     /// Put the orb on a point.
     ///

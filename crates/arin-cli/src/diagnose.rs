@@ -106,17 +106,25 @@ pub(crate) fn check_permissions(config: &Config, open: bool) -> Result<()> {
     }
 
     if std::os::unix::net::UnixStream::connect(&config.socket_path).is_ok() {
-        if !arin_mac::screen_recording_granted() {
-            println!("{}", arin_mac::ScreenRecording::Missing.explain());
-            println!("`arin permissions --open` goes straight to the switch");
-            std::process::exit(1);
-        }
-        println!("screen recording is granted");
+        // Deliberately says nothing about whether *the daemon* can capture, because from
+        // here that cannot be known. `CGPreflightScreenCaptureAccess` answers for the
+        // process that calls it, and macOS attributes a command run from a terminal to the
+        // terminal. So a granted answer here is the terminal's grant wearing Arin's name.
+        //
+        // It used to print "screen recording is granted" first and the caveat second. That
+        // reads as a verdict, and on 2026-08-06 it sent somebody looking for a bug in
+        // System Settings while the daemon sat there logging that it could not capture.
+        // The daemon's own log is the only honest source, so this points at it and stops.
+        println!("the daemon is running, so it is the process that captures, not this one.");
         println!(
-            "the daemon is running, and it is the one process that can take a frame. \
-             Its log says on startup whether capture actually works. To prove it from \
-             here, stop the daemon and run this again."
+            "What this command can see is its own access, which macOS attributes to \
+             whatever launched it. From a terminal that is the terminal's grant, not \
+             Arin's, so it cannot answer for the daemon."
         );
+        println!();
+        println!("The daemon says on startup whether capture works. Read that:");
+        println!("  log:  ~/Library/Logs/Arin/arin.log     (when started by the launch agent)");
+        println!("  live: stop the daemon and run this again");
         return Ok(());
     }
 

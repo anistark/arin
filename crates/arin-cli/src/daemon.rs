@@ -8,7 +8,7 @@ use arin_core::{
 use std::sync::Arc;
 
 /// Start the daemon, taking over the main thread first where the platform demands it.
-pub(crate) fn start_daemon(config: Config, headless: bool) -> Result<()> {
+pub(crate) fn start_daemon(config: Config, headless: bool, check_updates: bool) -> Result<()> {
     #[cfg(target_os = "macos")]
     if !headless {
         // Diverges: the AppKit event loop runs until the process exits, so the daemon
@@ -27,10 +27,10 @@ pub(crate) fn start_daemon(config: Config, headless: bool) -> Result<()> {
                         Arc::new(renderer),
                         Arc::new(capture),
                         Some(arin_mac::approver()),
+                        check_updates,
                     ));
                     if let Err(e) = outcome {
-                        tracing::error!(error = %e, "daemon stopped");
-                        std::process::exit(1);
+                        exit_for(&e);
                     }
                     std::process::exit(0);
                 })
@@ -42,7 +42,92 @@ pub(crate) fn start_daemon(config: Config, headless: bool) -> Result<()> {
     // grounding under `ask` rather than assuming yes, which is what makes handing it
     // `None` here safe to do.
     let (renderer, capture) = backends(headless)?;
-    block_on(serve(config, renderer, capture, None))
+    // Through the same door as the rendered path, so both spellings of "the socket is
+    // already served" report it the same way. A headless daemon is the one most likely to
+    // be under a supervisor, which is exactly where the exit code decides whether it gets
+    // respawned forever.
+    match block_on(serve(config, renderer, capture, None, check_updates)) {
+        Err(e) => exit_for(&e),
+        ok => ok,
+    }
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::already_serving;
+
+    /// The whole point of the distinction: this exit code decides whether launchd tries
+    /// again. A daemon that cannot bind because one is already running must not be
+    /// respawned, or `KeepAlive` turns it into a loop.
+    #[test]
+    fn a_socket_someone_else_owns_is_not_a_failure() {
+        let taken = anyhow::Error::new(arin_core::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "another daemon is already listening on /tmp/arin.sock",
+        )))
+        .context("could not bind the socket");
+
+        assert!(
+            already_serving(&taken),
+            "the reason is wrapped in context, so it has to be found down the chain \
+             rather than on the outermost error"
+        );
+    }
+
+    /// Every other failure still exits non-zero, because those are worth retrying and
+    /// worth seeing.
+    #[test]
+    fn other_failures_still_report_as_failures() {
+        let denied = anyhow::Error::new(arin_core::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )))
+        .context("could not bind the socket");
+        assert!(!already_serving(&denied));
+
+        assert!(!already_serving(&anyhow::anyhow!(
+            "something else entirely"
+        )));
+    }
+}
+
+/// End the process with the code the reason deserves, and say the whole reason first.
+///
+/// Two things were wrong with `exit(1)` and a one line message.
+///
+/// The message was `could not bind the socket`, which is the outermost context and not
+/// the part anybody can act on. The cause underneath it names the path and says whether
+/// something else owns it, and `{:#}` is what puts that on the line.
+///
+/// The code mattered more. A second daemon finding the socket already served is not a
+/// failure: the socket has an owner, the user has what they wanted, and this process has
+/// nothing left to do. Exiting non-zero said otherwise, and under launchd that means
+/// `KeepAlive` respawns on a timer into an instance that can never bind, which is a loop
+/// that fills the log rather than a recovery. Watched happening on 2026-08-06, once every
+/// ten seconds.
+fn exit_for(error: &anyhow::Error) -> ! {
+    if already_serving(error) {
+        tracing::info!("another daemon is already listening, so this one has nothing to do");
+        std::process::exit(0);
+    }
+    tracing::error!(error = format!("{error:#}"), "daemon stopped");
+    std::process::exit(1);
+}
+
+/// Whether the daemon failed because something else already holds the socket.
+///
+/// Read off `ErrorKind::AddrInUse` rather than off the message, since the message is
+/// prose and prose gets edited.
+fn already_serving(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return io.kind() == std::io::ErrorKind::AddrInUse;
+        }
+        matches!(
+            cause.downcast_ref::<arin_core::Error>(),
+            Some(arin_core::Error::Io(io)) if io.kind() == std::io::ErrorKind::AddrInUse
+        )
+    })
 }
 
 /// Build the configured resolver, and say plainly what enabling it means.
@@ -141,6 +226,7 @@ async fn serve(
     renderer: Arc<dyn Renderer>,
     capture: Arc<dyn Capture>,
     approver: Option<Arc<dyn arin_core::Approver>>,
+    check_updates: bool,
 ) -> Result<()> {
     let resolver = wire_resolver(&config)?;
     report_consent(&config, resolver.is_some(), approver.is_some());
@@ -168,11 +254,14 @@ async fn serve(
             }
         });
 
-        // Runs on the main thread while the menu is opening, so it only reads counters.
+        // Runs on the main thread while the menu is opening, so it only reads counters and
+        // a mutex the background check writes rarely. No network, no capture: whatever
+        // this does, the menu waits for it.
         let reporting = Arc::clone(&daemon);
         arin_mac::on_status(move || {
             status_line(reporting.annotation_count(), reporting.session_count())
         });
+        arin_mac::on_update_available(crate::update::available);
 
         // The consent prompt says a grant can be taken back from the menu bar. This is
         // what makes that true, and a promise like that has to be kept or the prompt
@@ -219,6 +308,17 @@ async fn serve(
     let watcher = tokio::spawn(watch_for_scrolling(Arc::clone(&daemon)));
     let expiry = tokio::spawn(expire_annotations(Arc::clone(&daemon)));
 
+    // Only when asked for. This is the one thing besides a remote resolver that makes the
+    // daemon talk to the network, and a daemon whose privacy claim is "nothing leaves this
+    // machine unless you said so" cannot make an exception for its own convenience.
+    let updates = check_updates.then(|| {
+        tracing::info!(
+            "checking GitHub once a day for a newer Arin. Nothing is downloaded, and \
+             dropping --check-updates turns this off"
+        );
+        tokio::spawn(crate::update::watch_for_releases())
+    });
+
     // Held for as long as the daemon runs. Dropping the manager unregisters the chord,
     // so the binding is tied to the daemon's lifetime rather than leaking past it.
     #[cfg(target_os = "macos")]
@@ -241,6 +341,9 @@ async fn serve(
     // select above has to return rather than exit the process.
     watcher.abort();
     expiry.abort();
+    if let Some(updates) = updates {
+        updates.abort();
+    }
     Ok(())
 }
 

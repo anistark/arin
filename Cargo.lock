@@ -102,6 +102,8 @@ dependencies = [
  "clap",
  "global-hotkey",
  "objc2",
+ "reqwest",
+ "serde",
  "tokio",
  "tracing",
  "tracing-subscriber",
