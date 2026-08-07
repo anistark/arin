@@ -415,6 +415,15 @@ body {
   margin-top: 0;
 }
 
+/* The licence itself, set apart from the sentence that introduces it. The rule down the
+   side says this is a quoted document rather than the page speaking, which matters on the
+   one page where the difference is legal and not editorial. */
+.license-text {
+  border-left: 2px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
+  padding-left: 1.5rem;
+  font-size: 0.95em;
+}
+
 /* Docs prose */
 
 /* The measure goes on what is read, not on the article, so code blocks and tables keep the

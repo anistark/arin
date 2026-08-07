@@ -15,7 +15,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/main.css">
 </head>
-<body class="min-h-screen overflow-x-hidden">
+{# A column the height of the viewport, with `main` taking the slack, so the footer sits on
+   the bottom of the window on a short page instead of floating halfway up it. Both
+   backdrops are `fixed`, so neither becomes a flex item that pushes the layout around. #}
+<body class="flex min-h-screen flex-col overflow-x-hidden">
 
   {# One background or the other. A layout asks for stars by setting `backdrop`, which is
      how the standalone prose pages get a quieter, darker page than the marketing ones. #}
@@ -58,20 +61,23 @@
     </nav>
   </header>
 
-  <main>
+  <main class="flex-1">
     {{ content | safe }}
   </main>
 
-  <footer class="mx-auto max-w-7xl px-6 pb-10 pt-20">
+  <footer class="mx-auto w-full max-w-7xl px-6 pb-10 pt-20">
     <div class="glass rounded-2xl px-6 py-5">
       <div class="flex flex-col items-center justify-between gap-4 text-sm text-mist sm:flex-row">
         <p class="flex items-center gap-2">
           <img src="/assets/brand/logo.png" alt="" class="h-5 w-5">
           Arin draws. It never clicks.
         </p>
+        {# The licence page on this site rather than the file on GitHub: it is the same
+           file either way, and this one keeps somebody reading the terms on the site they
+           came to read them on. #}
         <p>
           Open source under the
-          <a href="{{ site.repo }}/blob/main/LICENSE" class="text-fog transition hover:text-frost">MIT License</a>
+          <a href="/license/" class="text-fog transition hover:text-frost">MIT License</a>
         </p>
         <div class="flex items-center gap-1">
           <a href="{{ site.repo }}" aria-label="GitHub" class="rounded-lg p-2 transition hover:bg-white/5 hover:text-frost">

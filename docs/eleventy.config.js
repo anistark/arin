@@ -6,6 +6,11 @@ import markdownItAnchor from "markdown-it-anchor";
 
 const docsDir = import.meta.dirname;
 
+// Templates reach this through `site.repo`. It is a constant as well because the licence
+// page is generated markdown rather than a template, so it needs the URL before any global
+// data exists, and one repository should not be written down under two names.
+const REPO = "https://github.com/anistark/arin";
+
 // Cargo.toml is the one place a version is written down, and the tag has to equal it, so
 // reading it here is reading the released version rather than a second copy of it that
 // could drift. Same shape as the awk in bundle.sh and the justfile, for the same reason.
@@ -218,6 +223,48 @@ function changelogMarkdown(currentVersion) {
   return [intro.trim(), "", ...sections, references].join("\n");
 }
 
+// LICENSE, read from the repository root at build time.
+//
+// The same rule as CHANGELOG.md and the documentation pages: the file that ships in the
+// crate and the dmg is the only copy, so the page cannot drift from the terms the
+// software is actually under. A licence quoted from memory into a template is the one
+// kind of stale content that costs more than an out of date screenshot.
+//
+// It becomes escaped HTML rather than markdown, because a licence is arbitrary prose that
+// never agreed to be markdown: Apache's numbered clauses would come out as a renumbered
+// list and BSD's indented paragraphs as code blocks. Blocks of flush prose have their
+// hard wraps joined so the text reflows with the window instead of laddering at whatever
+// column the file was wrapped to; anything indented or enumerated keeps its line breaks,
+// because there the layout is carrying meaning.
+function licenseMarkdown() {
+  const raw = fs.readFileSync(path.join(docsDir, "..", "LICENSE"), "utf8").trim();
+  if (!raw) {
+    throw new Error("LICENSE is empty, so /license/ would publish no terms at all");
+  }
+
+  const escape = (text) => text.replace(/[&<>]/g, (char) => `&#${char.charCodeAt(0)};`);
+
+  const blocks = raw.split(/\n[ \t]*\n/).map((block) => {
+    const lines = block.split("\n");
+    const flush = lines.every((line) => /^\S/.test(line) && !/^(?:[-*+]|\d+[.)])\s/.test(line));
+    return flush
+      ? `<p>${escape(lines.join(" ").trim())}</p>`
+      : `<pre>${escape(block)}</pre>`;
+  });
+
+  return [
+    "# License",
+    "",
+    `Below is the [\`LICENSE\` file](${REPO}/blob/main/LICENSE) in the project repo, read ` +
+      "straight from it. Nothing on this page is a second copy of the terms.",
+    "",
+    '<div class="license-text">',
+    "",
+    ...blocks.flatMap((block) => [block, ""]),
+    "</div>",
+  ].join("\n");
+}
+
 export default function (eleventyConfig) {
   eleventyConfig.addPlugin(HtmlBasePlugin);
   eleventyConfig.addPlugin(syntaxHighlight);
@@ -239,7 +286,7 @@ export default function (eleventyConfig) {
   eleventyConfig.addGlobalData("site", {
     name: "Arin",
     tagline: "An annotation layer any agent can draw on.",
-    repo: "https://github.com/anistark/arin",
+    repo: REPO,
     version: workspaceVersion(),
   });
 
@@ -261,8 +308,16 @@ export default function (eleventyConfig) {
     permalink: "/changelog/",
   });
 
+  eleventyConfig.addTemplate("license.md", licenseMarkdown(), {
+    layout: "layouts/page.njk",
+    title: "License",
+    description: "The terms Arin is distributed under, from the LICENSE file in the repository.",
+    permalink: "/license/",
+  });
+
   eleventyConfig.addWatchTarget("./*.md");
   eleventyConfig.addWatchTarget("../CHANGELOG.md");
+  eleventyConfig.addWatchTarget("../LICENSE");
   eleventyConfig.addWatchTarget("src/styles/");
 
   eleventyConfig.setServerOptions({
