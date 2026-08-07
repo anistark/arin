@@ -110,6 +110,11 @@ pub(crate) async fn latest_release() -> Result<String> {
 static AVAILABLE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// What the background check last found, for the menu bar to show.
+///
+/// Gated to where something reads it. The menu bar is the only reader and it is macOS
+/// only, so on any other platform this is dead code and CI denies that. The static above
+/// stays ungated: the check itself runs anywhere, and writing to it is a use.
+#[cfg(target_os = "macos")]
 pub(crate) fn available() -> Option<String> {
     AVAILABLE.lock().expect("update lock").clone()
 }
