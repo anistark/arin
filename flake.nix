@@ -26,8 +26,7 @@
         "x86_64-darwin"
       ];
 
-      forEachSystem =
-        f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       packageFor = pkgs: pkgs.callPackage ./packaging/nix/package.nix { };
     in

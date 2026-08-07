@@ -122,7 +122,8 @@ jobs:
 
           # One binary serving as the app and the command line tool, rather than a second
           # copy on PATH that would be a second identity asking for the same permission.
-          readlink result/bin/arin | grep -q "/Applications/Arin.app/Contents/MacOS/arin$"
+          # An inode comparison, because fixupPhase rewrites the symlink to a relative one.
+          [ result/bin/arin -ef "$contents/MacOS/arin" ]
 
           lipo -archs "$contents/MacOS/arin"
 

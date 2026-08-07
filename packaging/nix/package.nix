@@ -122,8 +122,11 @@ rustPlatform.buildRustPackage {
       echo "Info.plist does not carry version $version" >&2
       exit 1
     }
-    [ "$(readlink "$out/bin/arin")" = "$out/Applications/Arin.app/Contents/MacOS/arin" ] || {
-      echo "bin/arin does not point into the bundle" >&2
+    # Compared as one file rather than as one string, because fixupPhase rewrites a symlink
+    # inside an output into a relative one and the text stops matching. What matters is that
+    # both names reach the same binary, which is what an inode comparison asks.
+    [ "$out/bin/arin" -ef "$out/Applications/Arin.app/Contents/MacOS/arin" ] || {
+      echo "bin/arin is not the binary inside the bundle" >&2
       exit 1
     }
     "$out/bin/arin" --version | grep -q "arin $version"

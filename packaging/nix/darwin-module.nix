@@ -101,11 +101,13 @@ in
     };
 
     groundingConsent = mkOption {
-      type = types.nullOr (types.enum [
-        "ask"
-        "always"
-        "never"
-      ]);
+      type = types.nullOr (
+        types.enum [
+          "ask"
+          "always"
+          "never"
+        ]
+      );
       default = null;
       description = ''
         Whether a client may make Arin look at the screen. `ask` prompts and remembers for
