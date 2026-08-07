@@ -17,23 +17,42 @@
 </head>
 <body class="min-h-screen overflow-x-hidden">
 
+  {# One background or the other. A layout asks for stars by setting `backdrop`, which is
+     how the standalone prose pages get a quieter, darker page than the marketing ones. #}
+  {% if backdrop == "stars" %}
+  {% include "partials/starfield.njk" %}
+  {% else %}
   <div class="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden="true">
     <div class="glow-blob bg-primary" style="width: 34rem; height: 34rem; top: -12rem; left: -8rem;"></div>
     <div class="glow-blob bg-tertiary" style="width: 28rem; height: 28rem; top: 10rem; right: -10rem; opacity: 0.22;"></div>
     <div class="glow-blob bg-secondary" style="width: 26rem; height: 26rem; bottom: -10rem; left: 30%; opacity: 0.14;"></div>
   </div>
+  {% endif %}
 
   <header class="fixed inset-x-0 top-0 z-50 px-4 pt-4">
     <nav class="glass glass-edge mx-auto flex max-w-7xl items-center justify-between rounded-2xl px-5 py-3">
-      <a href="/" class="flex items-center gap-2.5 font-display text-lg font-semibold text-frost">
-        <img src="/assets/brand/logo.png" alt="" class="-my-1.5 h-10 w-10">
-        Arin
-      </a>
+      {# The pill is a sibling of the wordmark rather than inside it, because a link inside
+         a link is invalid and the browser would drop one of them. #}
+      <div class="flex items-center gap-2">
+        <a href="/" class="flex items-center gap-2.5 font-display text-lg font-semibold text-frost">
+          <img src="/assets/brand/logo.png" alt="" class="-my-1.5 h-10 w-10">
+          Arin
+        </a>
+        {# Points at the changelog rather than the GitHub release, because the changelog is
+           on this site, covers every version rather than the newest, and is the thing the
+           number is actually a handle for. #}
+        <a href="/changelog/"
+           class="translate-y-1 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] leading-none text-mist transition hover:border-primary/40 hover:text-primary-soft"
+           aria-label="Arin {{ site.version }} changelog">v{{ site.version }}</a>
+      </div>
+      {# Three items plus the wordmark and the version pill is as much as the bar holds on a
+         phone, so GitHub keeps its mark and drops its label below `sm`. #}
       <div class="flex items-center gap-1 text-sm font-medium">
-        <a href="/docs/" class="rounded-lg px-3 py-1.5 text-fog transition hover:bg-white/5 hover:text-frost">Docs</a>
-        <a href="{{ site.repo }}" class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-fog transition hover:bg-white/5 hover:text-frost">
+        <a href="/docs/" class="rounded-lg px-2.5 py-1.5 text-fog transition hover:bg-white/5 hover:text-frost sm:px-3">Docs</a>
+        <a href="/changelog/" class="rounded-lg px-2.5 py-1.5 text-fog transition hover:bg-white/5 hover:text-frost sm:px-3">Changelog</a>
+        <a href="{{ site.repo }}" aria-label="GitHub" class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-fog transition hover:bg-white/5 hover:text-frost sm:px-3">
           <svg viewBox="0 0 16 16" class="h-4 w-4 fill-current" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-          GitHub
+          <span class="hidden sm:inline">GitHub</span>
         </a>
       </div>
     </nav>
@@ -85,6 +104,19 @@
           });
         }, { threshold: 0.15, rootMargin: "0px 0px -40px 0px" });
         targets.forEach(function (el) { io.observe(el); });
+      }
+
+      // The pointer reveal on cards. The halo is a position, not an animation, so this
+      // runs even when motion is reduced: what that setting turns off is the fade, in CSS.
+      // Touch is excluded, because a glow parked wherever the last tap landed is noise.
+      if (window.matchMedia("(hover: hover)").matches) {
+        document.querySelectorAll("[data-reveal-card]").forEach(function (card) {
+          card.addEventListener("pointermove", function (event) {
+            var box = card.getBoundingClientRect();
+            card.style.setProperty("--reveal-x", event.clientX - box.left + "px");
+            card.style.setProperty("--reveal-y", event.clientY - box.top + "px");
+          });
+        });
       }
 
       if (!reduced) {

@@ -17,6 +17,13 @@
   --color-tertiary: #a78bfa;
   --color-tertiary-soft: #c9b8ff;
 
+  /* Measure, in characters, because that is the thing being limited. `ch` is the width of
+     a zero in whatever face is rendering, so these hold at any font size, including one
+     the reader chose themselves. A rem cap only tracks the root size, and a percentage
+     cap tracks the window, which is the one thing measure has nothing to do with. */
+  --container-measure: 68ch;
+  --container-measure-tight: 52ch;
+
   --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -230,7 +237,193 @@ body {
   }
 }
 
+/* Starfield, for the standalone prose pages. Replaces the glow blobs rather than joining
+   them: one quiet background or the other, not both competing. */
+.starfield {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 80% at 50% -10%,
+    color-mix(in srgb, var(--color-primary) 12%, transparent),
+    transparent 60%
+  );
+}
+
+.star {
+  position: absolute;
+  top: var(--y);
+  left: var(--x);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 9999px;
+  background: var(--color-frost);
+  opacity: var(--opacity);
+}
+
+/* The orb in flight: a bright head with the trail behind it, along its own axis. The outer
+   element carries the angle so the inner one can travel in a straight line. */
+.shooting-star {
+  position: absolute;
+  transform: rotate(var(--angle));
+}
+
+.shooting-star__trail {
+  display: block;
+  width: 8rem;
+  height: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-primary) 70%, transparent) 55%,
+    var(--color-frost)
+  );
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--color-primary) 70%, transparent));
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .star {
+    animation: star-twinkle var(--duration) ease-in-out var(--delay) infinite;
+  }
+
+  .shooting-star__trail {
+    animation: star-shoot var(--duration) linear var(--delay) infinite;
+  }
+}
+
+@keyframes star-twinkle {
+  0%,
+  100% {
+    opacity: var(--opacity);
+  }
+  50% {
+    opacity: calc(var(--opacity) * 0.25);
+  }
+}
+
+/* Only opacity and transform, so this stays on the compositor and the page does not lay
+   out sixty times a second behind the text somebody is reading. */
+@keyframes star-shoot {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(130vw, 0, 0);
+    opacity: 0;
+  }
+}
+
+/* Changelog entries.
+   `<details>` rather than a script, so the page works before any JavaScript runs and the
+   browser's own find-in-page can open a collapsed release to show a match. */
+.release {
+  margin-block: 0.75rem;
+  border: 1px solid color-mix(in srgb, white 10%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--color-deep) 45%, transparent);
+}
+
+.release[open] {
+  border-color: color-mix(in srgb, var(--color-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--color-deep) 70%, transparent);
+}
+
+.release-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1.1rem;
+  cursor: pointer;
+  list-style: none;
+  border-radius: 1rem;
+}
+
+.release-summary::-webkit-details-marker {
+  display: none;
+}
+
+.release-summary:hover {
+  background: color-mix(in srgb, white 4%, transparent);
+}
+
+.release-summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.release-version {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--color-frost);
+}
+
+.release-date {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-mist);
+}
+
+.release-badge {
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
+  border-radius: 9999px;
+  padding: 0.1rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-primary-soft);
+}
+
+/* The chevron, pushed to the end so it sits at the edge whatever else the row carries. */
+.release-summary::after {
+  content: "";
+  margin-left: auto;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid var(--color-mist);
+  border-bottom: 2px solid var(--color-mist);
+  transform: rotate(45deg) translate(-0.1rem, -0.1rem);
+}
+
+.release[open] .release-summary::after {
+  transform: rotate(225deg) translate(-0.1rem, -0.1rem);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .release-summary::after {
+    transition: transform 0.25s ease;
+  }
+}
+
+.release-body {
+  padding: 0 1.1rem 0.4rem;
+}
+
+.release-body > :first-child {
+  margin-top: 0;
+}
+
 /* Docs prose */
+
+/* The measure goes on what is read, not on the article, so code blocks and tables keep the
+   full column. Capping the article itself would have squeezed a four column table into 68
+   characters and sent it to a scrollbar, which is the opposite of the point. */
+.prose-arin :is(p, ul, ol, blockquote, h1, h2, h3, h4) {
+  max-width: var(--container-measure);
+}
+
 .prose-arin {
   --tw-prose-body: var(--color-fog);
   --tw-prose-headings: var(--color-frost);
@@ -293,6 +486,12 @@ body {
   border: 1px solid color-mix(in srgb, white 8%, transparent);
   border-radius: 0.75rem;
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+
+  /* Wrap rather than scroll sideways. `pre-wrap` keeps the newlines the author put in and
+     adds soft ones only where a line will not fit, so a narrow window reflows a long
+     command instead of hiding half of it behind a scrollbar somebody has to find. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 .prose-arin table {

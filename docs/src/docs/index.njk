@@ -6,7 +6,7 @@ permalink: /docs/
 ---
 
 <div class="mx-auto max-w-7xl px-6 pb-16 pt-36">
-  <div class="max-w-2xl">
+  <div class="max-w-measure-tight">
     <h1 class="font-display text-4xl font-bold tracking-tight text-frost sm:text-5xl">Documentation</h1>
     <p class="mt-4 text-lg text-mist">
       Everything you need to install Arin, run the daemon, drive it from an agent or a
@@ -45,18 +45,4 @@ permalink: /docs/
     </div>
     {% endfor %}
   </div>
-
-  <script>
-    (function () {
-      if (!window.matchMedia("(hover: hover)").matches) return;
-
-      for (const card of document.querySelectorAll("[data-reveal-card]")) {
-        card.addEventListener("pointermove", function (event) {
-          const box = card.getBoundingClientRect();
-          card.style.setProperty("--reveal-x", event.clientX - box.left + "px");
-          card.style.setProperty("--reveal-y", event.clientY - box.top + "px");
-        });
-      }
-    })();
-  </script>
 </div>

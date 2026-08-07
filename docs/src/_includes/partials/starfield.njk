@@ -1,0 +1,25 @@
+{# A sky, and the orb crossing it.
+
+   The streaks are not a space motif borrowed for decoration. Arin's pointer is a bright
+   core that travels between points leaving a trail, which is what a shooting star is, so
+   the one thing moving on a page about releases over time is the thing this project draws.
+
+   Positions come from `starfield` in eleventy.config.js, seeded so the sky is identical on
+   every build. #}
+<div class="starfield" aria-hidden="true">
+  {% for star in starfield %}
+  <span class="star" style="--x: {{ star.x }}%; --y: {{ star.y }}%; --size: {{ star.size }}px; --opacity: {{ star.opacity }}; --delay: {{ star.delay }}s; --duration: {{ star.duration }}s"></span>
+  {% endfor %}
+
+  {% set streaks = [
+    { top: "8%",  left: "-15%", angle: "14deg",  delay: "1s",  duration: "7s" },
+    { top: "26%", left: "-20%", angle: "22deg",  delay: "4.5s", duration: "9s" },
+    { top: "58%", left: "-12%", angle: "9deg",   delay: "8s",  duration: "8s" },
+    { top: "77%", left: "-18%", angle: "17deg",  delay: "12.5s", duration: "10s" }
+  ] %}
+  {% for streak in streaks %}
+  <span class="shooting-star" style="top: {{ streak.top }}; left: {{ streak.left }}; --angle: {{ streak.angle }}">
+    <span class="shooting-star__trail" style="--delay: {{ streak.delay }}; --duration: {{ streak.duration }}"></span>
+  </span>
+  {% endfor %}
+</div>
