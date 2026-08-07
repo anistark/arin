@@ -49,5 +49,9 @@ live in `/Applications` where Spotlight will find it, and when the Screen Record
 starts surviving upgrades. Unsigned code is identified by its hash, so today every new
 build asks for that permission again.
 
-Nix follows. Linux packages, `deb`, `rpm` and AUR, come with the Linux port rather than
-before it.
+**Also now: Nix.** A flake for `aarch64-darwin` and `x86_64-darwin`, with a nix-darwin
+module for the launch agent. `nix run github:anistark/arin -- -d` builds the same app
+bundle and starts it, on a machine with no Rust toolchain on it. See
+[Nix](https://anistark.github.io/arin/docs/nix/).
+
+Linux packages, `deb`, `rpm` and AUR, come with the Linux port rather than before it.

@@ -1,6 +1,10 @@
 # Build output
 /target
 
+# Nix build symlinks
+/result
+/result-*
+
 # Internal planning notes. Not part of the published repo.
 /plan
 

@@ -1,0 +1,176 @@
+# Build the flake on a Mac.
+#
+# Evaluating is not installing. `nix flake show` will happily report a package that fails
+# the moment something tries to link it, and the only claim 0.6 makes is that `nix run`
+# works on a machine with no Rust toolchain on it. A GitHub runner is exactly that machine,
+# so this workflow is the acceptance criterion with a checkbox attached.
+#
+# Not part of ci.yml, and gated on paths, because it compiles the workspace from scratch on
+# every run: there is no binary cache for a package nobody has published. What can break the
+# Nix build without breaking `cargo build` is a narrow set, so those are the paths below.
+# The rest of the repo is covered by CI already.
+name: Nix
+
+#
+# The two path lists are the same list written twice, because GitHub does not resolve YAML
+# anchors in a workflow file.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "packaging/nix/**"
+      - "packaging/macos/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "assets/logo.png"
+      - ".github/workflows/nix.yml"
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "packaging/nix/**"
+      - "packaging/macos/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "assets/logo.png"
+      - ".github/workflows/nix.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flake:
+    name: nix build
+    # arm64. The x86_64-darwin output is evaluated below and not built: GitHub's Intel
+    # runners are on their way out, and nixpkgs 26.05 is the last release that supports
+    # that platform at all. Worth knowing before anyone relies on the second slice.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pinned to main because that is how this action is published and versioned tags lag
+      # behind the macOS changes it exists to keep up with.
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Format
+        run: nix fmt -- --check flake.nix packaging/nix/package.nix packaging/nix/darwin-module.nix
+
+      # Both systems, on one runner. This is evaluation only, which is all that can be said
+      # about the Intel slice from an arm64 machine, and it still catches the failures that
+      # come from a typo in an attribute name rather than from a compiler.
+      - name: Evaluate every output
+        run: |
+          nix flake show --all-systems
+          nix eval --raw .#packages.x86_64-darwin.arin.drvPath
+          echo
+
+      - name: Check
+        run: nix flake check --print-build-logs
+
+      - name: Build
+        run: nix build --print-build-logs --print-out-paths
+
+      # What the package promises that a `cargo build` does not: an app bundle macOS will
+      # treat as an app, with one binary serving as both the app and the command line tool.
+      - name: Check the bundle
+        run: |
+          app=result/Applications/Arin.app
+          contents=$app/Contents
+          plist=$contents/Info.plist
+
+          plutil -lint "$plist"
+
+          version=$(awk '/^\[workspace.package\]/{f=1} f&&/^version = /{gsub(/[",]/,"",$3); print $3; exit}' Cargo.toml)
+          for key in CFBundleShortVersionString CFBundleVersion; do
+            got=$(/usr/libexec/PlistBuddy -c "Print :$key" "$plist")
+            if [ "$got" != "$version" ]; then
+              echo "::error::$key is $got, Cargo.toml says $version"
+              exit 1
+            fi
+          done
+
+          # No Dock icon, and an identifier the runtime recognises as its own. Without the
+          # first, an overlay that draws on top of your work also looks like your work.
+          # Without the second, opening the app prints help into nothing.
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$plist")" = "true" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = "com.anistark.arin" ]
+
+          # sips and iconutil are not available to a Nix build, so the icns is assembled by
+          # other tools and is worth confirming is an icns rather than a file with the name.
+          file "$contents/Resources/AppIcon.icns" | grep -q "Mac OS X icon"
+
+          # The launch agent installer travels with the app, for anyone not using the
+          # nix-darwin module, and it is useless without its template beside it.
+          test -x "$contents/Resources/launch-agent.sh"
+          test -f "$contents/Resources/com.anistark.arin.plist"
+
+          # One binary serving as the app and the command line tool, rather than a second
+          # copy on PATH that would be a second identity asking for the same permission.
+          readlink result/bin/arin | grep -q "/Applications/Arin.app/Contents/MacOS/arin$"
+
+          lipo -archs "$contents/MacOS/arin"
+
+      # The install line from the README, run. It cannot start the daemon: a runner has no
+      # window server and no Screen Recording grant, so what is proved here is that the
+      # thing a stranger types produces a working binary and not an error.
+      - name: nix run
+        run: nix run . -- --version
+
+      # The module is otherwise never evaluated by anything. It is the half of 0.6 that a
+      # `nix build` cannot reach, since it only turns into a plist inside somebody's
+      # nix-darwin configuration.
+      - name: Evaluate the nix-darwin module
+        run: |
+          cat > "$RUNNER_TEMP/module.nix" <<EOF
+          let
+            darwin = builtins.getFlake "github:nix-darwin/nix-darwin/nix-darwin-26.05";
+            arin = builtins.getFlake "git+file://$PWD";
+
+            configuration = darwin.lib.darwinSystem {
+              modules = [
+                arin.darwinModules.default
+                {
+                  nixpkgs.hostPlatform = "aarch64-darwin";
+                  system.stateVersion = 6;
+                  system.primaryUser = "runner";
+
+                  services.arin = {
+                    enable = true;
+                    resolver = "local";
+                    groundingConsent = "always";
+                    palette = [ "#FFB020" "#FF3B30" ];
+                    adaptiveColor = false;
+                  };
+                }
+              ];
+            };
+          in
+          builtins.toJSON {
+            serviceConfig = configuration.config.launchd.user.agents.arin.serviceConfig;
+            launchAgents = builtins.attrNames configuration.config.environment.userLaunchAgents;
+          }
+          EOF
+
+          nix eval --impure --raw --file "$RUNNER_TEMP/module.nix" > "$RUNNER_TEMP/module.json"
+          jq . "$RUNNER_TEMP/module.json"
+
+          jq -e '
+            .serviceConfig.Label == "com.anistark.arin"
+            # The file launch-agent.sh writes, so the two collide loudly instead of running
+            # two daemons against one socket.
+            and (.launchAgents | index("com.anistark.arin.plist"))
+            # The binary inside the bundle. TCC attributes the Screen Recording grant to the
+            # bundle, so an agent running anything else comes up unable to see the screen.
+            and (.serviceConfig.ProgramArguments[0] | endswith("/Applications/Arin.app/Contents/MacOS/arin"))
+            and (.serviceConfig.ProgramArguments[1] == "daemon")
+            and (.serviceConfig.ProgramArguments | index("--resolver"))
+            and (.serviceConfig.ProgramArguments | index("local"))
+            and (.serviceConfig.ProgramArguments | index("#FFB020,#FF3B30"))
+            and (.serviceConfig.ProgramArguments | index("--no-adaptive-color"))
+            and (.serviceConfig.RunAtLoad == true)
+            and (.serviceConfig.KeepAlive.SuccessfulExit == false)
+          ' "$RUNNER_TEMP/module.json" > /dev/null

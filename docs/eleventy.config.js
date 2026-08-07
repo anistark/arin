@@ -26,6 +26,12 @@ const DOCS = [
     description: "Connect Arin to any agent that speaks MCP.",
   },
   {
+    file: "nix.md",
+    slug: "nix",
+    title: "Nix",
+    description: "Install Arin with Nix, and start it at login with nix-darwin.",
+  },
+  {
     file: "protocol.md",
     slug: "protocol",
     title: "Protocol",
