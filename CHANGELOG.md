@@ -24,6 +24,28 @@ is a format.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-08
+
+### Added
+
+- **An About box**, from the menu bar. `About Arin` sits above Quit and opens a box saying
+  what Arin is, with buttons to the X account and the Discord invite.
+
+  An alert rather than a window, for the same reason the consent prompt is one: Arin owns no
+  windows of its own, so a panel would need a controller and a way to be brought back to the
+  front. The links are buttons because a clickable URL inside an alert means an accessory
+  text view sized by hand, and `Close` is the default, so return dismisses the box and a
+  link stays a deliberate click.
+
+  It carries the running version, which is the line worth quoting in a bug report, and the
+  phoenix, compiled into the binary rather than read out of the app bundle so the box looks
+  the same whether Arin was installed or built from source.
+
+- **A release can be marked a pre-release.** `just gh-release` asks `stable?` where it used
+  to ask `cut it?`. What that buys is `/releases/latest` passing it over, which is where the
+  update notice looks, so nobody on a stable build is told a pre-release is available. What
+  it does not do is hold back the Homebrew tap, which fires on the tag either way.
+
 ## [0.4.0] - 2026-08-08
 
 ### Added
@@ -746,7 +768,8 @@ macOS only. Linux and Windows are planned and nothing of either is in this relea
 core and the protocol build and test on Linux with no platform crate in the tree, which is
 what keeps that port cheap to pick up rather than evidence it works.
 
-[Unreleased]: https://github.com/anistark/arin/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/anistark/arin/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/anistark/arin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/anistark/arin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/anistark/arin/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/anistark/arin/compare/v0.2.0...v0.2.1

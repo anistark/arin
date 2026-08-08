@@ -9,7 +9,7 @@
 #
 # `version` and `sha256` are rewritten per release. Everything else should not move.
 cask "arin" do
-  version "0.4.0"
+  version "0.4.1"
   sha256 "REPLACE_WITH_RELEASE_SHA256"
 
   url "https://github.com/anistark/arin/releases/download/v#{version}/Arin-#{version}-universal.dmg"
