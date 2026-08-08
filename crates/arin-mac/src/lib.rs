@@ -33,6 +33,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+mod about;
 mod approval;
 mod caption;
 mod capture;

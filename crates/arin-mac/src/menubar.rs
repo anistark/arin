@@ -11,6 +11,7 @@
 //! and the system tints it. A blue orb in the menu bar looks wrong in dark mode, and an
 //! image file would be one more thing to keep in step with the palette.
 
+use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::runtime::{AnyObject, Sel};
@@ -225,6 +226,18 @@ define_class!(
             }
         }
 
+        #[unsafe(method(showAbout:))]
+        fn show_about(&self, _sender: Option<&AnyObject>) {
+            // Handed to the next turn of the runloop rather than run here. This fires while
+            // the menu is still tracking, and a modal opened inside menu tracking comes up
+            // with the menu's own event loop still on the stack.
+            DispatchQueue::main().exec_async(|| {
+                if let Some(mtm) = MainThreadMarker::new() {
+                    crate::about::present(mtm);
+                }
+            });
+        }
+
         #[unsafe(method(quitArin:))]
         fn quit_arin(&self, _sender: Option<&AnyObject>) {
             match QUIT.get() {
@@ -311,6 +324,13 @@ impl MenuBar {
         menu.addItem(&clear);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+        // Below the separator with Quit rather than at the top, where the convention would
+        // put it. The top four rows are positional, rewritten by index every time the menu
+        // opens, and an item above them shifts all four.
+        let about = menu_item(mtm, "About Arin", Some(sel!(showAbout:)), "");
+        unsafe { about.setTarget(Some(&actions)) };
+        menu.addItem(&about);
 
         // Deliberately not `terminate:`. See `QUIT`.
         let quit = menu_item(mtm, "Quit Arin", Some(sel!(quitArin:)), "q");

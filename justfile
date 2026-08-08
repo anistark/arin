@@ -130,8 +130,15 @@ sync-version:
 # ends by cutting the release too, so an argument here is an argument there as well, threaded
 # through a second recipe to reach one prompt. Asking puts the question in the one place that
 # needs the answer, and both ways in get it.
+#
+# Answering `n` to the last prompt marks it a pre-release. What that buys is `/releases/latest`
+# passing it over, which is the endpoint `arin --update-check` reads, so nobody on a stable
+# build is told a pre-release is available. What it does not do is change the tag, hold back
+# the dmg, or stop the tap job: `release.yml` fires on `v*` and opens the Homebrew pull request
+# either way, so a pre-release still reaches `brew install` unless that job learns the
+# difference.
 
-# Tag the current version and cut a GitHub release. Asks for the title and the notes.
+# Tag the current version and cut a GitHub release. Asks for the title, notes, and stability.
 gh-release:
     #!/usr/bin/env sh
     set -eu
@@ -228,19 +235,30 @@ gh-release:
     echo
     echo "  tag    $tag at $(git rev-parse --short HEAD)"
     echo "  title  $title"
-    printf 'cut it? [y/N] '
+
+    # Both a question and the last chance to call the run off, because the next line pushes
+    # a tag. `y` and `n` each cut something, so anything else has to mean neither: return
+    # answered no here before it meant a choice, and it must not now be the way somebody
+    # publishes a release they were only reading the summary of.
+    printf 'stable? y releases, n pre-releases, anything else stops: '
     read -r reply
-    case "$reply" in y | Y) ;; *) exit 1 ;; esac
+    case "$reply" in
+    y | Y) prerelease="" ;;
+    n | N) prerelease="--prerelease" ;;
+    *) exit 1 ;;
+    esac
 
     git tag -a "$tag" -m "$title"
     git push origin "$tag"
 
+    # Unquoted, like `$generate`, so an empty one disappears rather than arriving as an
+    # empty argument.
     if [ -n "$generate" ]; then
-        gh release create "$tag" --title "$title" $generate
+        gh release create "$tag" --title "$title" $generate $prerelease
     elif [ -s "$notes_file" ]; then
-        gh release create "$tag" --title "$title" --notes-file "$notes_file"
+        gh release create "$tag" --title "$title" --notes-file "$notes_file" $prerelease
     else
-        gh release create "$tag" --title "$title" --notes ""
+        gh release create "$tag" --title "$title" --notes "" $prerelease
     fi
 
     echo
