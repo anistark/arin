@@ -141,7 +141,10 @@ pub(crate) async fn run_client(config: Config, command: Command) -> Result<()> {
         }),
 
         #[cfg(target_os = "macos")]
-        Command::Displays | Command::Capture { .. } | Command::Permissions { .. } => {
+        Command::Displays
+        | Command::Capture { .. }
+        | Command::Permissions { .. }
+        | Command::Service { .. } => {
             unreachable!("handled above")
         }
         Command::Daemon { .. }

@@ -110,11 +110,12 @@ rustPlatform.buildRustPackage {
     mv "$out/bin/arin" "$contents/MacOS/arin"
     ln -s "$contents/MacOS/arin" "$out/bin/arin"
 
-    # The launch agent installer travels with the app, because the person who needs it has
-    # an installed app and not a clone. It finds its template next to itself, so the two
-    # have to stay together. Nix users have services.arin in the nix-darwin module and
-    # should prefer it, but an app that only starts at login when your configuration is
-    # written in Nix would be a worse app.
+    # `arin service` installs the launch agent now, and reads the template out of the
+    # binary rather than off disk. These two are what it replaced: a deprecated script that
+    # forwards to it, kept because released Homebrew caveats name this path, and the
+    # template itself, kept as the readable copy of what the agent is. Nix users have
+    # services.arin in the nix-darwin module and should prefer it, but an app that only
+    # starts at login when your configuration is written in Nix would be a worse app.
     install -m555 packaging/macos/launch-agent.sh "$contents/Resources/launch-agent.sh"
     install -m444 packaging/macos/com.anistark.arin.plist "$contents/Resources/"
 

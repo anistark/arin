@@ -60,11 +60,14 @@ The flake ships a [nix-darwin](https://github.com/nix-darwin/nix-darwin) module.
 ```
 
 That writes `~/Library/LaunchAgents/com.anistark.arin.plist` and starts the daemon at
-login, from the binary inside the bundle. It is the same launch agent
-`launch-agent.sh enable` installs, under the same label, so the two collide rather than
-running two daemons against one socket. Pick one. If you have run the script before,
-`nix-darwin` will refuse to overwrite the file it left behind and tell you to move it out
-of the way.
+login, from the binary inside the bundle. It is the same launch agent `arin service enable`
+installs, under the same label, so the two collide rather than running two daemons against
+one socket. Pick one.
+
+Both sides now say so rather than racing. `nix-darwin` refuses to overwrite a plist it did
+not write and tells you to move it out of the way, and `arin service` recognises a
+nix-managed agent by the store path in it and refuses to touch it. To move from the module
+to the command, unset `services.arin.enable`, rebuild, and run `arin service enable`.
 
 nix-darwin needs `system.primaryUser` set to own a user agent.
 

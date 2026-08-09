@@ -27,6 +27,9 @@ the only permission Arin ever asks for, and it never asks for Accessibility.
 
 Nothing is drawn until something asks. Leave it running.
 
+This one stops with the terminal. `arin service enable` installs a launch agent instead, so
+Arin is there after a reboot without a window holding it open.
+
 ## 3. Point at something
 
 In another terminal:

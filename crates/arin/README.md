@@ -30,6 +30,7 @@ Either way, start it and grant Screen Recording when asked:
 
 ```sh
 arin -d              # the daemon, in the foreground
+arin service enable  # or have launchd start one at login
 ```
 
 macOS 14 or later. The daemon is macOS-only today; this crate builds anywhere.

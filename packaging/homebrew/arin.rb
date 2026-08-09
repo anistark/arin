@@ -50,7 +50,7 @@ cask "arin" do
 
     To start it at login instead:
 
-      /Applications/Arin.app/Contents/Resources/launch-agent.sh enable
+      arin service enable
 
     Grounding natural language targets is off unless you name a resolver, and it asks
     before it reads your screen. Nothing leaves the machine with --resolver local.

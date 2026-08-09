@@ -5,10 +5,14 @@
 # different things about KeepAlive or ProcessType, that file is right and this one is a
 # drift to fix.
 #
-# What a Nix user gets that the script cannot give them is the daemon's command line under
-# version control. `launch-agent.sh` installs a plist that runs `arin daemon` with no
+# What a Nix user gets that the command cannot give them is the daemon's command line under
+# version control. `arin service enable` installs a plist that runs `arin daemon` with no
 # options, and anything past that is hand editing a generated file that the next `enable`
 # overwrites.
+#
+# The two write the same label, so they collide. `arin service` recognises a plist this
+# module wrote by the store path in it and refuses to touch it, which leaves this file the
+# only manager on a Nix machine.
 #
 # Takes the flake as an argument so `package` can default to the build from the same
 # revision as the module. A module that defaulted to nixpkgs would silently pair this file

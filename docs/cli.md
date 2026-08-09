@@ -22,6 +22,25 @@ without `--hold` the mark goes as soon as the command returns.
 `arin status` reports whether the daemon is reachable. `arin displays` lists the displays
 with the ids to pass to `--display`.
 
+## Keeping the daemon running
+
+`arin -d` runs in the foreground and stops on Ctrl-C. To have Arin there after a reboot,
+install the launch agent:
+
+```sh
+arin service enable
+```
+
+It works out which `Arin.app` to run from the binary you typed it with, so the line is the
+same however Arin was installed. `arin service status` says whether the agent is installed
+and which build it starts, and exits non-zero when there is none, so a setup script can
+ask. `arin service restart` is what to run after `brew upgrade`: the agent survives an
+upgrade, a daemon that is already running does not get replaced by one. `arin service
+disable` stops it starting at login and leaves the app alone.
+
+[Install](/docs/install/) has the rest, including what happens with Nix, which manages the
+same agent through `services.arin.enable` instead.
+
 ## Reporting a bug
 
 ```sh

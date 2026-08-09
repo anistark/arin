@@ -113,9 +113,10 @@ mv "$output_dir/AppIcon.icns" "$contents/Resources/AppIcon.icns"
 
 sed "s/@VERSION@/$version/g" packaging/macos/Info.plist >"$contents/Info.plist"
 
-# The launch agent installer travels with the app, because the person who needs it has an
-# installed app and not a clone. launch-agent.sh finds its template next to itself, so the
-# two have to stay together.
+# `arin service` installs the launch agent now, and reads the template out of the binary
+# rather than off disk. These two are what it replaced: a deprecated script that forwards to
+# it, kept because released Homebrew caveats name this path, and the template itself, kept
+# as the readable copy of what the agent is. They go together, and they go at the same time.
 cp packaging/macos/launch-agent.sh "$contents/Resources/launch-agent.sh"
 cp packaging/macos/com.anistark.arin.plist "$contents/Resources/com.anistark.arin.plist"
 chmod +x "$contents/Resources/launch-agent.sh"

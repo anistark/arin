@@ -95,22 +95,40 @@ launchd's job, below.
 Not automatic, either way. An annotation daemon that added itself to your login items
 unasked would be doing the thing people reasonably object to.
 
-With Homebrew or the dmg:
-
 ```sh
-$(brew --prefix)/opt/arin/Arin.app/Contents/Resources/launch-agent.sh enable
+arin service enable
 ```
 
-Or, from `/Applications` if you installed the dmg:
+The same line however Arin got here. It works out which `Arin.app` to run from the binary
+you typed it with, so there is no path to get right and no way to point the agent at a
+different build of Arin than the one you meant. Re-running it replaces the agent, which is
+how you point it at an app that moved.
 
 ```sh
-/Applications/Arin.app/Contents/Resources/launch-agent.sh enable
+arin service status      # installed? running? which build?
+arin service restart     # what to run after brew upgrade
+arin service disable     # stop starting at login, leave the app alone
 ```
 
-`disable` takes it away again and leaves the app alone. `status` says whether it is loaded.
+`status` exits non-zero when the agent is not installed, so a setup script can ask.
+
+The agent names a path that survives an upgrade, so `brew upgrade arin` leaves it working.
+What an upgrade does not do is replace a daemon that is already running, so the old build
+stays up until `arin service restart` says otherwise.
+
+If you have a bare binary from `cargo install`, there is no bundle for the agent to start
+and Arin will say so rather than installing one. Screen Recording is granted to a bundle
+rather than to a path, so an agent running a bare binary comes up unable to see the screen.
+Build a bundle with `just bundle` and name it:
+
+```sh
+arin service enable --app target/bundle/Arin.app
+```
 
 With Nix, it is `services.arin.enable = true` in your nix-darwin configuration, which is
 the same launch agent with the daemon's command line written down. See [Nix](/docs/nix/).
+`arin service` knows about it and refuses to manage an agent nix-darwin is managing, rather
+than overwriting it and leaving two definitions of one agent.
 
 ## Permissions, when they go wrong
 
@@ -128,6 +146,16 @@ talking to and whether it holds the permission.
 
 ## Uninstalling
 
+If you enabled the login agent, disable it *first*. The command that does so is the app, so
+removing the app first takes it with it and leaves an agent behind pointing at a binary
+that is no longer there.
+
+```sh
+arin service disable
+```
+
+Then the app:
+
 ```sh
 brew uninstall arin                  # Homebrew
 nix profile remove arin              # Nix
@@ -138,9 +166,16 @@ None of those remove what Arin left in your home directory, because none of them
 guess. If you want it gone completely:
 
 ```sh
-launch-agent.sh disable              # if you enabled it
 rm -rf ~/Library/Logs/Arin
 tccutil reset ScreenCapture com.anistark.arin
+```
+
+If the app went first, there is no `arin` left to run and the two lines it would have run
+are:
+
+```sh
+launchctl bootout gui/$UID/com.anistark.arin
+rm -f ~/Library/LaunchAgents/com.anistark.arin.plist
 ```
 
 The socket lives in your temporary directory and is recreated on every start, so there is

@@ -24,6 +24,37 @@ is a format.
 
 ## [Unreleased]
 
+### Added
+
+- **`arin service`** manages the launch agent that starts Arin at login. `enable`,
+  `disable`, `status` and `restart`, with `status` the default and the one that exits
+  non-zero when there is no agent, so a setup script can ask.
+
+  It replaces `launch-agent.sh`, which had to be told where `Arin.app` was because a shell
+  script cannot ask. That argument is where the bugs were. The documented Homebrew
+  invocation omitted it, so the script fell back to `/Applications/Arin.app`: on a machine
+  with only the Homebrew install that failed, and on a machine with both it silently
+  started the other build at login, which is the two-builds-one-TCC-row problem arriving by
+  a route that never looks like a mistake. A process can find its own bundle, so the
+  command has no path to get wrong.
+
+  `enable` resolves a Homebrew keg to its `opt` alias rather than to the versioned path
+  underneath. Writing `Cellar/arin/<version>` into the agent would break it at the next
+  `brew upgrade`, when that keg is deleted.
+
+  It refuses to manage an agent nix-darwin is managing, recognising it by the store path
+  inside. Both write the same label, and the old script would quietly win.
+
+  The plist is generated from `packaging/macos/com.anistark.arin.plist`, the file the
+  bundlers already install, so there is still one description of the agent rather than a
+  second one in Rust. Paths are XML escaped on the way in, which the script did not do.
+
+### Changed
+
+- **`launch-agent.sh` is deprecated** and now forwards to `arin service`, printing what to
+  type instead. Kept because released Homebrew caveats name its path. It can go a release
+  after they stop.
+
 ## [0.4.1] - 2026-08-08
 
 ### Added

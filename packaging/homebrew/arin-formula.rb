@@ -85,7 +85,11 @@ class Arin < Formula
 
       Or start it at login:
 
-        #{opt_prefix}/Arin.app/Contents/Resources/launch-agent.sh enable #{opt_prefix}/Arin.app
+        arin service enable
+
+      `arin service status`, `restart` and `disable` are the rest of it. Run `restart`
+      after an upgrade: the agent survives one, a running daemon does not get replaced by
+      one.
 
       Grant Screen Recording in System Settings > Privacy & Security when asked.
 

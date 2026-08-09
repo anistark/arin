@@ -204,6 +204,22 @@ pub(crate) enum Command {
         no_adaptive_color: bool,
     },
 
+    /// Start Arin at login, or stop doing that.
+    ///
+    /// The daemon itself always runs in the foreground. This installs the launch agent that
+    /// starts one at login, which is the only supported way to have Arin running without a
+    /// terminal holding it open.
+    ///
+    /// Nothing here happens on install. An annotation daemon that added itself to your
+    /// login items unasked would be doing the thing people reasonably object to, so it is a
+    /// command you type.
+    #[cfg(target_os = "macos")]
+    Service {
+        /// Omitted means `status`, since asking is the harmless one.
+        #[command(subcommand)]
+        action: Option<ServiceAction>,
+    },
+
     /// Serve MCP on stdio, for an agent to launch as a subprocess.
     ///
     /// Not something to run by hand. An MCP client starts it, speaks MCP on stdin and
@@ -367,6 +383,41 @@ pub(crate) enum Command {
         #[arg(long, value_name = "DIR")]
         save: Option<PathBuf>,
     },
+}
+
+/// What to do with the launch agent.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum ServiceAction {
+    /// Install the launch agent, and start the daemon now.
+    ///
+    /// Works out which `Arin.app` to run from the binary you typed it with, so the same
+    /// line is correct whether Arin came from Homebrew, the dmg, or a clone. Re-running it
+    /// replaces the agent rather than failing, which is how you point it at an app that
+    /// moved.
+    Enable {
+        /// The bundle to run, when this binary is not inside one.
+        ///
+        /// Only needed for a bare binary from `cargo install`, which has no bundle of its
+        /// own to find. `just bundle` builds one from a clone.
+        #[arg(long, value_name = "PATH")]
+        app: Option<PathBuf>,
+    },
+
+    /// Remove the launch agent. The app itself is untouched.
+    Disable,
+
+    /// Say whether the agent is installed, and whether the daemon it starts is up.
+    ///
+    /// Exits non-zero when the agent is not installed, so it can gate a script.
+    Status,
+
+    /// Stop the running daemon and start it again from the same agent.
+    ///
+    /// What to run after `brew upgrade`. The agent points at a path that survives the
+    /// upgrade, so it keeps working, but launchd does not replace a process that has not
+    /// exited and the old build stays up until it is told to go.
+    Restart,
 }
 
 #[derive(Debug, Args)]

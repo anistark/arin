@@ -119,8 +119,8 @@ jobs:
           # other tools and is worth confirming is an icns rather than a file with the name.
           file "$contents/Resources/AppIcon.icns" | grep -q "Mac OS X icon"
 
-          # The launch agent installer travels with the app, for anyone not using the
-          # nix-darwin module, and it is useless without its template beside it.
+          # The deprecated installer and the template it predates. `arin service` needs
+          # neither, and both are shipped until the released caveats stop naming the script.
           test -x "$contents/Resources/launch-agent.sh"
           test -f "$contents/Resources/com.anistark.arin.plist"
 
@@ -177,8 +177,8 @@ jobs:
 
           jq -e '
             .serviceConfig.Label == "com.anistark.arin"
-            # The file launch-agent.sh writes, so the two collide loudly instead of running
-            # two daemons against one socket.
+            # The file `arin service enable` writes, so the two collide loudly instead of
+            # running two daemons against one socket.
             and (.launchAgents | index("com.anistark.arin.plist"))
             # The binary inside the bundle. TCC attributes the Screen Recording grant to the
             # bundle, so an agent running anything else comes up unable to see the screen.

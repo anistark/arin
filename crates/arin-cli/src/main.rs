@@ -11,6 +11,8 @@ mod daemon;
 mod diagnose;
 #[cfg(target_os = "macos")]
 mod hotkey;
+#[cfg(target_os = "macos")]
+mod service;
 mod update;
 
 use anyhow::{Context, Result};
@@ -67,6 +69,10 @@ fn main() -> Result<()> {
             }
             daemon::start_daemon(config, headless, check_updates)
         }
+        // Never touches the socket. It manages the agent that starts a daemon, which is a
+        // question about launchd rather than about a daemon that may not be running yet.
+        #[cfg(target_os = "macos")]
+        Command::Service { action } => service::run(action.unwrap_or(cli::ServiceAction::Status)),
         Command::Resolvers => diagnose::list_resolvers(),
         Command::Update => update::check(),
         // Reads the same settings a daemon started here would, so a palette or a resolver
