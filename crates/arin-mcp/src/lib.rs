@@ -56,6 +56,50 @@ pub mod tools {
 /// The name this server reports to the daemon on `session_start`.
 pub const CLIENT_NAME: &str = "arin-mcp";
 
+/// What the model is told about Arin before it has called anything.
+///
+/// A constant rather than a literal inside `get_info`, because this is the only part of
+/// Arin that decides whether an agent reaches for it at all, and it should be findable and
+/// testable rather than buried in a trait impl.
+///
+/// Three things it has to carry, and the reason each is here:
+///
+/// **When to draw.** Registering the tools gives an agent the ability and no occasion to
+/// use it. Without a disposition written down, a model that could point never does.
+///
+/// **How to aim.** Nothing here can see the screen: there is no `capture` tool and no
+/// `displays` tool, on purpose, since Arin holds the Screen Recording grant and a client
+/// does not. So an agent has to be told which target form is reachable from what it knows,
+/// or it reaches for `query`, gets `no_resolver`, and stops trying.
+///
+/// **What a refusal means.** A tool error that reads as a dead end costs Arin the rest of
+/// the session.
+///
+/// It is injected into every session that loads this server, so length is a real cost paid
+/// on every request. `the_instructions_stay_short_enough_to_carry` is the ceiling.
+pub const INSTRUCTIONS: &str = "\
+Arin draws on the user's screen so you can show them what you mean instead of describing \
+it. Point at the line you are explaining, outline the region you are discussing, place a \
+note beside what it describes. It draws only: it never clicks, types, or scrolls, so use \
+it to direct attention rather than to act.
+
+When to use it. The first time you explain something the user can see on their screen, \
+annotate it as you go, and tell them once that they can ask you to stop. After that, \
+follow their lead: keep annotating if they engaged with it, and stop if they ignored it or \
+asked you to. Do not annotate work they cannot see, and do not announce that you are about \
+to draw.
+
+How to aim. Holding a screenshot of one whole display, measure the target in it, pass `at` \
+as percentages of the image like \"27%,9%\", and name the display the screenshot came \
+from. That is as exact as your measurement and needs to know nothing about the display's \
+size. Without a screenshot, pass `at` as a named position like \"top-right\". Pass `x` and \
+`y` only once you know the display's logical size, which every result reports next to \
+`display_scale`, the number that turns screenshot pixels into logical points. Pass `query` \
+only if the user has configured a resolver: without one it comes back `no_resolver`, and \
+the answer is to aim another way rather than to try the same call again.
+
+Clear your marks once they no longer describe what is on screen.";
+
 /// What a drawing tool hands back.
 ///
 /// The annotation id, so a later `clear` can name this mark specifically, and the display
@@ -223,12 +267,16 @@ impl Arin {
         name = "point_at",
         description = "Point at something on the user's screen. Puts a glowing orb on the \
                        given position with an optional caption. Three ways to say where, \
-                       and exactly one per call: x and y in logical points from the \
-                       top-left of the display, which is screenshot pixels divided by the \
-                       display scale; `at` with a named position like \"top-right\" or \
-                       \"50%,30%\" when you have not measured the screen; or `query` \
-                       describing the target in words, like \"the Submit button\", when \
-                       you cannot see the screen at all."
+                       and exactly one per call. `at` takes a named position like \
+                       \"top-right\", or percentages of the display like \"27%,9%\": \
+                       measured off a screenshot of that same display, the percentage form \
+                       is as exact as your measurement and needs to know nothing about the \
+                       display's size, which makes it the one to reach for when you can see \
+                       the screen. Both sides need the sign, so \"27,9\" is refused. `x` and \
+                       `y` are logical points from the top-left, which is screenshot pixels \
+                       divided by the display scale reported back to you. `query` describes \
+                       the target in words, like \"the Submit button\", and needs a resolver \
+                       the user has configured."
     )]
     async fn point_at(
         &self,
@@ -255,10 +303,14 @@ impl Arin {
         name = "highlight",
         description = "Outline a rectangular region of the user's screen, with an \
                        optional caption. Use this for an area and point_at for a spot. \
-                       Give either all four of x, y, width and height in logical points \
-                       from the top-left of the display, or `query` describing the region \
-                       in words, like \"the error message\", when you cannot see the \
-                       screen."
+                       Two ways to say where, and exactly one per call: all four of x, y, \
+                       width and height in logical points from the top-left of the display, \
+                       or `query` describing the region in words, like \"the error \
+                       message\", which needs a resolver the user has configured. There is \
+                       deliberately no `at` here, because a named position is a spot rather \
+                       than an area, so a region has to be measured. Turn screenshot pixels \
+                       into logical points by dividing by the `display_scale` that any \
+                       earlier result reported."
     )]
     async fn highlight(
         &self,
@@ -287,8 +339,11 @@ impl Arin {
         name = "annotate",
         description = "Place a block of explanatory text on the user's screen. Display \
                        only: it is never an input, and the user cannot click or type into \
-                       it. Use it for a sentence or two of explanation, placed next to \
-                       whatever it describes."
+                       it. Use it for a sentence or two of explanation, in logical points \
+                       beside whatever it describes rather than over it, since a box on top \
+                       of the thing you are explaining hides it. Logical points only, so \
+                       divide screenshot pixels by the `display_scale` that any earlier \
+                       result reported."
     )]
     async fn annotate(
         &self,
@@ -391,17 +446,7 @@ impl ServerHandler for Arin {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server_info;
-        info.instructions = Some(
-            "Arin draws on the user's screen so you can show them what you mean \
-                 instead of describing it. Point at a line of code as you explain it, \
-                 outline the region you are discussing, annotate what is on screen. It \
-                 draws only: it never clicks, types, or scrolls, so use it to direct \
-                 attention rather than to act. Coordinates are logical points from the \
-                 top-left of a display, so if you are working from a screenshot, divide \
-                 pixel coordinates by the display scale reported back to you. Clear your \
-                 marks once they no longer describe what is on screen."
-                .into(),
-        );
+        info.instructions = Some(INSTRUCTIONS.into());
         info
     }
 }
@@ -591,6 +636,96 @@ mod tests {
             let described = tool.description.as_ref().is_some_and(|d| d.len() > 40);
             assert!(described, "{} needs a description", tool.name);
         }
+    }
+
+    /// The promise a user is really deciding about when they leave a daemon holding Screen
+    /// Recording running. It is in the instructions because that is where a model reads it
+    /// and repeats it, and nothing else in this crate stops it being edited away.
+    #[test]
+    fn the_instructions_carry_the_draw_only_promise() {
+        assert!(
+            INSTRUCTIONS.contains("never clicks, types, or scrolls"),
+            "the draw-only promise left the instructions"
+        );
+    }
+
+    /// Registering the tools gives an agent the ability and no occasion to use it. These
+    /// two sentences are the whole difference between a model that points unprompted and
+    /// one that never does, so they are pinned rather than left to a reviewer to notice.
+    #[test]
+    fn the_instructions_say_when_to_draw_and_when_to_stop() {
+        assert!(
+            INSTRUCTIONS.contains("The first time you explain something the user can see"),
+            "nothing tells the model when to reach for Arin"
+        );
+        assert!(
+            INSTRUCTIONS.contains("follow their lead"),
+            "nothing tells the model to stop when the user is not interested"
+        );
+    }
+
+    /// Nothing here can see the screen, so an agent that is not told which target form is
+    /// reachable reaches for `query`, gets `no_resolver` back, and gives up on Arin for the
+    /// rest of the session. Each of these three is one branch of that decision.
+    #[test]
+    fn the_instructions_teach_every_way_to_aim() {
+        for taught in [
+            // Exact, and the only precise form available with no resolver.
+            "percentages of the image",
+            // The fallback when the agent cannot see the screen at all.
+            "named position",
+            // The refusal that would otherwise read as a dead end.
+            "no_resolver",
+        ] {
+            assert!(
+                INSTRUCTIONS.contains(taught),
+                "the instructions never mention {taught:?}, so a model has one fewer way \
+                 to aim than Arin actually offers"
+            );
+        }
+
+        assert!(
+            INSTRUCTIONS.contains("aim another way rather than to try the same call again"),
+            "a refusal has to point somewhere, or the model retries it or abandons Arin"
+        );
+    }
+
+    /// Injected into every session that loads this server, so length is paid on every
+    /// request rather than once. A ceiling turns "these grew again" into a failing test
+    /// rather than something a reviewer has to keep noticing.
+    #[test]
+    fn the_instructions_stay_short_enough_to_carry() {
+        let length = INSTRUCTIONS.len();
+        assert!(
+            length < 1800,
+            "the instructions are {length} characters, which is more context than this \
+             server has earned in every session. Cut before adding."
+        );
+    }
+
+    /// `point_at` takes a named position and `highlight` does not, deliberately, because a
+    /// name is a spot and a region has to be measured. A description that implied otherwise
+    /// would produce calls the daemon refuses.
+    #[test]
+    fn only_the_tool_that_has_named_positions_offers_them() {
+        let described = |name: &str| -> String {
+            Arin::tool_router()
+                .list_all()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .and_then(|tool| tool.description.as_ref().map(|d| d.to_string()))
+                .unwrap_or_else(|| panic!("{name} is registered and described"))
+        };
+
+        assert!(
+            described(tools::POINT_AT).contains("27%,9%"),
+            "point_at has to teach the percentage form, which is the only exact way to aim \
+             without a resolver"
+        );
+        assert!(
+            described(tools::HIGHLIGHT).contains("no `at` here"),
+            "highlight has no named position, and saying nothing invites the call anyway"
+        );
     }
 
     /// An agent that omits the display should still draw somewhere.

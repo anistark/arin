@@ -24,6 +24,35 @@ is a format.
 
 ## [Unreleased]
 
+### Changed
+
+- **The MCP server tells an agent when to draw and how to aim.** Adding Arin to an agent
+  used to give it four tools and no occasion to use them, so a model that could point never
+  did. The server instructions now carry a disposition: annotate the first time you explain
+  something the user can see, say once that they can ask you to stop, and after that follow
+  their lead.
+
+  The harder half was aiming. There is no `capture` tool and no `displays` tool, on purpose,
+  so an agent cannot see the screen through Arin. Told nothing, it reaches for `query`, gets
+  `no_resolver` because grounding is off until a resolver is named, and gives up on Arin for
+  the rest of the session. The instructions now name each target form, what it costs to use,
+  and what to do with a refusal.
+
+  The form worth knowing: an agent holding a screenshot of one whole display can measure the
+  target as a percentage of the image and send `at` as `"27%,9%"`. That is exact, and it
+  needs neither the display's size nor a resolver. `Position::parse` has accepted it since
+  0.2 and nothing said so, which left screenshot-equipped agents with no precise way to aim
+  and no way to find out there was one.
+
+  `point_at`, `highlight` and `annotate` gained the specifics. `highlight` in particular now
+  says it has no `at` form, since a name is a spot and a region has to be measured, and an
+  asymmetry that is invisible gets guessed wrong.
+
+  `INSTRUCTIONS` is a public constant rather than a literal inside `get_info`, with tests
+  pinning the draw-only promise, the disposition, every branch of the aiming decision, and a
+  length ceiling. They go into every session that loads the server, so they are a cost paid
+  per request and growth should fail a test rather than wait for a reviewer.
+
 ### Added
 
 - **`arin service`** manages the launch agent that starts Arin at login. `enable`,
