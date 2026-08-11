@@ -89,6 +89,11 @@ follow their lead: keep annotating if they engaged with it, and stop if they ign
 asked you to. Do not annotate work they cannot see, and do not announce that you are about \
 to draw.
 
+Only the desktop in front of them. Arin cannot see or draw on another one, and a mark \
+placed for something the user then swipes away from goes as they leave. If what you are \
+describing is not on the visible desktop, name the app it is in and ask them to switch \
+before you point at it.
+
 How to aim. Holding a screenshot of one whole display, measure the target in it, pass `at` \
 as percentages of the image like \"27%,9%\", and name the display the screenshot came \
 from. That is as exact as your measurement and needs to know nothing about the display's \
@@ -700,6 +705,21 @@ mod tests {
             length < 1800,
             "the instructions are {length} characters, which is more context than this \
              server has earned in every session. Cut before adding."
+        );
+    }
+
+    /// Desktops share one set of coordinates, so a mark aimed at one nobody is looking at
+    /// lands over unrelated content on the desktop in front of them and is taken down as
+    /// they swipe. Nothing in the daemon can fix that, so the agent has to not aim there.
+    #[test]
+    fn the_instructions_say_arin_only_reaches_the_visible_desktop() {
+        assert!(
+            INSTRUCTIONS.contains("Only the desktop in front of them"),
+            "an agent told nothing about desktops will point at one the user has left"
+        );
+        assert!(
+            INSTRUCTIONS.contains("ask them to switch"),
+            "knowing it cannot reach the other desktop is only useful with the way out"
         );
     }
 

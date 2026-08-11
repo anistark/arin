@@ -24,7 +24,28 @@ is a format.
 
 ## [Unreleased]
 
+### Added
+
+- **A failed query says whether the target might be on another desktop.** A resolver that
+  finds nothing cannot say whether the thing is absent or sitting on a desktop nobody is
+  looking at, and only the second is something the user can act on. `resolve_failed` now
+  says when the visible desktop is not showing everything, and what to do about it.
+
+  `Capture::windows_off_desktop` is the seam, defaulted to "cannot tell" so Linux and
+  Windows are untouched until they can answer. The count decides whether there is anything
+  to say and is never quoted, since it rests on heuristics that differ per application.
+
+  Most of what macOS reports off screen is scaffolding, and background tabs are windows, so
+  the count is filtered to titled layer-zero windows that are not stacked on a visible
+  window of the same application. Titles are never read and there is no way to ask for them.
+
 ### Changed
+
+- **The MCP server tells agents Arin only reaches the visible desktop.** Every desktop on a
+  display shares one set of screen coordinates, so a mark aimed at a desktop the user is not
+  looking at landed over unrelated content on the one in front of them and was taken down as
+  they swiped, which reads as Arin never firing. Nothing in the daemon can fix that, so the
+  instructions now say to name the app and ask the user to switch instead of pointing.
 
 - **The MCP server tells an agent when to draw and how to aim.** Adding Arin to an agent
   used to give it four tools and no occasion to use them, so a model that could point never
