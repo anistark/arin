@@ -62,8 +62,14 @@ class Arin < Formula
 
   def install
     # The same script the release workflow runs, so the formula cannot drift from the dmg.
-    # Unsigned deliberately: nothing here has a certificate, and an ad-hoc signature would
-    # change on every build without buying anything Gatekeeper or TCC recognises.
+    # Ad-hoc signed, because there is no certificate here and the script always signs.
+    #
+    # This comment used to say the bundle was left unsigned deliberately, on the grounds that
+    # an ad-hoc signature changes on every build and buys nothing Gatekeeper or TCC
+    # recognises. Half right. Gatekeeper does not care. TCC does: it will not keep a Screen
+    # Recording grant against a bundle whose signature does not verify, which is what
+    # skipping codesign actually produced, so every install from this formula came up asking
+    # for a permission it could never be granted. See the signing section of bundle.sh.
     system "packaging/macos/bundle.sh", "--output", "target/bundle"
 
     # The bundle rather than a bare binary, because the menu bar item, the absence of a

@@ -232,10 +232,19 @@ fn platform(out: &mut String, config: &Config) {
             }
         } else {
             match std::thread::spawn(arin_mac::screen_recording).join() {
-                Ok(state) => state.explain().to_owned(),
+                Ok(state) => arin_mac::explain_screen_recording(state),
                 Err(_) => "the permission check panicked".to_owned(),
             }
         }
+    );
+
+    // The line that decides whether a grant can stick at all. Worth reporting whatever the
+    // permission says, because a report from a working machine is what a broken one is read
+    // against, and this is the field they differ in.
+    let _ = writeln!(
+        out,
+        "identity    {}",
+        arin_mac::screen_recording_identity().explain()
     );
 
     match objc2::MainThreadMarker::new() {

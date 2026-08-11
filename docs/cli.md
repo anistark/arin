@@ -41,6 +41,45 @@ disable` stops it starting at login and leaves the app alone.
 [Install](/docs/install/) has the rest, including what happens with Nix, which manages the
 same agent through `services.arin.enable` instead.
 
+## Checking the screen recording permission
+
+```sh
+arin permissions
+arin permissions --open
+```
+
+Arin needs Screen Recording to notice when content moves under a mark and to pick a colour
+that reads against whatever is underneath. Marks still draw without it. They just stop
+following the page.
+
+`arin permissions` proves the permission by taking a frame rather than trusting what macOS
+reports, because those two disagree in a way that matters: the system reports the grant the
+moment you flip the switch, and ScreenCaptureKit serves nothing to a process that was
+already running when that happened. When they disagree the answer is to restart Arin, and
+nothing else will tell you so. It exits non-zero when capture does not work, so a setup
+script can gate on it. `--open` goes straight to the switch.
+
+When something is wrong it also reports whether this build has an identity a grant can
+attach to at all. macOS remembers a grant against a code signature rather than against a
+name, so a build whose signature does not verify reports exactly what a build nobody has
+granted reports, and only one of those is fixed in System Settings. If that line says the
+signature does not verify, it prints the two commands that clear it. See
+[Install](/docs/install/#when-permissions-go-wrong).
+
+**Run beside a live daemon, this command changes what it answers.** Only one process can
+hold the capture stream, and macOS attributes a permission to whatever launched the process
+asking, which from a terminal is the terminal. So a granted answer here would be your
+terminal's grant wearing Arin's name. When the daemon is up, `arin permissions` says so and
+points at the daemon's log, which is the only honest source:
+
+```sh
+tail ~/Library/Logs/Arin/arin.log
+```
+
+The daemon says on startup whether capture works. If that file does not exist and the launch
+agent is enabled, launchd has been discarding the log: `arin service status` reports it, and
+`arin service enable` creates the directory.
+
 ## Reporting a bug
 
 ```sh
@@ -51,8 +90,8 @@ arin diagnose --output ~/arin-report.txt
 Arin collects no telemetry, so there is nothing on our side to look at when something goes
 wrong. `arin diagnose` is the replacement: build and protocol version, the socket and
 whether anything is listening on it, the settings a daemon started here would use, every
-resolver and whether it can be built, the macOS version, the capture permission, the
-displays, and the environment variables Arin reads.
+resolver and whether it can be built, the macOS version, the capture permission and the
+signing identity behind it, the displays, and the environment variables Arin reads.
 
 It prints to your terminal on purpose. Nothing is uploaded, and a report you have to open
 to see is one people attach without reading. Secrets are never quoted: an API key is
