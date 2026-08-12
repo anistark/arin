@@ -57,6 +57,20 @@ pub trait Capture: Send + Sync + 'static {
         let _ = min_long_edge;
         self.capture(display)
     }
+
+    /// How many windows exist that the visible desktop is not showing.
+    ///
+    /// Lets a failed query say whether the target might be somewhere the user is not
+    /// looking, which is the one form of "not found" they can do something about.
+    ///
+    /// Not a count of windows on other desktops: windows minimised or fully behind another
+    /// are in it too, so it supports "there is a somewhere else" and nothing more definite.
+    /// Never titles, and there is deliberately no way to ask for them.
+    ///
+    /// `None` means this backend cannot tell, which is the default and is not `Some(0)`.
+    fn windows_off_desktop(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// A captured display.

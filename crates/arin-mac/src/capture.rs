@@ -148,6 +148,96 @@ impl arin_core::Capture for MacCapture {
                 .map(|configured| configured.max(min_long_edge)),
         )
     }
+
+    /// Windows ScreenCaptureKit can see that the visible desktop is not showing.
+    ///
+    /// Costs a round trip through ScreenCaptureKit, so it belongs on a failure path rather
+    /// than in a loop. `None` on any error, since a caller cannot act on which one it was.
+    fn windows_off_desktop(&self) -> Option<usize> {
+        let content = shareable_content_including_offscreen()
+            .inspect_err(|e| tracing::debug!(error = %e, "could not list what is off screen"))
+            .ok()?;
+
+        let windows = unsafe { content.0.windows() };
+
+        // Where each application's visible windows sit, for `is_a_background_tab`.
+        let visible: std::collections::HashSet<(i32, i64, i64)> = windows
+            .iter()
+            .filter(|window| unsafe { window.isOnScreen() })
+            .filter_map(|window| stacking_position(&window))
+            .collect();
+
+        let ours = std::process::id() as i32;
+        let elsewhere = windows
+            .iter()
+            .filter(|window| !unsafe { window.isOnScreen() })
+            .filter(|window| {
+                unsafe { window.owningApplication() }
+                    .is_none_or(|app| unsafe { app.processID() } != ours)
+            })
+            .filter(|window| looks_like_a_users_window(window))
+            .filter(|window| !is_a_background_tab(window, &visible))
+            .count();
+
+        tracing::debug!(
+            elsewhere,
+            "counted windows the visible desktop is not showing"
+        );
+        Some(elsewhere)
+    }
+}
+
+/// An application and where one of its windows sits, rounded to whole points.
+///
+/// The key a tab group shares, since every tab in one stacks in the same place.
+fn stacking_position(window: &objc2_screen_capture_kit::SCWindow) -> Option<(i32, i64, i64)> {
+    let pid = unsafe { window.owningApplication() }.map(|app| unsafe { app.processID() })?;
+    let frame = unsafe { window.frame() };
+    Some((
+        pid,
+        frame.origin.x.round() as i64,
+        frame.origin.y.round() as i64,
+    ))
+}
+
+/// Whether a hidden window is a background tab of a window that is visible.
+///
+/// macOS native tabs are windows: every tab but the front one reports as not on screen, so
+/// without this they count as somewhere else to go when they are one tab away. Apps that
+/// draw their own tabs, Chrome among them, stay a single window and never reach here.
+fn is_a_background_tab(
+    window: &objc2_screen_capture_kit::SCWindow,
+    visible: &std::collections::HashSet<(i32, i64, i64)>,
+) -> bool {
+    stacking_position(window).is_some_and(|position| visible.contains(&position))
+}
+
+/// The smallest window worth counting, in points on a side.
+///
+/// Below this it is a shadow, a tooltip, or a helper nobody would go looking for.
+const SMALLEST_REAL_WINDOW: f64 = 120.0;
+
+/// Whether a window is one a person would say they had open.
+///
+/// Most of what ScreenCaptureKit reports off screen is scaffolding: menu bar extras,
+/// offscreen helpers, and the furniture every running application keeps. On one machine that
+/// was 274 windows against the nine worth counting, so filtering is what separates a hint
+/// from noise. Layer zero and a title do nearly all of it, and the size bound catches the
+/// small titled helpers that survive both.
+///
+/// Conservative on purpose: missing a window costs a hint that was never load bearing, and
+/// counting scaffolding costs the hint its meaning.
+fn looks_like_a_users_window(window: &objc2_screen_capture_kit::SCWindow) -> bool {
+    if unsafe { window.windowLayer() } != 0 {
+        return false;
+    }
+    let titled =
+        unsafe { window.title() }.is_some_and(|title| !title.to_string().trim().is_empty());
+    if !titled {
+        return false;
+    }
+    let frame = unsafe { window.frame() };
+    frame.size.width >= SMALLEST_REAL_WINDOW && frame.size.height >= SMALLEST_REAL_WINDOW
 }
 
 /// What area a shot covers, and at what resolution it recorded it.
@@ -227,6 +317,29 @@ unsafe impl Send for ShareableContent {}
 
 /// Ask what is shareable, and wait for the answer on the calling thread.
 fn shareable_content() -> Result<ShareableContent> {
+    ask_for_content(|handler| unsafe {
+        SCShareableContent::getShareableContentWithCompletionHandler(handler)
+    })
+}
+
+/// The same, including windows the visible desktop is not showing.
+///
+/// Desktop windows are excluded so the wallpaper is not counted as somewhere to go.
+fn shareable_content_including_offscreen() -> Result<ShareableContent> {
+    ask_for_content(|handler| unsafe {
+        SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
+            true, false, handler,
+        )
+    })
+}
+
+/// Run one shareable content request and wait for it on the calling thread.
+///
+/// The answer arrives on ScreenCaptureKit's own queue and has to give up rather than hang
+/// when it never comes, which is the part both getters share.
+fn ask_for_content(
+    start: impl FnOnce(&block2::DynBlock<dyn Fn(*mut SCShareableContent, *mut NSError)>),
+) -> Result<ShareableContent> {
     let (tx, rx) = sync_channel::<std::result::Result<ShareableContent, String>>(1);
 
     let handler = RcBlock::new(
@@ -242,7 +355,7 @@ fn shareable_content() -> Result<ShareableContent> {
         },
     );
 
-    unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
+    start(&handler);
 
     match rx.recv_timeout(TIMEOUT) {
         Ok(Ok(content)) => Ok(content),
@@ -530,5 +643,26 @@ mod tests {
     fn a_short_buffer_is_refused_rather_than_read_past() {
         let bytes = vec![0u8; 8];
         assert!(unpad(&bytes, 1, 4, 8).is_err());
+    }
+
+    /// Runs against whatever this machine has open, so it asserts the shape of the answer
+    /// rather than a number, and prints the count for checking against a real desk. `None`
+    /// is a pass: without Screen Recording there is nothing to list.
+    #[test]
+    fn counting_what_is_off_the_desktop_gives_an_answer_or_admits_it_cannot() {
+        use arin_core::Capture as _;
+
+        let Some(count) = super::MacCapture::default().windows_off_desktop() else {
+            eprintln!("off-desktop windows: cannot tell (no permission, or SCK declined)");
+            return;
+        };
+        eprintln!("off-desktop windows: {count}");
+
+        // Nobody has a hundred titled windows on other desktops, so a count that high means
+        // the filters stopped working and the hint is noise again.
+        assert!(
+            count < 100,
+            "{count} off-desktop windows means the filter is letting scaffolding through"
+        );
     }
 }

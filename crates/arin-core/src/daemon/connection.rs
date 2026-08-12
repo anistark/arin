@@ -300,7 +300,10 @@ impl Connection {
 
         outcome.map_err(|e| Error::ResolveFailed {
             query: query.to_owned(),
-            reason: e.to_string(),
+            reason: somewhere_else(
+                &e.to_string(),
+                self.daemon.capture_backend().windows_off_desktop(),
+            ),
         })
     }
 
@@ -392,4 +395,63 @@ fn bounding_rect(points: &[LogicalPoint]) -> LogicalRect {
         (max_x - min_x).max(1.0),
         (max_y - min_y).max(1.0),
     )
+}
+
+/// Add where else to look to a resolver failure, when there is anywhere else.
+///
+/// A resolver that finds nothing cannot say whether the thing is absent or on a desktop
+/// nobody is looking at, and only the second has an action attached.
+///
+/// The count decides whether to speak and is never quoted. It rests on heuristics that
+/// differ per application, and an agent does the same thing whether the answer is one or
+/// nine. Worded loosely for the same reason: what is counted is windows not on screen,
+/// which takes in minimised and fully covered ones as well as other desktops.
+fn somewhere_else(reason: &str, off_desktop: Option<usize>) -> String {
+    match off_desktop {
+        Some(count) if count > 0 => format!(
+            "{reason}. Arin only sees the desktop that is showing, and there are windows it \
+             is not showing. If the target is on another desktop, ask the user to switch to \
+             it and try again."
+        ),
+        _ => reason.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::somewhere_else;
+
+    #[test]
+    fn a_failure_with_windows_elsewhere_says_where_else_to_look() {
+        let said = somewhere_else("no match for \"the Submit button\"", Some(3));
+
+        assert!(
+            said.starts_with("no match"),
+            "the resolver's own words go first"
+        );
+        assert!(
+            said.contains("another desktop") && said.contains("ask the user to switch"),
+            "knowing there is somewhere else is only useful with what to do about it: {said}"
+        );
+    }
+
+    /// A digit here would be false precision a client could act on.
+    #[test]
+    fn the_number_of_windows_elsewhere_is_never_quoted() {
+        for count in [1, 3, 9, 274] {
+            let said = somewhere_else("no match", Some(count));
+            assert!(
+                !said.chars().any(|c| c.is_ascii_digit()),
+                "the count reached the client for {count}: {said}"
+            );
+        }
+    }
+
+    /// Nothing elsewhere and no way to tell both leave the resolver's own words alone.
+    #[test]
+    fn a_failure_with_nowhere_else_is_left_exactly_as_it_was() {
+        let plain = "no match for \"the Submit button\"";
+        assert_eq!(somewhere_else(plain, Some(0)), plain);
+        assert_eq!(somewhere_else(plain, None), plain);
+    }
 }
