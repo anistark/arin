@@ -126,18 +126,42 @@ printf 'APPL????' >"$contents/PkgInfo"
 
 # --- signing ----------------------------------------------------------------------------
 #
-# The hardened runtime is not optional: notarization refuses a bundle without it, and the
-# entitlements file exists to say how few holes are punched in it.
+# The hardened runtime is not optional for a release: notarization refuses a bundle without
+# it, and the entitlements file exists to say how few holes are punched in it.
+#
+# Every bundle is signed, with or without a certificate. Skipping codesign entirely, which
+# is what this did until 2026-08-11, does not produce an unsigned bundle. It produces a
+# broken one: the linker ad-hoc signs the Mach-O on Apple silicon whatever anyone does, so
+# the binary carries a signature that claims sealed resources while the bundle around it has
+# no `_CodeSignature` at all. `codesign --verify` fails on it outright, its identifier is the
+# linker's `arin-<hash>` rather than `com.anistark.arin`, and its Info.plist is not bound.
+#
+# TCC will not keep a Screen Recording grant against that. The daemon comes up reporting the
+# permission missing on a machine where System Settings lists Arin with the switch on, and
+# every start sends the user back to the same pane. Every Homebrew install built from source
+# shipped in that state.
+#
+# So the ad-hoc branch is not a placeholder for the real thing. It buys nothing from
+# Gatekeeper, which is what the formula used to say and is where the reasoning stopped, and
+# it is the difference between having a bundle identity and having none.
 
 if [ -n "$sign_identity" ]; then
 	echo "==> signing as $sign_identity"
 	codesign --force --deep --options runtime --timestamp \
 		--entitlements packaging/macos/Arin.entitlements \
 		--sign "$sign_identity" "$app"
-	codesign --verify --strict --verbose=2 "$app"
 else
-	echo "==> not signed. Gatekeeper will refuse this anywhere but here."
+	# No --timestamp, which needs Apple's timestamp server and has no meaning without a
+	# certificate, and no --options runtime, which is a notarization requirement rather than
+	# a local one.
+	echo "==> ad-hoc signing. Gatekeeper will refuse this anywhere but here."
+	echo "    The Screen Recording grant will hold for this build and stop at the next one."
+	codesign --force --entitlements packaging/macos/Arin.entitlements --sign - "$app"
 fi
+
+# Both paths, because the failure this catches is one that only shows up as a permission
+# that will not stick, a long way from here and with nothing pointing back.
+codesign --verify --strict --verbose=2 "$app"
 
 echo "==> $app"
 lipo -archs "$contents/MacOS/arin" | sed 's/^/    architectures: /'

@@ -15,11 +15,15 @@ That is a tap, `anistark/tools`, and the formula builds Arin from source on your
 It needs no Rust toolchain of your own: Homebrew installs one for the build and cleans up
 after itself.
 
-**Building rather than downloading is the point, not a shortcut.** Nothing is signed yet,
-and macOS quarantines anything unsigned that arrived over the network, so a downloaded app
-gets refused by Gatekeeper. Something compiled where it runs was never downloaded, carries
-no quarantine attribute, and Gatekeeper never engages. Signing lands in 0.7, and the
-formula is replaced by a cask then.
+**Building rather than downloading is the point, not a shortcut.** There is no certificate
+yet, and macOS quarantines anything unsigned that arrived over the network, so a downloaded
+app gets refused by Gatekeeper. Something compiled where it runs was never downloaded,
+carries no quarantine attribute, and Gatekeeper never engages. A certificate lands in 0.7,
+and the formula is replaced by a cask then.
+
+The bundle is still ad-hoc signed, which buys nothing from Gatekeeper and is not optional
+anyway: macOS will not remember a Screen Recording grant for a bundle whose signature does
+not verify.
 
 It installs `Arin.app` into the Homebrew prefix and links the binary inside it onto your
 PATH, so `arin` and the app are one file rather than two that could drift.
@@ -31,7 +35,9 @@ brew uninstall arin     # and gone
 
 Two consequences of the app living in the Homebrew prefix rather than `/Applications`:
 Spotlight will not find it, and every upgrade asks for Screen Recording again. Both are
-things the signed build fixes.
+things a certificate fixes. Without one, the grant is pinned to the exact binary it was made
+against, so replacing that binary voids it. A build signed with a Developer ID satisfies the
+same requirement as the one before it, which is what lets a grant outlive an upgrade.
 
 ## Nix
 
@@ -130,19 +136,38 @@ the same launch agent with the daemon's command line written down. See [Nix](/do
 `arin service` knows about it and refuses to manage an agent nix-darwin is managing, rather
 than overwriting it and leaving two definitions of one agent.
 
-## Permissions, when they go wrong
+## When permissions go wrong
 
-If the daemon keeps asking for Screen Recording after you have granted it, there are two
-builds of Arin on the machine competing for one row in System Settings. macOS identifies
-unsigned code per binary and shows a single row for the identifier, so toggling it updates
-whichever record it reaches and the other keeps asking.
+If the daemon keeps asking for Screen Recording after you have granted it, start here:
 
 ```sh
+arin permissions
+```
+
+It reports the permission and, when something is wrong, the thing the permission cannot
+tell you: whether this build has an identity a grant can attach to at all. macOS remembers
+a grant against a code signature rather than against a name, so a build whose signature does
+not verify reports exactly what a build nobody has granted reports. Only one of those is
+fixed in System Settings, and switching the row on for the other does nothing however many
+times you do it.
+
+Two causes, and the command above tells them apart.
+
+**The build is not signed properly.** Arin installed before this was fixed carries a
+signature that does not verify. Re-signing it is enough, and any ad-hoc signature will do:
+
+```sh
+codesign --force --sign - /opt/homebrew/opt/arin/Arin.app
 tccutil reset ScreenCapture com.anistark.arin
 ```
 
-Then start the one you actually meant to run. `arin diagnose` reports which build you are
-talking to and whether it holds the permission.
+Then start Arin and grant it once more. A grant made this way holds until that build is
+replaced, so an upgrade will ask again until releases are signed with a certificate.
+
+**Two builds are competing for one row.** macOS identifies unsigned code per binary and
+shows a single row for the identifier, so toggling it updates whichever record it reaches
+and the other keeps asking. Reset the same way, then start the one you actually meant to
+run. `arin diagnose` reports which build you are talking to.
 
 ## Uninstalling
 

@@ -52,8 +52,9 @@ pub use host::{MacRenderer, known_screens, on_displays_changed};
 pub use menubar::{MenuBar, on_clear, on_grounding, on_quit, on_status, on_update_available};
 pub use orb::MINIMUM_FEATURED_SIZE;
 pub use permission::{
-    SCREEN_RECORDING_HELP, ScreenRecording, begin_screen_recording_flow,
-    open_screen_recording_settings, screen_recording, screen_recording_granted,
+    Identity, MacPermissions, SCREEN_RECORDING_HELP, access as screen_recording,
+    begin_screen_recording_flow, explain as explain_screen_recording,
+    open_screen_recording_settings, screen_recording_granted, screen_recording_identity,
 };
 
 use objc2::MainThreadMarker;

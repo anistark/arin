@@ -127,6 +127,19 @@ fn status() -> Result<()> {
             println!("{key:<15}{value}");
         }
     }
+
+    // launchd does not create the directory it is told to write to, and says nothing when it
+    // cannot. `enable` above creates it, so a missing one means this agent was installed by
+    // something else, and every line the daemon has ever logged went nowhere. That is worse
+    // than it sounds: `arin permissions` sends people to this file to find out whether the
+    // daemon can capture, because from a terminal there is no other honest answer.
+    let logs = log_dir()?;
+    if !logs.is_dir() {
+        println!();
+        println!("The log directory does not exist, so launchd is discarding the daemon's");
+        println!("output: {}", logs.display());
+        println!("`arin service enable` creates it and reloads the agent.");
+    }
     Ok(())
 }
 

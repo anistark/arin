@@ -133,9 +133,16 @@ pub(crate) fn check_permissions(config: &Config, open: bool) -> Result<()> {
         .join()
         .map_err(|_| anyhow::anyhow!("the permission check panicked"))?;
 
-    println!("{}", state.explain());
+    println!("{}", arin_mac::explain_screen_recording(state));
 
-    if state != arin_mac::ScreenRecording::Working {
+    if !state.usable() {
+        // What the state alone cannot say. A grant is kept against a code signature, so a
+        // build macOS cannot identify is one where no amount of clicking in System Settings
+        // changes the answer, and the pane is the first place anybody looks.
+        println!(
+            "identity    {}",
+            arin_mac::screen_recording_identity().explain()
+        );
         println!("`arin permissions --open` goes straight to the switch");
         std::process::exit(1);
     }

@@ -66,7 +66,9 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
 | `arin` | Facade library published to crates.io. Re-exports `arin-protocol` under the plain name. | no | published |
 | `arin-cli` | The `arin` binary, the only one in the workspace: daemon control, MCP, debug commands, scripting client. | no | working |
 
-The `Renderer`, `Capture`, and `Resolver` traits all live in `arin-core`, matching the diagram. `arin-resolve` holds the registry and the adapters that implement `Resolver`, not the trait itself.
+The platform seams all live in `arin-core`, matching the diagram: `Renderer`, `Capture`, `Resolver` and `Approver` in `traits.rs`, and `Permissions` in `permission.rs` beside the `Access` states it answers in. `arin-resolve` holds the registry and the adapters that implement `Resolver`, not the trait itself.
+
+`Permissions` is the one seam a port should read before writing any of it. `arin-core/src/permission.rs` carries the three rules a screen capture permission has to keep, and each of them is there because breaking it produced a bug that was invisible from the outside.
 
 ### Hard dependency rules
 
@@ -273,6 +275,8 @@ Do not assume answers. Ask before building past these.
 ## Gotchas
 
 - **Never run `xcodebuild` from a terminal for the Mac app.** It invalidates TCC permissions and you will spend an hour wondering why Screen Recording stopped working. Build through Xcode.
+- **Always `codesign` the bundle, with a certificate or ad-hoc.** Skipping it does not leave the bundle unsigned. The linker ad-hoc signs the Mach-O on Apple silicon whatever you do, so the binary claims sealed resources over a bundle that has none, `codesign --verify` fails, and the signing identifier is the linker's `arin-<hash>` rather than `com.anistark.arin`. TCC will not keep a Screen Recording grant against that, so the permission reads as missing no matter how many times it is switched on. Ad-hoc buys nothing from Gatekeeper, which is not the same as buying nothing.
+- **A permission check run from a terminal answers for the terminal.** macOS attributes TCC to the responsible process, so `arin permissions` in a shell reports the terminal's grant wearing Arin's name. The only honest source for what the daemon can do is the daemon's own log, which is why `arin permissions` points at it rather than guessing.
 - Grounding accuracy for CUA models sits around 85 to 95 percent. Confidence drives the render: high confidence gets an arrow, low confidence gets a region highlight. A slightly large highlight looks intentional. A confident arrow pointing at the wrong button looks broken.
 - Unix socket paths max out around 104 bytes including the terminator. Long temp directories blow through that, and the raw OS error says nothing useful, so the server checks the length itself.
 - Reference implementations worth reading before writing platform code: Clicky (MIT, Swift) for the NSPanel overlay recipe and bezier flight, wayscriber (MIT, Rust) for the entire layer shell approach, wlr-draw for a daemon plus control socket on wlroots.

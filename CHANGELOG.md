@@ -24,7 +24,45 @@ is a format.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Arin no longer opens System Settings every time it starts.** A daemon that found the
+  Screen Recording permission missing raised the system prompt, noticed macOS had stayed
+  silent because it had asked before, and took the user to System Settings on the assumption
+  they were heading there anyway. Under a launch agent that assumption is wrong every time:
+  Arin starts at login, finds the permission missing, and throws System Settings onto the
+  screen before the user has opened anything. Every login, with no way to stop it.
+
+  A login agent now never opens System Settings on its own. It says what is missing, and
+  leaves the menu bar item, which already shows the permission state and links to the same
+  pane, to be the way in. A daemon started by hand opens it at most once per build.
+
+- **Installs built from source shipped a bundle macOS could not identify, so the permission
+  could never be granted.** `bundle.sh` ran `codesign` only when handed a signing identity,
+  and skipping it does not produce an unsigned bundle. It produces a broken one: the linker
+  ad-hoc signs the binary on Apple silicon regardless, so `Arin.app` carried a signature
+  claiming sealed resources over a bundle that had none. `codesign --verify` failed on it,
+  its identifier was the linker's `arin-<hash>` rather than `com.anistark.arin`, and its
+  Info.plist was not bound to the signature.
+
+  TCC will not keep a Screen Recording grant against that. The permission read as missing
+  however many times it was switched on, which is the state the Homebrew formula installed
+  into. Every bundle is now signed, ad-hoc when there is no certificate, and verified before
+  the script exits. A grant made against an ad-hoc signed build holds until that build is
+  replaced. Surviving an upgrade needs a Developer ID certificate and is still open.
+
 ### Added
+
+- **`arin permissions` and `arin diagnose` report whether a grant can stick at all.** The
+  permission state cannot say it. A build the system cannot identify reports exactly what a
+  build nobody has granted reports, and only one of them is fixed in System Settings. The
+  new line names the signature, and when it does not verify it prints the two commands that
+  clear it.
+
+- **`arin service status` says when the log directory is missing.** launchd does not create
+  the directory it is told to write to and says nothing when it cannot, so an agent installed
+  by anything other than `arin service enable` discards every line the daemon logs.
+  `arin permissions` sends people to that file to find out whether capture works.
 
 - **A failed query says whether the target might be on another desktop.** A resolver that
   finds nothing cannot say whether the thing is absent or sitting on a desktop nobody is
@@ -40,6 +78,18 @@ is a format.
   window of the same application. Titles are never read and there is no way to ask for them.
 
 ### Changed
+
+- **The Screen Recording permission moved into its own module.** `arin-core` now owns the
+  vocabulary as `permission::Access` and the `Permissions` seam, so Linux and Windows answer
+  in the same terms when their cycles come, and `arin-mac` owns asking: the TCC calls, the
+  code signing identity, the settings pane, and the startup flow, one file each. The seam
+  carries the three rules a port has to keep, each of them there because breaking it produced
+  a failure with no symptom to search for.
+
+- **The docs cover the permission.** `arin permissions` had never been documented at all,
+  which is awkward for the command that diagnoses this. The CLI page now has it, including
+  why running it beside a live daemon answers for your terminal rather than for Arin, and
+  the install page explains how to tell a missing grant from a build that cannot hold one.
 
 - **The MCP server tells agents Arin only reaches the visible desktop.** Every desktop on a
   display shares one set of screen coordinates, so a mark aimed at a desktop the user is not
