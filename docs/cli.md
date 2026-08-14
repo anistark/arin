@@ -168,6 +168,74 @@ treat any comparison between the two resolvers as a guess until there is one.
 
 See [resolvers.md](resolvers.md) for writing an adapter.
 
+## Reaching a window on another desktop
+
+Arin can only mark the desktop in front of you. Every desktop on a display shares one set of
+coordinates, so a mark aimed at a window you have swiped away from lands on the desktop
+actually in front of you, over unrelated content, and is taken down as you move. From your
+side that looks like Arin never firing.
+
+The fix is to bring the application forward first, which needs a daemon started for it:
+
+```sh
+arin daemon --allow-activation
+arin focus slack                     # by name, loosely matched
+arin focus com.tinyspeck.slackmacgap # or by bundle identifier
+arin focus gmail                     # or by what a window is showing
+```
+
+Then point at what is in it. Agents get the same thing as a `bring_to_front` tool.
+
+Only applications holding a window can be raised, and a name matching several is refused
+rather than guessed at.
+
+**The name does not have to be an application.** Nobody has an app called Gmail, so Arin
+also matches what your windows are showing: `arin focus gmail` finds the browser window
+whose tab says Gmail and raises that browser. Naming an application always wins over a
+window that merely mentions it, so `arin focus slack` reaches Slack even when a browser tab
+has "Slack" in its title. Only the tab you are looking at in each window counts, since a
+background tab is not in any window's title.
+
+A refusal never says which applications it matched, how many, or what any window is showing.
+Arin can see your windows and the program asking cannot, so an error describing them would
+be a way to read your screen through Arin's permission, one call at a time. Window titles
+are matched against inside the daemon and never reported to anyone.
+
+### Finding a tab you are not looking at
+
+Window titles only reach the tab you have in front in each window, so an inbox sitting two
+tabs deep in another Chrome profile is invisible. Add `--read-browser-tabs` and Arin will
+also match against Chrome's open tabs:
+
+```sh
+arin daemon --allow-activation --read-browser-tabs
+arin focus mail.google.com   # Google Chrome — in the "Your Chrome" profile window
+```
+
+It reads Chrome's own session files from disk. No permission is involved and nothing is
+sent anywhere, but it is the most private thing Arin looks at, so it is off unless you ask
+and it is separate from `--allow-activation`. Only profiles used in the last hour are read,
+so a profile you closed this morning is not treated as open.
+
+Because raising a browser cannot switch profile, the answer names the window to look in.
+That is as far as it goes: Arin will not switch profiles or select the tab for you.
+
+Matching is literal, not clever. If your mail says `Inbox - you@company.com - Company Mail`
+at `mail.google.com`, then `arin focus gmail` finds nothing and `arin focus mail` finds it.
+Working out that "email" means `mail.google.com` is the job of whatever is driving Arin.
+
+**This is off by default, and not because it is dangerous to your data.** Anything running
+as you can already bring an application forward, with no permission of any kind, and Arin
+uses the same call the Dock does. It is off because it is disruptive: it changes what you
+are looking at, it follows you across desktops, and whatever you were typing goes to
+whatever came forward. Arin's whole claim is that it can be left running because it only
+ever draws, so a client that can rearrange what is in front of you is something you should
+have to ask for.
+
+**Arin activates and nothing else.** No window is moved, resized, closed, or arranged. All
+of those need the Accessibility permission, and Arin never asks for it. Screen Recording
+remains the only permission it wants.
+
 ## Choosing the colour marks come out in
 
 Marks are amber by default, and the daemon moves off it when amber cannot be seen against

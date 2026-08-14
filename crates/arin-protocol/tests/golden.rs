@@ -133,6 +133,34 @@ mod client_to_daemon {
     }
 
     #[test]
+    fn focus_names_an_application() {
+        let msg: Envelope<ClientMessage> =
+            round_trip(r#"{"v":"0.1","type":"focus","app":"Slack"}"#);
+        let ClientMessage::Focus(focus) = &msg.body else {
+            panic!("wrong variant: {:?}", msg.body);
+        };
+        assert_eq!(focus.app, "Slack");
+        assert!(msg.body.validate().is_ok());
+    }
+
+    /// A bundle identifier is the unambiguous form, and the wire treats it as just a name.
+    #[test]
+    fn focus_accepts_a_bundle_identifier() {
+        let msg: Envelope<ClientMessage> =
+            round_trip(r#"{"v":"0.1","type":"focus","app":"com.tinyspeck.slackmacgap"}"#);
+        assert!(msg.body.validate().is_ok());
+    }
+
+    /// Nothing sensible to bring forward, and the daemon should say so before it goes
+    /// looking rather than after failing to match.
+    #[test]
+    fn focus_refuses_an_empty_application() {
+        let blank: Envelope<ClientMessage> =
+            serde_json::from_str(r#"{"v":"0.1","type":"focus","app":"   "}"#).unwrap();
+        assert!(blank.body.validate().is_err());
+    }
+
+    #[test]
     fn session_end() {
         let msg: Envelope<ClientMessage> = round_trip(r#"{"v":"0.1","type":"session_end"}"#);
         assert_eq!(msg.body, ClientMessage::SessionEnd);
@@ -152,6 +180,41 @@ mod daemon_to_client {
         };
         assert_eq!(ack.confidence, Some(0.94));
         assert_eq!(ack.display.unwrap().scale, 2.0);
+    }
+
+    /// Found in a tab rather than a window, so the ack says which profile window to look
+    /// in. Raising a browser cannot switch profile, which is what makes this worth carrying.
+    #[test]
+    fn ack_for_a_focus_request_answered_from_the_tab_index() {
+        let msg: Envelope<DaemonMessage> = round_trip(
+            r#"{"v":"0.1","type":"ack","activated":{"app":"Google Chrome","bundle_id":"com.google.Chrome","profile":"Your Chrome"}}"#,
+        );
+        let DaemonMessage::Ack(ack) = &msg.body else {
+            panic!("wrong variant: {:?}", msg.body);
+        };
+        let activated = ack
+            .activated
+            .as_ref()
+            .expect("a focus ack says what it moved");
+        assert_eq!(activated.profile.as_deref(), Some("Your Chrome"));
+    }
+
+    /// A focus ack carries no annotation id, because nothing was drawn. A client reading
+    /// one has to be able to tell that apart from a drawing that failed to report itself.
+    #[test]
+    fn ack_for_a_focus_request() {
+        let msg: Envelope<DaemonMessage> = round_trip(
+            r#"{"v":"0.1","type":"ack","activated":{"app":"Slack","bundle_id":"com.tinyspeck.slackmacgap"}}"#,
+        );
+        let DaemonMessage::Ack(ack) = &msg.body else {
+            panic!("wrong variant: {:?}", msg.body);
+        };
+        let activated = ack
+            .activated
+            .as_ref()
+            .expect("a focus ack says what it moved");
+        assert_eq!(activated.app, "Slack");
+        assert_eq!(ack.annotation_id, None, "nothing was drawn");
     }
 
     #[test]

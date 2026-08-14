@@ -50,6 +50,10 @@ objc2-app-kit = { workspace = true, features = [
   "NSGraphics",
   "NSPanel",
   "NSResponder",
+  # Bringing an application forward. `libc` comes with it, for the `pid_t` that
+  # `runningApplicationWithProcessIdentifier` takes.
+  "NSRunningApplication",
+  "libc",
   "NSScreen",
   "NSStatusBar",
   "NSStatusBarButton",

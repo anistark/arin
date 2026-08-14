@@ -57,11 +57,15 @@ fn main() -> Result<()> {
             color,
             palette,
             grounding_consent,
+            allow_activation,
+            read_browser_tabs,
             no_adaptive_color,
             check_updates,
         } => {
             config.resolver = resolver;
             config.adaptive_color = !no_adaptive_color;
+            config.allow_activation = allow_activation;
+            config.read_browser_tabs = read_browser_tabs;
             config.palette = configured_palette(color.as_deref(), palette.as_deref())?;
             if let Some(consent) = grounding_consent {
                 config.grounding =

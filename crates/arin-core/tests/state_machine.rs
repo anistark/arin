@@ -1717,3 +1717,193 @@ async fn one_session_filling_up_does_not_refuse_another() {
         .await
         .expect("another session's allowance is its own");
 }
+
+// activation
+
+/// Records what it was asked to bring forward, and answers however the test wants.
+struct FakeFocus {
+    asked: Mutex<Vec<String>>,
+    answer: Mutex<std::result::Result<Activated, String>>,
+}
+
+impl FakeFocus {
+    fn new() -> Self {
+        Self {
+            asked: Mutex::new(Vec::new()),
+            answer: Mutex::new(Ok(Activated {
+                app: "Slack".into(),
+                bundle_id: Some("com.tinyspeck.slackmacgap".into()),
+                profile: None,
+            })),
+        }
+    }
+
+    fn failing(reason: &str) -> Self {
+        let focus = Self::new();
+        *focus.answer.lock().unwrap() = Err(reason.to_owned());
+        focus
+    }
+}
+
+impl arin_core::Focus for FakeFocus {
+    fn activate(&self, app: &str) -> Result<Activated> {
+        self.asked.lock().unwrap().push(app.to_owned());
+        match &*self.answer.lock().unwrap() {
+            Ok(activated) => Ok(activated.clone()),
+            Err(reason) => Err(Error::Capture(reason.clone())),
+        }
+    }
+}
+
+/// A daemon that can activate, and is allowed to.
+fn daemon_that_activates(focus: Arc<FakeFocus>) -> Arc<Daemon> {
+    let mut config = config();
+    config.allow_activation = true;
+    Arc::new(
+        Daemon::new(
+            config,
+            Arc::new(FakeRenderer::default()),
+            Arc::new(FakeCapture),
+        )
+        .with_focus(focus),
+    )
+}
+
+/// The default. Nobody gets to rearrange the user's screen because they connected.
+#[tokio::test(start_paused = true)]
+async fn activation_is_off_until_it_is_switched_on() {
+    let focus = Arc::new(FakeFocus::new());
+    let daemon = Arc::new(
+        Daemon::new(
+            config(),
+            Arc::new(FakeRenderer::default()),
+            Arc::new(FakeCapture),
+        )
+        .with_focus(focus.clone()),
+    );
+    let mut conn = started(daemon).await;
+
+    let error = conn
+        .handle(wrap(ClientMessage::Focus(Focus {
+            app: "Slack".into(),
+        })))
+        .await
+        .expect_err("a daemon nobody switched this on for refuses");
+
+    assert_eq!(error.code(), ErrorCode::NotPermitted);
+    assert!(
+        error.to_string().contains("--allow-activation"),
+        "a refusal has to say how to stop being refused, got {error}"
+    );
+    assert!(
+        focus.asked.lock().unwrap().is_empty(),
+        "the switch is checked before the backend is reached, not after"
+    );
+}
+
+/// Switched on with nothing to do it with is a different problem from switched off, and
+/// leads somewhere different: one is a flag, the other is a build.
+#[tokio::test(start_paused = true)]
+async fn a_build_with_no_focus_backend_says_so() {
+    let mut config = config();
+    config.allow_activation = true;
+    let daemon = Arc::new(Daemon::new(
+        config,
+        Arc::new(FakeRenderer::default()),
+        Arc::new(FakeCapture),
+    ));
+    let mut conn = started(daemon).await;
+
+    let error = conn
+        .handle(wrap(ClientMessage::Focus(Focus {
+            app: "Slack".into(),
+        })))
+        .await
+        .expect_err("nothing is wired up");
+
+    assert_eq!(error.code(), ErrorCode::NotPermitted);
+    assert!(error.to_string().contains("no way"), "got {error}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn activating_reports_what_actually_came_forward() {
+    let focus = Arc::new(FakeFocus::new());
+    let mut conn = started(daemon_that_activates(focus.clone())).await;
+
+    // Loosely named on the way in, which is the case the ack exists for.
+    let reply = conn
+        .handle(wrap(ClientMessage::Focus(Focus {
+            app: "slack".into(),
+        })))
+        .await
+        .expect("activation is switched on and wired up");
+
+    let DaemonMessage::Ack(ack) = reply else {
+        panic!("wrong reply: {reply:?}");
+    };
+    let activated = ack.activated.expect("a focus ack says what it moved");
+    assert_eq!(activated.app, "Slack", "the daemon reports the real name");
+    assert_eq!(
+        ack.annotation_id, None,
+        "nothing was drawn, so there is nothing to clear later"
+    );
+    assert_eq!(focus.asked.lock().unwrap().as_slice(), ["slack"]);
+}
+
+/// The likeliest failure is a name nobody has open, and the client needs its own word
+/// back to see what was read.
+#[tokio::test(start_paused = true)]
+async fn a_backend_that_cannot_find_the_app_says_what_was_asked_for() {
+    let focus = Arc::new(FakeFocus::failing("no application of that name is open"));
+    let mut conn = started(daemon_that_activates(focus)).await;
+
+    let error = conn
+        .handle(wrap(ClientMessage::Focus(Focus { app: "Slak".into() })))
+        .await
+        .expect_err("the backend refused");
+
+    assert_eq!(
+        error.code(),
+        ErrorCode::ResolveFailed,
+        "could not find it is not the same as would not do it"
+    );
+    let said = error.to_string();
+    assert!(said.contains("Slak"), "got {said}");
+    assert!(
+        said.contains("no application of that name is open"),
+        "got {said}"
+    );
+}
+
+/// Not for permission, which activation does not have. A client that never said who it
+/// was should not be moving what the user is looking at.
+#[tokio::test(start_paused = true)]
+async fn activation_needs_a_session_like_everything_else() {
+    let focus = Arc::new(FakeFocus::new());
+    let mut conn = Connection::new(daemon_that_activates(focus.clone()));
+
+    let error = conn
+        .handle(wrap(ClientMessage::Focus(Focus {
+            app: "Slack".into(),
+        })))
+        .await
+        .expect_err("no session was started");
+
+    assert_eq!(error.code(), ErrorCode::BadSchema);
+    assert!(focus.asked.lock().unwrap().is_empty());
+}
+
+/// An empty name never reaches the backend, because there is nothing there to match and
+/// a backend asked to find "" would be free to pick anything.
+#[tokio::test(start_paused = true)]
+async fn a_blank_application_name_is_refused_before_anything_moves() {
+    let focus = Arc::new(FakeFocus::new());
+    let mut conn = started(daemon_that_activates(focus.clone())).await;
+
+    assert!(
+        conn.handle(wrap(ClientMessage::Focus(Focus { app: "   ".into() })))
+            .await
+            .is_err()
+    );
+    assert!(focus.asked.lock().unwrap().is_empty());
+}

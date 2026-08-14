@@ -59,6 +59,34 @@ pub struct Config {
     ///
     /// See [`crate::consent`] for the finding this addresses and for what it does not cover.
     pub grounding: crate::consent::Consent,
+    /// Whether a client may bring an application's windows to the front.
+    ///
+    /// Off by default, and *not* for [`Self::grounding`]'s reason. Activation is no
+    /// privilege escalation: any process running as the user can call
+    /// `NSRunningApplication.activate` with no grant, which is the same test
+    /// `plan/SECURITY.md` applies when it leaves drawing open.
+    ///
+    /// It is off because what activation costs is surprise, not privilege. It changes what
+    /// the user is looking at, follows them across desktops, and sends the keystrokes they
+    /// are mid-sentence in to whatever came forward. Arin's claim is that it can be left
+    /// running because it only draws, and a client that can rearrange what is in front of
+    /// someone is outside that claim however few permissions it needed.
+    ///
+    /// So it is opt-in once by whoever runs the daemon, never per request: a prompt would
+    /// steal focus to ask permission to steal focus.
+    pub allow_activation: bool,
+    /// Whether the daemon may read a browser's open tabs from its session files on disk.
+    ///
+    /// Off by default and deliberately not folded into [`Self::allow_activation`]: raising
+    /// an application is something any process can do, reading titles and URLs of every tab
+    /// in every profile is not, and wanting the first is not asking for the second.
+    ///
+    /// It buys the only sight of a *background* tab. It costs the most sensitive read Arin
+    /// performs — not what is on screen, but what is open anywhere, including profiles the
+    /// user may not think of as theirs. Bounded by
+    /// [`crate::browser::SESSION_CONSIDERED_LIVE`] so it cannot become a history of the
+    /// machine, and nothing read reaches a client.
+    pub read_browser_tabs: bool,
     /// How many annotations one session may hold at once.
     ///
     /// A bound on how much of the screen a client can paper over. Per session rather than
@@ -94,6 +122,11 @@ impl Default for Config {
             // Ask, and with nobody to ask the answer is no. A gate that opens when nobody
             // is watching is not a gate.
             grounding: crate::consent::Consent::Ask,
+            // Arin draws. Rearranging what the user is looking at is a different promise,
+            // and one nobody gets by default.
+            allow_activation: false,
+            // And reading what they have open is a third one, further out than either.
+            read_browser_tabs: false,
             max_annotations_per_session: 256,
         }
     }

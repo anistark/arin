@@ -75,3 +75,17 @@ jobs:
             exit 1
           fi
           echo "clean: no input synthesis APIs referenced"
+      # Arin may raise an application, which needs no permission at all, and may do
+      # nothing else to a window. Everything else about a window goes through
+      # AXUIElement and the Accessibility grant Arin promises never to hold, and that
+      # promise is load bearing in plan/SECURITY.md.
+      - name: Scan for Accessibility APIs
+        run: |
+          hits=$(grep -rnE 'AXUIElement|AXIsProcessTrusted|kAXPosition|kAXSize|CGSMoveWindow|SLSMoveWindow' \
+            --include='*.rs' crates/ | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Accessibility API referenced. Arin activates and never arranges"
+            echo "$hits"
+            exit 1
+          fi
+          echo "clean: no Accessibility APIs referenced"

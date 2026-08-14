@@ -39,6 +39,10 @@ pub enum ClientMessage {
     Draw(Draw),
     /// Remove annotations owned by this session.
     Clear(Clear),
+    /// Bring an application's windows to the front.
+    Focus(Focus),
+    /// Wait until an application's window is showing.
+    AwaitWindow(AwaitWindow),
     /// Close the session. Annotations fade shortly after.
     SessionEnd,
 }
@@ -52,8 +56,77 @@ impl Validate for ClientMessage {
             Self::Textbox(m) => m.validate(),
             Self::Draw(m) => m.validate(),
             Self::Clear(m) => m.validate(),
+            Self::Focus(m) => m.validate(),
+            Self::AwaitWindow(m) => m.validate(),
             Self::SessionEnd => Ok(()),
         }
+    }
+}
+
+/// Bring an application's windows to the front.
+///
+/// The one message that changes what is on the user's screen rather than what is drawn over
+/// it, and the only one a daemon may refuse for being switched off rather than malformed.
+///
+/// Arin can only mark the visible desktop, since every desktop on a display shares one set
+/// of coordinates, so a target the user has swiped away from has nowhere to be marked. This
+/// is the ask to switch, carried out.
+///
+/// It names an application rather than a window: a window has no name a client could know,
+/// and choosing between an application's windows needs Accessibility.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Focus {
+    /// The application to bring forward, by visible name or bundle identifier.
+    ///
+    /// `"Slack"` and `"com.tinyspeck.slackmacgap"` both work. Matched against the
+    /// applications that own windows the capture backend can see, so this never reaches an
+    /// application the user does not have open, and never reads a window title to decide.
+    pub app: String,
+}
+
+impl Validate for Focus {
+    fn validate(&self) -> Result<(), ValidationError> {
+        if self.app.trim().is_empty() {
+            return Err(ValidationError::Empty { field: "app" });
+        }
+        Ok(())
+    }
+}
+
+/// Wait until an application's window is showing, or give up.
+///
+/// The other half of guiding somebody somewhere Arin cannot take them. A mark can say
+/// "switch desktops", and without this nothing knows whether they did, so an agent draws an
+/// instruction and carries on as though it were followed.
+///
+/// A request rather than a pushed event because MCP has no way for a server to interrupt a
+/// model: a client driven by one could not act on an event until its next call anyway.
+///
+/// It never moves anything. The acting half of the handoff is the user's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AwaitWindow {
+    /// The application to wait for, matched exactly as [`Focus::app`] is.
+    pub app: String,
+    /// How long to wait before giving up, in milliseconds.
+    ///
+    /// Absent leaves it to the daemon, which is what a client that has no opinion should
+    /// send: the useful bound is "about as long as a person takes to find a window", and the
+    /// daemon is better placed to know that than a client is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+impl Validate for AwaitWindow {
+    fn validate(&self) -> Result<(), ValidationError> {
+        if self.app.trim().is_empty() {
+            return Err(ValidationError::Empty { field: "app" });
+        }
+        // A wait of no time is a question, not a wait, and answering it as though somebody
+        // had waited would report "they never arrived" the instant they were asked to move.
+        if self.timeout_ms == Some(0) {
+            return Err(ValidationError::ZeroTtl);
+        }
+        Ok(())
     }
 }
 

@@ -48,9 +48,27 @@ pub mod tools {
     pub const ANNOTATE: &str = "annotate";
     /// Remove annotations. Maps to `clear`.
     pub const CLEAR: &str = "clear";
+    /// Raise an application's windows. Maps to `focus`.
+    ///
+    /// The one tool here that changes the user's screen rather than what is drawn over it,
+    /// and the only one a daemon refuses by configuration rather than by fault.
+    pub const BRING_TO_FRONT: &str = "bring_to_front";
+    /// Block until the user has a window in front of them. Maps to `await_window`.
+    ///
+    /// The only tool that waits for a person. Everything else here reports on the screen as
+    /// it is; this one exists because a drawn instruction is useless if nothing notices
+    /// whether it was followed.
+    pub const WAIT_UNTIL_SHOWING: &str = "wait_until_showing";
 
     /// Every tool name, for registration and for tests.
-    pub const ALL: &[&str] = &[POINT_AT, HIGHLIGHT, ANNOTATE, CLEAR];
+    pub const ALL: &[&str] = &[
+        POINT_AT,
+        HIGHLIGHT,
+        ANNOTATE,
+        CLEAR,
+        BRING_TO_FRONT,
+        WAIT_UNTIL_SHOWING,
+    ];
 }
 
 /// The name this server reports to the daemon on `session_start`.
@@ -90,9 +108,9 @@ asked you to. Do not annotate work they cannot see, and do not announce that you
 to draw.
 
 Only the desktop in front of them. Arin cannot see or draw on another one, and a mark \
-placed for something the user then swipes away from goes as they leave. If what you are \
-describing is not on the visible desktop, name the app it is in and ask them to switch \
-before you point at it.
+placed for something the user swipes away from goes as they leave. If your target is \
+elsewhere, `bring_to_front` raises the app you name; if that comes back refused, ask them \
+to switch to it themselves.
 
 How to aim. Holding a screenshot of one whole display, measure the target in it, pass `at` \
 as percentages of the image like \"27%,9%\", and name the display the screenshot came \
@@ -237,6 +255,53 @@ pub struct AnnotateArgs {
     pub display: Option<u32>,
 }
 
+/// Arguments to `bring_to_front`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BringToFrontArgs {
+    /// The application to raise, by visible name or bundle identifier.
+    pub app: String,
+}
+
+/// What `bring_to_front` hands back.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Raised {
+    /// The application that actually came forward.
+    ///
+    /// The name is matched loosely, so this can differ from what was asked for. Worth
+    /// reading before telling the user what happened.
+    pub app: String,
+    /// Annotations that went away while this call was in flight.
+    ///
+    /// Activation changes the whole screen, so anything already drawn is on its way out.
+    pub gone: Vec<Gone>,
+}
+
+/// Arguments to `wait_until_showing`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WaitUntilShowingArgs {
+    /// The application to wait for, named as for `bring_to_front`.
+    pub app: String,
+    /// How long to wait before giving up, in seconds. Omit for the daemon's own bound.
+    #[serde(default)]
+    pub timeout_seconds: Option<f64>,
+}
+
+/// What `wait_until_showing` hands back.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Arrived {
+    /// Whether the window turned up before the wait ran out.
+    ///
+    /// `false` means the user did not go where they were asked. That is an outcome rather
+    /// than a fault: they may not have understood, may have decided otherwise, or may have
+    /// walked away. Ask, do not repeat the same instruction louder.
+    pub arrived: bool,
+    /// Annotations that went away while waiting.
+    ///
+    /// Usually everything: arriving means the screen changed completely, which is what
+    /// invalidates a mark. Anything drawn before the wait is gone by the time it returns.
+    pub gone: Vec<Gone>,
+}
+
 /// Arguments to `clear`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ClearArgs {
@@ -360,6 +425,95 @@ impl Arin {
         );
         let textbox = Textbox::new(anchor, args.text).with_ttl_ms(ttl_ms(args.ttl_seconds)?);
         self.draw(ClientMessage::Textbox(textbox)).await
+    }
+
+    /// Bring an application's windows to the front.
+    #[tool(
+        name = "bring_to_front",
+        description = "Bring an application's windows to the front of the user's screen, \
+                       following them to another desktop if that is where it is. For when \
+                       what you want to point at is not on the desktop in front of them: \
+                       Arin can only mark the visible one, so raise the app first and then \
+                       point. Name it as a person would, like \"Slack\", or by bundle \
+                       identifier, or by what a window is showing, like \"Gmail\" for a \
+                       browser tab: prefer whatever the user already has open over sending \
+                       them somewhere new. Only apps with an open window can be raised, and \
+                       a name matching several is refused without saying which, so narrow \
+                       it or ask the user rather than probing for the list. This moves what \
+                       the user is looking at and takes their keyboard with it, so do it \
+                       when they asked to be shown something, not to browse. Many users \
+                       leave it switched off, and it then comes back not_permitted: ask \
+                       them to switch to the app themselves rather than calling again. \
+                       Nothing is moved, resized, or closed. When the result carries a \
+                       `profile`, the target is in a browser window that raising the app \
+                       cannot switch to, so annotate the screen with how to get there \
+                       rather than only saying it. Keep that note to one short instruction, \
+                       under about eight words: it is read at a glance by somebody about to \
+                       act, not studied. Then call wait_until_showing and continue when \
+                       they arrive. Do not guess a direction. Arin cannot tell which \
+                       desktop a window is on, or whether it is minimised, so say to switch \
+                       desktops, never `to your left`."
+    )]
+    async fn bring_to_front(
+        &self,
+        Parameters(args): Parameters<BringToFrontArgs>,
+    ) -> Result<Json<Raised>, ErrorData> {
+        let focus = arin_protocol::Focus { app: args.app };
+
+        match self.round_trip(ClientMessage::Focus(focus)).await? {
+            DaemonMessage::Ack(ack) => Ok(Json(Raised {
+                // Falls back to nothing rather than failing a call that already moved the
+                // user's screen. An older daemon acking without this still did the thing.
+                app: ack.activated.map(|a| a.app).unwrap_or_default(),
+                gone: self.gone().await,
+            })),
+            other => Err(refused(other)),
+        }
+    }
+
+    /// Block until an application's window is in front of the user.
+    #[tool(
+        name = "wait_until_showing",
+        description = "Wait until the user has an app's window in front of them, then \
+                       return. Use it after telling someone to go somewhere you cannot take \
+                       them, such as another desktop or another browser profile window: \
+                       draw the instruction, call this, and carry on when it returns \
+                       arrived. Without it you are guessing that they moved, and anything \
+                       you draw next lands on a screen they never left. Blocks for up to \
+                       30 seconds by default. `arrived: false` means they did not go: ask \
+                       what happened rather than repeating yourself. Everything you drew is \
+                       gone by the time this returns, because arriving changes the whole \
+                       screen, so draw again afterwards rather than assuming a mark \
+                       survived."
+    )]
+    async fn wait_until_showing(
+        &self,
+        Parameters(args): Parameters<WaitUntilShowingArgs>,
+    ) -> Result<Json<Arrived>, ErrorData> {
+        let timeout_ms = match args.timeout_seconds {
+            Some(seconds) if seconds.is_finite() && seconds > 0.0 => {
+                Some((seconds * 1000.0).ceil() as u64)
+            }
+            Some(_) => {
+                return Err(ErrorData::invalid_params(
+                    "timeout_seconds must be a positive number",
+                    None,
+                ));
+            }
+            None => None,
+        };
+        let wait = arin_protocol::AwaitWindow {
+            app: args.app,
+            timeout_ms,
+        };
+
+        match self.round_trip(ClientMessage::AwaitWindow(wait)).await? {
+            DaemonMessage::Ack(ack) => Ok(Json(Arrived {
+                arrived: ack.appeared.unwrap_or_default(),
+                gone: self.gone().await,
+            })),
+            other => Err(refused(other)),
+        }
     }
 
     /// Remove annotations this session drew.
@@ -723,29 +877,118 @@ mod tests {
         );
     }
 
+    /// Raising the app is the better way out, but it is off for most people, so an agent
+    /// that only knows about the tool would give up on the refusal instead of falling back
+    /// to the thing that always works.
+    #[test]
+    fn the_instructions_offer_both_ways_off_the_visible_desktop() {
+        assert!(
+            INSTRUCTIONS.contains("bring_to_front"),
+            "an agent that is not told the tool exists will never reach for it"
+        );
+        assert!(
+            INSTRUCTIONS.contains("refused"),
+            "the tool is off by default, so a refusal is the common case rather than an \
+             error worth stopping on"
+        );
+    }
+
+    /// Arin cannot tell which desktop a window is on, whether it is minimised, or whether
+    /// it is merely buried: every desktop on a display shares one set of coordinates and no
+    /// public API distinguishes the three. A model asked to guide someone will happily
+    /// invent "to your left", and a confidently wrong direction is worse than none.
+    #[test]
+    fn the_tool_forbids_inventing_a_direction() {
+        let described = tool_description(tools::BRING_TO_FRONT);
+        assert!(
+            described.contains("Do not guess a direction"),
+            "nothing else stops a model pointing the user the wrong way: {described}"
+        );
+        assert!(
+            described.contains("annotate"),
+            "the way out of an unreachable window is drawing it on the screen, which is \
+             the one thing this server is for: {described}"
+        );
+    }
+
+    /// An instruction on screen is read by somebody mid-action, not studied. Left to
+    /// itself a model writes a paragraph, which is slower to act on than the thing it is
+    /// explaining and covers what it is explaining too.
+    #[test]
+    fn guidance_is_told_to_be_one_short_instruction() {
+        let described = tool_description(tools::BRING_TO_FRONT);
+        assert!(
+            described.contains("eight words"),
+            "a length nobody can argue with beats `keep it brief`: {described}"
+        );
+    }
+
+    /// Drawing an instruction and carrying on assumes it was followed, which is how the
+    /// next mark lands on a screen the user never left.
+    #[test]
+    fn an_instruction_is_paired_with_waiting_for_it_to_be_followed() {
+        assert!(
+            tool_description(tools::BRING_TO_FRONT).contains("wait_until_showing"),
+            "an agent that does not know it can wait will guess instead"
+        );
+        let waiting = tool_description(tools::WAIT_UNTIL_SHOWING);
+        assert!(
+            waiting.contains("arrived: false"),
+            "not arriving is an outcome to handle, not an error to retry: {waiting}"
+        );
+        assert!(
+            waiting.contains("gone"),
+            "arriving changes the whole screen, so every earlier mark is already gone: \
+             {waiting}"
+        );
+    }
+
+    /// The one tool that changes the user's screen rather than what is over it. An agent
+    /// that reads its description as "raises a window" and nothing more will use it to
+    /// browse, so the description has to carry what it costs.
+    #[test]
+    fn bringing_an_app_forward_says_what_it_takes_with_it() {
+        let described = tool_description(tools::BRING_TO_FRONT);
+        assert!(
+            described.contains("keyboard"),
+            "raising an app redirects whatever the user is typing, got {described}"
+        );
+        assert!(
+            described.contains("not_permitted"),
+            "the refusal is the common case and an agent should not retry into it, got \
+             {described}"
+        );
+        assert!(
+            described.contains("moved, resized, or closed"),
+            "the boundary is the product, and it belongs where a model will read it, got \
+             {described}"
+        );
+    }
+
     /// `point_at` takes a named position and `highlight` does not, deliberately, because a
     /// name is a spot and a region has to be measured. A description that implied otherwise
     /// would produce calls the daemon refuses.
     #[test]
     fn only_the_tool_that_has_named_positions_offers_them() {
-        let described = |name: &str| -> String {
-            Arin::tool_router()
-                .list_all()
-                .into_iter()
-                .find(|tool| tool.name == name)
-                .and_then(|tool| tool.description.as_ref().map(|d| d.to_string()))
-                .unwrap_or_else(|| panic!("{name} is registered and described"))
-        };
-
         assert!(
-            described(tools::POINT_AT).contains("27%,9%"),
+            tool_description(tools::POINT_AT).contains("27%,9%"),
             "point_at has to teach the percentage form, which is the only exact way to aim \
              without a resolver"
         );
         assert!(
-            described(tools::HIGHLIGHT).contains("no `at` here"),
+            tool_description(tools::HIGHLIGHT).contains("no `at` here"),
             "highlight has no named position, and saying nothing invites the call anyway"
         );
+    }
+
+    /// What a model actually reads before deciding to call something.
+    fn tool_description(name: &str) -> String {
+        Arin::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .and_then(|tool| tool.description.as_ref().map(|d| d.to_string()))
+            .unwrap_or_else(|| panic!("{name} is registered and described"))
     }
 
     /// An agent that omits the display should still draw somewhere.

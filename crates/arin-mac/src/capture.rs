@@ -187,6 +187,95 @@ impl arin_core::Capture for MacCapture {
     }
 }
 
+/// An application that owns at least one window, as ScreenCaptureKit sees it.
+///
+/// What [`crate::focus`] matches a client's loose name against. Deliberately sourced from
+/// the window list rather than from `NSWorkspace`: an application with no window is not
+/// something the user could have been looking at, so it is not something worth bringing
+/// forward, and going through the window list means activation can never reach a background
+/// process that has no interface at all.
+#[derive(Debug, Clone)]
+pub(crate) struct WindowedApp {
+    /// The name the system shows for it, such as `"Slack"`.
+    pub name: String,
+    /// Its bundle identifier, when it reports a non-empty one.
+    pub bundle_id: Option<String>,
+    /// The process that owns the windows.
+    pub pid: i32,
+    /// The title of each window this application holds.
+    ///
+    /// Cheap: the window filter was already fetching these and dropping them. A browser
+    /// window's title is its *active* tab, which is how `"Gmail"` finds Chrome and also the
+    /// ceiling on what this can see. Never leaves the daemon.
+    pub titles: Vec<String>,
+    /// Whether any of its windows is on the desktop the user is looking at.
+    ///
+    /// `false` covers another desktop, minimised, and fully buried, which nothing here can
+    /// tell apart. All three are "not in front of them", which is all a wait needs.
+    pub showing: bool,
+}
+
+/// Every application holding a window, on the visible desktop or not.
+///
+/// Includes off-screen windows on purpose. The case this exists for is a target on a
+/// desktop the user has swiped away from, and an application there owns no visible window
+/// by definition.
+///
+/// Needs the Screen Recording grant, because it is the window list that answers it. That is
+/// a real coupling and it is the wanted one: it keeps activation to applications Arin can
+/// already see, so a capability that needs no permission cannot be used to reach past the
+/// one Arin holds.
+pub(crate) fn windowed_applications() -> Result<Vec<WindowedApp>> {
+    let content = shareable_content_including_offscreen()?;
+    let ours = std::process::id() as i32;
+
+    let mut apps: Vec<WindowedApp> = Vec::new();
+    for window in unsafe { content.0.windows() }.iter() {
+        if !looks_like_a_users_window(&window) {
+            continue;
+        }
+        let Some(app) = (unsafe { window.owningApplication() }) else {
+            continue;
+        };
+        let pid = unsafe { app.processID() };
+        // Arin has no window anybody wants brought forward, and activating ourselves would
+        // take the user's focus away to a menu bar app with nothing to show.
+        if pid == ours {
+            continue;
+        }
+        // Every window of a title, so an application with several contributes all of them.
+        // `looks_like_a_users_window` already established there is one.
+        let title = unsafe { window.title() }.map(|t| t.to_string());
+        let showing = unsafe { window.isOnScreen() };
+
+        // A second window of an application already seen extends it rather than repeating
+        // it. Grouping by process is what keeps activation per application, which is all
+        // `NSRunningApplication` can do anyway.
+        if let Some(seen) = apps.iter_mut().find(|seen| seen.pid == pid) {
+            seen.titles.extend(title);
+            // Any window showing makes the application showing. An application with one
+            // window here and one on the desktop the user left is in front of them.
+            seen.showing |= showing;
+            continue;
+        }
+        let bundle_id = unsafe { app.bundleIdentifier() }.to_string();
+        apps.push(WindowedApp {
+            name: unsafe { app.applicationName() }.to_string(),
+            bundle_id: (!bundle_id.trim().is_empty()).then_some(bundle_id),
+            pid,
+            titles: title.into_iter().collect(),
+            showing,
+        });
+    }
+
+    tracing::debug!(
+        count = apps.len(),
+        windows = apps.iter().map(|a| a.titles.len()).sum::<usize>(),
+        "applications holding a window"
+    );
+    Ok(apps)
+}
+
 /// An application and where one of its windows sits, rounded to whole points.
 ///
 /// The key a tab group shares, since every tab in one stacks in the same place.

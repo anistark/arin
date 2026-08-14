@@ -53,6 +53,85 @@ is a format.
 
 ### Added
 
+- **Arin can bring an application to the front, if you let it.** A new `focus` message, an
+  `arin focus <app>` command, and a `bring_to_front` MCP tool. All of it is off unless the
+  daemon was started with `--allow-activation`.
+
+  This exists because of a gap the previous entry only papers over. Arin can mark the
+  desktop in front of you and nothing else, so a target in a window you have swiped away
+  from has nowhere to be marked, and the only answer available was to tell the agent to ask
+  you to switch by hand. Now it can raise the app and then point at what is in it.
+
+  **It is off by default, and the reason is not the usual one.** Activation is not a
+  privilege: anything running as you can already call `NSRunningApplication.activate` or run
+  `open -a Slack`, with no grant of any kind, which is the same test `plan/SECURITY.md`
+  applies to drawing when it leaves drawing open. By that test this would be open too.
+
+  It is off because the test for a security gate is the wrong test here. What activation
+  costs is not privilege but surprise: it changes what you are looking at, follows you
+  across desktops, and sends whatever you are typing to whatever came forward. Arin's claim
+  is that it can be left running because it only ever draws, and a client that can rearrange
+  what is in front of you is outside that claim whether or not it needed a permission. So it
+  is opt-in once, by the person running the daemon, and never asked per request: a prompt
+  here would steal focus in order to ask for permission to steal focus.
+
+  **Activate is the only verb.** Nothing is moved, resized, closed, or arranged, because
+  every one of those needs `AXUIElement` and the Accessibility grant Arin promises never to
+  hold. `arin_core::Focus` is the seam and its documentation says so; a backend that reaches
+  for Accessibility belongs in a different project.
+
+  Applications are matched by name or bundle identifier against the ones holding a window
+  Arin can already see, so activation cannot reach a background process with no interface,
+  and a name matching several is refused rather than guessed at. No window title is read to
+  do it, which keeps intact the decision that a client learns there is somewhere else and
+  nothing about what you have open.
+
+  **The name does not have to be an application.** Nobody has an app called Gmail, so a
+  request is matched against what windows are showing as well as against application names
+  and bundle identifiers: `arin focus gmail` finds the browser window whose tab says Gmail.
+  Naming an application always beats a window that merely mentions it, so `focus slack`
+  reaches Slack rather than a browser tab about it, and only the active tab of each window
+  counts, since a background tab is in no window's title.
+
+  Window titles cost nothing to consult. The window filter was already fetching
+  `SCWindow.title` to decide whether a window was real, and then discarding it. They are
+  matched against inside the daemon and never reported: not the title, not a count, not a
+  list. `a_refusal_never_quotes_a_window_title` keeps it that way, and it is stricter than
+  the equivalent test for application names because a title is a document name or a subject
+  line rather than the name of a program.
+
+- **Arin can find a browser tab you are not looking at, if you let it.** `arin daemon
+  --read-browser-tabs` lets `focus` match against Chrome's open tabs, read from Chrome's own
+  session files on disk. Off by default and deliberately separate from `--allow-activation`:
+  raising an app is something any program on your machine can already do, and reading the
+  titles and addresses of every tab in every profile is not.
+
+  It exists because window titles have a ceiling. A window's title is its *active* tab, so
+  an inbox sitting two tabs deep in another profile window is invisible to everything else
+  Arin has. This is the only layer that can see it, and it needs no permission at all — a
+  file the user already owns, read-only. The alternative, Chrome's Apple Events interface,
+  cannot be narrowed to a read: the Automation grant is "control Google Chrome", which also
+  carries closing tabs, navigating them and running JavaScript in them.
+
+  The answer names the profile window, because raising a browser cannot switch profile:
+  `arin focus mail.google.com` reports `Google Chrome — in the "Your Chrome" profile
+  window`. Nothing else read ever reaches a client, a log, or the network: not a title, not
+  a URL, not how many matched.
+
+  Two limits worth knowing. A session file is Chrome's crash-recovery journal rather than a
+  live view, so it lags, and profiles untouched for over an hour are skipped rather than
+  treated as open — without that bound "what is open" becomes a history of the machine.
+  And matching is literal: on an account whose tab reads `Inbox - … - Vibrant Labs Mail`,
+  `focus gmail` finds nothing while `focus mail` finds it. Knowing that "email" means
+  `mail.google.com` is the calling agent's job, not the index's.
+
+  **A refusal never says what it matched.** The candidate list comes from the window list,
+  which needs the Screen Recording grant, so an error naming the applications it hit would
+  hand a client screen-derived information it could not get for itself, and one that listed
+  them all would turn a single call into an inventory of your desk: ask for `"a"`, read back
+  everything with an `a` in it, including what is on desktops you are not looking at. The
+  ambiguous case says only that there was more than one, and never how many.
+
 - **`arin permissions` and `arin diagnose` report whether a grant can stick at all.** The
   permission state cannot say it. A build the system cannot identify reports exactly what a
   build nobody has granted reports, and only one of them is fixed in System Settings. The

@@ -184,6 +184,34 @@ pub(crate) enum Command {
         #[arg(long, value_name = "ask|always|never", env = "ARIN_GROUNDING_CONSENT")]
         grounding_consent: Option<String>,
 
+        /// Let a client bring an application's windows to the front.
+        ///
+        /// Off unless you ask for it. Arin can only mark the desktop in front of you, so a
+        /// target in a window you have swiped away from has nowhere to be marked.
+        ///
+        /// This is not a permission: anything running as you can already raise an
+        /// application, and Arin uses the same call the Dock does. It is off because it is
+        /// disruptive, changing what you look at and sending what you are typing to
+        /// whatever came forward.
+        ///
+        /// Nothing is moved, resized, or closed. Arin never asks for Accessibility.
+        #[arg(long, env = "ARIN_ALLOW_ACTIVATION")]
+        allow_activation: bool,
+
+        /// Let Arin read your browser's open tabs, so it can find one you are not looking at.
+        ///
+        /// Off unless you ask, and separate from `--allow-activation`: raising an app is
+        /// something any program can do, reading every tab in every Chrome profile is not.
+        ///
+        /// Arin can otherwise only see the tab you have in front in each window, so an
+        /// inbox two tabs deep in another profile is invisible to it.
+        ///
+        /// Reads Chrome's own session files for profiles used in the last hour. Titles and
+        /// addresses only, matched inside the daemon. Nothing read is sent to a client,
+        /// logged, or leaves your machine.
+        #[arg(long, env = "ARIN_READ_BROWSER_TABS")]
+        read_browser_tabs: bool,
+
         /// Check GitHub once a day for a newer Arin, and say so in the menu bar.
         ///
         /// Off unless asked for, because it is the only thing besides a remote resolver
@@ -270,6 +298,36 @@ pub(crate) enum Command {
         label: Option<String>,
         #[command(flatten)]
         target: Target,
+    },
+
+    /// Bring an application's windows to the front.
+    ///
+    /// For reaching something Arin cannot mark where it is: every desktop on a display
+    /// shares one set of coordinates, so a mark aimed at a window you have swiped away from
+    /// lands on the desktop in front of you instead.
+    ///
+    /// Needs `--allow-activation`. Matches loosely, by app name, bundle identifier, or what
+    /// a window is showing. Arin activates and nothing more.
+    Focus {
+        /// The application to bring forward, by name or bundle identifier.
+        #[arg(value_name = "APPLICATION")]
+        app: String,
+    },
+
+    /// Wait until an application's window is showing.
+    ///
+    /// The other half of guiding somebody somewhere Arin cannot take them. Draw an
+    /// instruction, run this, and it returns as soon as they get there. Prints `arrived` or
+    /// `timed out`, and exits non-zero on the second so a script can branch.
+    ///
+    /// Needs a daemon started with `--allow-activation`.
+    AwaitWindow {
+        /// The application to wait for, matched like `arin focus`.
+        #[arg(value_name = "APPLICATION")]
+        app: String,
+        /// How long to wait before giving up, in seconds.
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<f64>,
     },
 
     /// Outline a region.

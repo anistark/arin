@@ -39,6 +39,27 @@ pub use movement::Followed;
 /// the daemon is never blocked by a client that stopped listening.
 const ANNOUNCEMENT_BACKLOG: usize = 256;
 
+/// How long to wait after activating an application before acking.
+///
+/// Activation returns when the window server accepts the request, not when the window is in
+/// front of anybody. In between, a capture shows a half-finished Space slide, which is
+/// exactly what a client that activated in order to look would ground against. Sized for
+/// the slowest case, a Space switch, since the caller cannot know which it asked for and
+/// guessing short produces a confidently wrong mark.
+pub const ACTIVATION_SETTLE: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// How often to look while waiting for a window to turn up.
+///
+/// Each look is a round trip through the window server. A quarter second is below what
+/// anybody notices between swiping and being told they arrived.
+pub const ARRIVAL_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long to wait for a window when the client did not say.
+///
+/// Sized for a person: read an instruction, work out what it means, swipe about looking for
+/// the right desktop.
+pub const ARRIVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Shared daemon state and the platform seams it drives.
 pub struct Daemon {
     config: Config,
@@ -47,6 +68,12 @@ pub struct Daemon {
     resolver: Option<Arc<dyn Resolver>>,
     /// How the user is asked whether to ground. `None` means nobody is there to ask.
     approver: Option<Arc<dyn crate::Approver>>,
+    /// How an application is brought forward. `None` means this build cannot.
+    ///
+    /// Separate from [`Config::allow_activation`], which is whether it may. Both have to be
+    /// there, and a client is told which one is missing, because "this daemon does not do
+    /// that" and "you have not switched it on" lead to different next steps.
+    focus: Option<Arc<dyn crate::traits::Focus>>,
     /// The grounding permission currently in force.
     ///
     /// Held on the daemon rather than on a session, because there is nothing trustworthy to
@@ -94,6 +121,7 @@ impl Daemon {
             capture,
             resolver: None,
             approver: None,
+            focus: None,
             grant: Mutex::new(crate::consent::Grant::new()),
             state: Mutex::new(State::default()),
             drawn: AtomicU64::new(0),
@@ -143,6 +171,17 @@ impl Daemon {
     #[must_use]
     pub fn with_approver(mut self, approver: Arc<dyn crate::Approver>) -> Self {
         self.approver = Some(approver);
+        self
+    }
+
+    /// Attach the way an application is brought forward.
+    ///
+    /// Wiring one up does not switch activation on. [`Config::allow_activation`] does that,
+    /// and it defaults to off, so a platform binary can hand over the capability without
+    /// deciding on the user's behalf that it should be used.
+    #[must_use]
+    pub fn with_focus(mut self, focus: Arc<dyn crate::traits::Focus>) -> Self {
+        self.focus = Some(focus);
         self
     }
 

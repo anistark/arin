@@ -336,6 +336,16 @@ draw-only:
         exit 1
     fi
     echo "clean: no input synthesis APIs referenced"
+    # Raising an application needs no permission. Everything else about a window needs
+    # Accessibility, which Arin promises never to hold.
+    hits=$(grep -rnE 'AXUIElement|AXIsProcessTrusted|kAXPosition|kAXSize|CGSMoveWindow|SLSMoveWindow' \
+      --include='*.rs' crates/ | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+    if [ -n "$hits" ]; then
+        echo "Accessibility API referenced. Arin activates and never arranges:" >&2
+        echo "$hits" >&2
+        exit 1
+    fi
+    echo "clean: no Accessibility APIs referenced"
 
 # Everything CI runs, in the order it runs it. Green here means green there.
 ci: lint core test draw-only

@@ -140,6 +140,47 @@ pub trait Resolver: Send + Sync + 'static {
     -> BoxFuture<'a, Result<Resolution>>;
 }
 
+/// Brings an application's windows to the front.
+///
+/// A seam of its own rather than a method on [`Renderer`]: a platform that can draw is not
+/// thereby one that can activate, and a build with no focus backend should refuse rather
+/// than silently do nothing.
+///
+/// Nothing here posts an event, so this is not the input synthesis `AGENTS.md` bars. It is
+/// still actuation, which is why it is off by default — see
+/// [`crate::Config::allow_activation`], an argument about disruption rather than privilege.
+///
+/// **It must never grow moving, resizing, closing or arranging windows.** Every one needs
+/// the Accessibility grant Arin promises never to hold.
+pub trait Focus: Send + Sync + 'static {
+    /// Bring the named application's windows forward.
+    ///
+    /// `app` is a user-visible name or a bundle identifier, matched loosely, so the return
+    /// says what was actually found. Implementations resolve against applications that own
+    /// windows the capture backend can already see, which keeps this from reaching anything
+    /// the user does not have open.
+    ///
+    /// Synchronous, and returns as soon as the request is accepted. The window arrives
+    /// afterwards, on the window server's own schedule, so a caller that intends to look at
+    /// the screen next has to wait. [`crate::daemon::ACTIVATION_SETTLE`] is how long.
+    fn activate(&self, app: &str) -> Result<arin_protocol::Activated>;
+
+    /// Whether a window of the named application is showing right now.
+    ///
+    /// Showing, not merely existing: an application on a desktop the user has left answers
+    /// `false`, which is the state a wait is waiting to leave. Matched as [`Self::activate`]
+    /// matches, so a client waits for the thing it asked for.
+    ///
+    /// Errors by default, because a backend that cannot tell must not answer `false`: a wait
+    /// built on that is a timeout with extra steps.
+    fn is_showing(&self, app: &str) -> Result<bool> {
+        let _ = app;
+        Err(crate::Error::Focus(
+            "this build cannot tell whether a window is showing".into(),
+        ))
+    }
+}
+
 /// Asks the user whether to do something Arin holds a permission for.
 ///
 /// The fourth platform seam, and the only one whose implementation is a piece of user

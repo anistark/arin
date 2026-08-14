@@ -159,6 +159,39 @@ fn report_consent(config: &Config, has_resolver: bool, can_ask: bool) {
     }
 }
 
+/// Say that this daemon can rearrange what the user is looking at.
+///
+/// Only when it is on, and always as a warning. Activation is not a privilege, so nothing
+/// prompts for it and there is no menu bar line to notice it by. That leaves the startup log
+/// as the one place somebody can find out that a client can take their focus, which makes
+/// this the only account of it there is.
+fn report_activation(config: &Config) {
+    if config.allow_activation {
+        tracing::warn!(
+            "any client may bring an application to the front. This changes what you are \
+             looking at and takes your keyboard with it. Drop --allow-activation to refuse."
+        );
+    }
+    // Louder than activation, because it is the only thing Arin reads that is not on the
+    // screen in front of the person who switched it on.
+    if config.read_browser_tabs {
+        tracing::warn!(
+            "reading your browser's open tabs to find things. Titles and addresses from \
+             every Chrome profile used in the last hour are matched inside the daemon. \
+             Nothing read is reported, logged, or sent anywhere. Drop --read-browser-tabs \
+             to stop."
+        );
+    }
+    // Reading tabs is only ever consumed by activation, so this combination is a setting
+    // that does nothing, and silently doing nothing is how a user concludes it is broken.
+    if config.read_browser_tabs && !config.allow_activation {
+        tracing::warn!(
+            "--read-browser-tabs has no effect without --allow-activation: the tab index \
+             exists to answer `focus`, and nothing else reads it."
+        );
+    }
+}
+
 /// Say what colour marks will come out, when it is not the usual one.
 ///
 /// Only when it has been configured. A line on every start saying marks are amber is noise,
@@ -191,6 +224,10 @@ async fn serve(
 ) -> Result<()> {
     let resolver = wire_resolver(&config)?;
     report_consent(&config, resolver.is_some(), approver.is_some());
+    report_activation(&config);
+    // Read before the config is moved into the daemon, since the focus backend is built
+    // afterwards and needs to know.
+    let reads_tabs = config.read_browser_tabs;
 
     let daemon = Daemon::new(config, renderer, capture);
     let daemon = match resolver {
@@ -201,6 +238,17 @@ async fn serve(
         Some(approver) => daemon.with_approver(approver),
         None => daemon,
     };
+    // Wired up whatever the switch says. The daemon refuses on the config and reports which
+    // of the two is missing, so handing it the capability it will not use is what lets a
+    // client be told "switched off" rather than "this build cannot".
+    //
+    // Reading tabs is the exception and is passed in rather than checked later: a backend
+    // told `false` never opens a session file at all, so the setting is off in the sense of
+    // nothing happening rather than of a result being discarded.
+    #[cfg(target_os = "macos")]
+    let daemon = daemon.with_focus(Arc::new(arin_mac::MacFocus::reading_browser_tabs(
+        reads_tabs,
+    )));
     let daemon = Arc::new(daemon);
 
     // The menu bar is built before the daemon exists, so the actions arrive now rather

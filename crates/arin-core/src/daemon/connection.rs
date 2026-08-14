@@ -149,6 +149,10 @@ impl Connection {
                 }))
             }
 
+            ClientMessage::Focus(focus) => self.focus(&focus.app).await,
+
+            ClientMessage::AwaitWindow(wait) => self.await_window(&wait.app, wait.timeout_ms).await,
+
             ClientMessage::SessionEnd => {
                 let session = self.require_session()?;
                 self.daemon.drop_session(&session);
@@ -255,6 +259,126 @@ impl Connection {
             ack = ack.with_resolution(point, confidence);
         }
         Ok(DaemonMessage::Ack(ack))
+    }
+
+    /// Bring an application's windows to the front.
+    ///
+    /// The one request that changes the user's screen instead of what is drawn over it, and
+    /// so the one with a switch of its own. See [`crate::Config::allow_activation`] for why
+    /// that switch is a setting rather than a prompt.
+    ///
+    /// Requires a session like every other message. Not for permission, which activation
+    /// does not have, but because a client that never introduced itself should not be
+    /// rearranging the desk, and because the log line is worth a name.
+    async fn focus(&mut self, app: &str) -> Result<DaemonMessage> {
+        let session = self.require_session()?;
+
+        if !self.daemon.config.allow_activation {
+            return Err(Error::ActivationRefused(
+                "this daemon will not bring applications forward. Restart it with \
+                 --allow-activation if you want it to"
+                    .into(),
+            ));
+        }
+        let Some(focus) = self.daemon.focus.clone() else {
+            return Err(Error::ActivationRefused(
+                "this build has no way to bring an application forward".into(),
+            ));
+        };
+
+        // Before it happens, and naming the client. Activation is the only thing Arin does
+        // that a user could mistake for their machine acting on its own, so the log has to
+        // be able to answer "what just took my focus" afterwards.
+        tracing::info!(
+            client = %self.daemon.client_name(&session),
+            app,
+            "bringing an application forward"
+        );
+
+        let activated = focus.activate(app).map_err(|e| Error::ActivationFailed {
+            app: app.to_owned(),
+            reason: e.to_string(),
+        })?;
+
+        // The request was accepted, not completed. Everything a caller would do next
+        // involves looking at the screen, and until this is over the screen is a transition.
+        tokio::time::sleep(super::ACTIVATION_SETTLE).await;
+
+        // Nothing is invalidated here on purpose. Activation changes the whole screen, so
+        // every mark on it is about to be wrong, and the scroll watcher is what notices
+        // that on its next tick. Doing it here as well would race that and report the same
+        // invalidation twice.
+        Ok(DaemonMessage::Ack(Ack::activated(activated)))
+    }
+
+    /// Wait until an application's window is showing, or give up.
+    ///
+    /// The waiting half of a handoff: a mark says "switch desktops", the user does it, and
+    /// this is what notices. Without it an agent draws an instruction and then acts as
+    /// though it were followed, which is how a second mark lands on a desktop nobody moved
+    /// to.
+    ///
+    /// Gated on [`crate::Config::allow_activation`] like `focus`, and for the same reason
+    /// rather than a weaker one. Answering it needs the same window list, and a daemon that
+    /// will not raise an application should not be answering questions about which of them
+    /// the user is looking at either.
+    ///
+    /// Polls rather than subscribing. macOS reports that the active desktop changed only
+    /// after it has, and says nothing about which one, so there is no event worth waiting on
+    /// that is better than looking.
+    async fn await_window(&mut self, app: &str, timeout_ms: Option<u64>) -> Result<DaemonMessage> {
+        let session = self.require_session()?;
+
+        if !self.daemon.config.allow_activation {
+            return Err(Error::ActivationRefused(
+                "this daemon was not started with --allow-activation, so it does not answer \
+                 questions about which window you are looking at"
+                    .into(),
+            ));
+        }
+        let Some(focus) = self.daemon.focus.clone() else {
+            return Err(Error::ActivationRefused(
+                "this build cannot tell whether a window is showing".into(),
+            ));
+        };
+
+        let timeout = timeout_ms
+            .map(std::time::Duration::from_millis)
+            .unwrap_or(super::ARRIVAL_TIMEOUT);
+
+        tracing::info!(
+            client = %self.daemon.client_name(&session),
+            app,
+            timeout_ms = timeout.as_millis(),
+            "waiting for a window to show"
+        );
+
+        // Checked before the first sleep, so a client that waits for something already in
+        // front of the user returns at once rather than after a tick.
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match focus.is_showing(app) {
+                Ok(true) => {
+                    tracing::info!(app, "the window turned up");
+                    return Ok(DaemonMessage::Ack(Ack::appeared(true)));
+                }
+                Ok(false) => {}
+                // A backend that cannot answer is a different thing from a window that has
+                // not appeared, and waiting thirty seconds to report the difference as a
+                // timeout would hide it.
+                Err(e) => {
+                    return Err(Error::ActivationFailed {
+                        app: app.to_owned(),
+                        reason: e.to_string(),
+                    });
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                tracing::info!(app, "gave up waiting for a window");
+                return Ok(DaemonMessage::Ack(Ack::appeared(false)));
+            }
+            tokio::time::sleep(super::ARRIVAL_TICK).await;
+        }
     }
 
     /// Capture the display and ask the resolver to ground a query against it.

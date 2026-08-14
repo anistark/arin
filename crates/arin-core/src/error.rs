@@ -69,6 +69,27 @@ pub enum Error {
     #[error("resolver: {0}")]
     Resolver(String),
 
+    /// A focus request arrived and this daemon will not activate anything.
+    ///
+    /// Either the switch is off or no platform backend is wired up. Both are configuration
+    /// rather than refusal by a person, which is why the text says which one and how to
+    /// change it.
+    #[error("activation is not enabled: {0}")]
+    ActivationRefused(String),
+
+    /// Activation was permitted and did not happen.
+    ///
+    /// No application of that name is open, the name matched more than one, or the window
+    /// server declined. All three are things the client named wrongly or can retry, so they
+    /// share a code and are told apart by the message.
+    #[error("could not bring {app:?} forward: {reason}")]
+    ActivationFailed {
+        /// What the client asked to activate.
+        app: String,
+        /// Why it did not happen.
+        reason: String,
+    },
+
     /// The `display_id` does not name a connected display.
     #[error("no display with id {0}")]
     UnknownDisplay(DisplayId),
@@ -97,6 +118,14 @@ pub enum Error {
     #[error("capture: {0}")]
     Capture(String),
 
+    /// A focus backend could not bring an application forward, in its own words.
+    ///
+    /// Bare, unlike its neighbours, because the only thing that ever reads it wraps it in
+    /// [`Self::ActivationFailed`], which already says what was being attempted. A prefix
+    /// here would reach the user as "could not bring "Slack" forward: focus: ...".
+    #[error("{0}")]
+    Focus(String),
+
     /// The peer failed the credential check.
     #[error("peer rejected: {0}")]
     PeerRejected(String),
@@ -114,8 +143,16 @@ impl Error {
             Self::PayloadTooLarge => ErrorCode::PayloadTooLarge,
             Self::VersionUnsupported(_) => ErrorCode::VersionUnsupported,
             Self::NoResolver => ErrorCode::NoResolver,
-            Self::NotPermitted(_) => ErrorCode::NotPermitted,
-            Self::ResolveFailed { .. } | Self::Resolver(_) => ErrorCode::ResolveFailed,
+            // Activation being switched off is the same shape of answer as grounding being
+            // declined: the daemon could, and this one will not.
+            Self::NotPermitted(_) | Self::ActivationRefused(_) => ErrorCode::NotPermitted,
+            // A name that matched no open application is a failure to resolve a name to a
+            // thing, which is what this code means. Reused rather than adding wire surface
+            // for a condition that is already legible from the message and the request the
+            // client just made.
+            Self::ResolveFailed { .. } | Self::Resolver(_) | Self::ActivationFailed { .. } => {
+                ErrorCode::ResolveFailed
+            }
             Self::UnknownDisplay(_) => ErrorCode::UnknownDisplay,
             Self::NotOwner => ErrorCode::NotOwner,
             // Internal faults are not the client's fault, but there is no wire code for
@@ -123,6 +160,9 @@ impl Error {
             Self::Io(_)
             | Self::Renderer(_)
             | Self::Capture(_)
+            // Only ever reached already wrapped, so this is for completeness rather than
+            // for anything on the wire.
+            | Self::Focus(_)
             | Self::PeerRejected(_)
             | Self::TooManyAnnotations(_) => ErrorCode::BadSchema,
         }
@@ -153,5 +193,35 @@ mod tests {
         let wire = Error::NoResolver.to_wire();
         assert_eq!(wire.code, ErrorCode::NoResolver);
         assert!(wire.msg.contains("resolver"));
+    }
+
+    /// Switched off and could-not-find are different things for a client to do something
+    /// about, so they must not arrive under the same code.
+    #[test]
+    fn the_two_activation_failures_are_told_apart() {
+        assert_eq!(
+            Error::ActivationRefused("switched off".into()).code(),
+            ErrorCode::NotPermitted
+        );
+        assert_eq!(
+            Error::ActivationFailed {
+                app: "Slack".into(),
+                reason: "no application of that name is open".into(),
+            }
+            .code(),
+            ErrorCode::ResolveFailed
+        );
+    }
+
+    /// The app the client named is the most useful thing in the message, since the likely
+    /// cause is that they named it wrongly.
+    #[test]
+    fn a_failed_activation_quotes_what_was_asked_for() {
+        let wire = Error::ActivationFailed {
+            app: "Slak".into(),
+            reason: "no application of that name is open".into(),
+        }
+        .to_wire();
+        assert!(wire.msg.contains("Slak"), "got {}", wire.msg);
     }
 }

@@ -37,10 +37,12 @@ mod version;
 
 pub use anchor::Anchor;
 pub use client::{
-    Clear, ClientMessage, Draw, Highlight, HighlightTarget, Point, PointTarget, SessionStart,
-    StrokeStyle, Textbox,
+    AwaitWindow, Clear, ClientMessage, Draw, Focus, Highlight, HighlightTarget, Point, PointTarget,
+    SessionStart, StrokeStyle, Textbox,
 };
-pub use daemon::{Ack, DaemonMessage, ErrorCode, Invalidated, InvalidationReason, ProtocolError};
+pub use daemon::{
+    Ack, Activated, DaemonMessage, ErrorCode, Invalidated, InvalidationReason, ProtocolError,
+};
 pub use envelope::Envelope;
 pub use geom::{DisplayId, DisplayInfo, LogicalPoint, LogicalRect};
 pub use ids::{AnnotationId, SessionId};

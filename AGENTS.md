@@ -16,13 +16,16 @@ Name: Arin, from Annotation Rendering INterface.
 | Not | Why |
 |---|---|
 | An input actuator | No synthetic clicks, keystrokes, scrolls, or typing. Ever. This is the product boundary and the trust story. Anything that calls CGEventPost, SendInput, or uinput does not belong in this repo. |
+| A window manager | Arin may bring an application forward and may do nothing else to a window. No moving, resizing, closing, or arranging. Those need Accessibility, which Arin promises never to hold, and `plan/SECURITY.md` leans on that promise being kept. Anything that calls AXUIElement does not belong in this repo. |
 | A network service | The daemon binds a Unix domain socket only. It never opens a listening network port. |
 | An AI | Arin holds no model, no prompt, no reasoning. Intelligence lives in the client. |
 | A telemetry collector | Zero analytics, zero phone home, zero accounts. |
 
 If a task seems to require breaking one of these, stop and ask. Do not work around them.
 
-CI enforces the first one with a grep for input-synthesis APIs. If that check fires on something you wrote, the feature belongs in a different project.
+CI enforces the first two with a grep for input-synthesis and Accessibility APIs. If that check fires on something you wrote, the feature belongs in a different project.
+
+Activation is the one thing Arin does that is neither drawing nor reading, and it is worth knowing why it is allowed at all. It is not a privilege: any process running as the user can raise an application with no grant of any kind, so Arin holds nothing there that a client lacks. What it costs is surprise rather than privilege, which is why it is off unless the daemon was started with `--allow-activation`, and why the switch is a setting rather than a prompt. See `arin_core::Config::allow_activation`.
 
 ---
 

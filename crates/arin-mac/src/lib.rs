@@ -13,6 +13,11 @@
 //!   posts to the event stream. Screen Recording is the only permission Arin asks for,
 //!   and that stays true only if nothing here reaches for Accessibility. The overlay is
 //!   click through, so there is nothing to actuate anyway.
+//! - **It activates and never arranges.** [`MacFocus`] can bring an application forward,
+//!   which is a public call any process may make and one the window server may refuse.
+//!   Moving, resizing, or closing a window is a different thing entirely: it needs
+//!   `AXUIElement` and the Accessibility grant, so it stays out. See [`focus`] for the
+//!   whole argument.
 //! - **Physical pixels stop here.** The protocol is in logical points, and the conversion
 //!   to backing pixels happens inside this crate and nowhere above it.
 //! - **No bird geometry.** The phoenix is a static brand asset. The daemon renders the
@@ -39,6 +44,7 @@ mod caption;
 mod capture;
 mod display;
 mod flight;
+mod focus;
 mod host;
 mod menubar;
 mod orb;
@@ -48,6 +54,7 @@ mod permission;
 pub use approval::{AlertApprover, WINDOW as GROUNDING_WINDOW, approver};
 pub use capture::MacCapture;
 pub use display::Screen;
+pub use focus::MacFocus;
 pub use host::{MacRenderer, known_screens, on_displays_changed};
 pub use menubar::{MenuBar, on_clear, on_grounding, on_quit, on_status, on_update_available};
 pub use orb::MINIMUM_FEATURED_SIZE;

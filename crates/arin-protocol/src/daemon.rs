@@ -41,6 +41,45 @@ pub struct Ack {
     /// Scale and size of the display involved, so clients can convert screenshot pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<DisplayInfo>,
+    /// What was brought forward. Only for a focus request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activated: Option<Activated>,
+    /// Whether the window turned up. Only for an `await_window` request.
+    ///
+    /// `false` is an answer rather than a failure: the user was asked to go somewhere and
+    /// has not, which is a thing a client should handle rather than an error it should
+    /// report. Waiting longer, asking again, or giving up are all reasonable, and only the
+    /// client knows which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appeared: Option<bool>,
+}
+
+/// The application a focus request brought forward.
+///
+/// Reported back because a client names an application loosely and the daemon resolves it,
+/// so the only way to know what actually came forward is to be told. An agent that asked
+/// for `"slack"` and reads `"Slack"` back can say what it did with some confidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Activated {
+    /// The application's own name for itself, as the system reports it.
+    pub app: String,
+    /// Its bundle identifier, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+    /// Which browser profile window holds the target, when that is how it was found.
+    ///
+    /// Present only when the match came from a browser's open tabs rather than from a
+    /// window, which is the case where raising the application is not enough on its own: a
+    /// browser is one application holding many profile windows, and activation cannot
+    /// choose between them. So this is the difference between "Chrome is in front of you"
+    /// and "it is in the window called Your Chrome", and the second is the one a user can
+    /// act on.
+    ///
+    /// It is the profile's display name, the label in the browser's own profile switcher.
+    /// Nothing else read from the tab index ever reaches a client: not a title, not a URL,
+    /// not how many matched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl Ack {
@@ -73,6 +112,25 @@ impl Ack {
         self.resolved_coords = Some(coords);
         self.confidence = Some(confidence);
         self
+    }
+
+    /// Ack a wait with whether the window turned up.
+    pub fn appeared(appeared: bool) -> Self {
+        Self {
+            appeared: Some(appeared),
+            ..Self::default()
+        }
+    }
+
+    /// Ack a focus request with what came forward.
+    ///
+    /// Carries no annotation id, because nothing was drawn. This is the one ack that
+    /// reports a change to the user's screen rather than to what is over it.
+    pub fn activated(app: Activated) -> Self {
+        Self {
+            activated: Some(app),
+            ..Self::default()
+        }
     }
 }
 

@@ -23,6 +23,7 @@
 #![warn(missing_docs)]
 
 pub mod annotation;
+pub mod browser;
 pub mod client;
 pub mod codec;
 pub mod config;
@@ -43,11 +44,12 @@ pub mod signature;
 pub mod traits;
 
 pub use annotation::{Annotation, AnnotationKind};
+pub use browser::OpenTab;
 pub use client::Client;
 pub use config::Config;
 pub use consent::{Consent, Decision, Grant};
 pub use contrast::{Palette, Rgb};
-pub use daemon::{Connection, Daemon};
+pub use daemon::{ACTIVATION_SETTLE, Connection, Daemon};
 pub use error::{Error, Result};
 pub use fingerprint::Fingerprint;
 pub use noop::{NoopCapture, NoopRenderer};
@@ -58,7 +60,7 @@ pub use scroll::ScrollWatcher;
 pub use server::Server;
 pub use session::Session;
 pub use signature::{Shift, Signature};
-pub use traits::{Approver, Capture, DEFAULT_DETAIL, Frame, Renderer, Resolution, Resolver};
+pub use traits::{Approver, Capture, DEFAULT_DETAIL, Focus, Frame, Renderer, Resolution, Resolver};
 
 /// The product name, in the one place it is spelled.
 ///

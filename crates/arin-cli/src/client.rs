@@ -140,6 +140,23 @@ pub(crate) async fn run_client(config: Config, command: Command) -> Result<()> {
             None => Clear::all(),
         }),
 
+        Command::Focus { app } => ClientMessage::Focus(arin_protocol::Focus { app }),
+
+        Command::AwaitWindow { app, timeout } => {
+            ClientMessage::AwaitWindow(arin_protocol::AwaitWindow {
+                app,
+                // Seconds on the command line, milliseconds on the wire, and a value that
+                // rounds to nothing is refused rather than sent as an instant timeout.
+                timeout_ms: match timeout {
+                    Some(seconds) if seconds.is_finite() && seconds > 0.0 => {
+                        Some((seconds * 1000.0).ceil() as u64)
+                    }
+                    Some(_) => bail!("--timeout must be a positive number of seconds"),
+                    None => None,
+                },
+            })
+        }
+
         #[cfg(target_os = "macos")]
         Command::Displays
         | Command::Capture { .. }
@@ -191,6 +208,27 @@ pub(crate) async fn run_client(config: Config, command: Command) -> Result<()> {
         DaemonMessage::Ack(ack) => {
             if let Some(id) = ack.annotation_id {
                 println!("{id}");
+            }
+            // Non-zero when they never got there, so a script can branch on it without
+            // parsing the word.
+            if let Some(appeared) = ack.appeared {
+                if appeared {
+                    println!("arrived");
+                } else {
+                    bail!("timed out");
+                }
+            }
+            // What came forward, since the daemon matched the name loosely and may not have
+            // landed on the application the wording suggested.
+            if let Some(activated) = ack.activated {
+                match activated.profile {
+                    // Raising a browser does not switch profile, so saying which window to
+                    // look in is the difference between an answer and a shrug.
+                    Some(profile) => {
+                        println!("{} — in the {profile:?} profile window", activated.app)
+                    }
+                    None => println!("{}", activated.app),
+                }
             }
             Ok(())
         }
