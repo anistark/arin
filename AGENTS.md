@@ -275,6 +275,12 @@ Do not assume answers. Ask before building past these.
 - **Never commit unless explicitly asked. Always use the `/commit-msg` skill to commit and stick to its instructions.**
 - **Follow open source branch naming conventions, and open a branch when starting work on a module or feature.** `feat/<topic>`, `fix/<topic>`, `docs/<topic>`, `refactor/<topic>`, `chore/<topic>`, for example `feat/mac-overlay-panel`. Never work directly on `main`.
 - **Keep the workspace [CHANGELOG.md](CHANGELOG.md) updated.** Follow [SemVer](https://semver.org) and [Keep a Changelog](https://keepachangelog.com) conventions: notable changes land under `[Unreleased]` in the same branch as the change. Since nothing is tagged before 1.0, that section keeps accumulating across the whole 0.x line and rolls into a `[1.0.0]` heading at the freeze. 1.0 is the protocol freeze, after which protocol changes are additive only.
+- **A version section opens with what changed for a user, above the first `###` heading.** A handful of bullets, no heading of its own: it is the default thing to read, so labelling it would be labelling the obvious. The `### Added`, `### Changed` and `### Fixed` sections carry on below it exactly as before, and are the full record.
+- **What goes in that opening block**: a new or changed command, flag, MCP tool or menu item, behaviour a user would notice, something that used to be broken for them and now works, or a limit worth knowing before they hit it. Name the command or flag and say what it does, including when it is off by default.
+- **When a version has nothing user-facing, leave the block out.** Go straight from the heading to `### Fixed` or whatever comes first. Do not write a line saying there is nothing to report: an absent block already says it, and a placeholder is one more thing to read past.
+- **Keep the two at the length each is for.** The opening block is one or two sentences per item and does not repeat itself below. The sections under it keep the reasoning, the measurements and the internals, and are the only place build, CI and refactor work is written down at all.
+- **Do not over-explain or oversell anywhere in the file.** State what changed. The detail sections carry reasoning because that is what they are for, not because every entry needs a case made for it.
+- **Do not restructure the `## [version] - date` headings.** `just gh-release` reads release notes out of this file and the docs site builds its changelog page from it, and both parse that exact form.
 
 ## Docs
 

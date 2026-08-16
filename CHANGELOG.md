@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here.
 
+A version section opens with what changed for someone using Arin: the commands, the flags,
+and the behaviour worth knowing about. The sections under it are the full record, including
+the reasoning, the measurements, and the build and refactor work that never reaches a user.
+
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -47,6 +51,23 @@ is a format.
   this is the one line version, in the recipe that is asking the question.
 
 ## [0.5.0] - 2026-08-16
+
+- **Reach a target on a desktop you are not looking at.** `arin focus <app>` and the
+  `bring_to_front` MCP tool raise an application, and `arin await-window <app>` and
+  `wait_until_showing` wait until you have switched to one. Activation is off unless the
+  daemon is started with `--allow-activation`.
+- **Find a tab no window title mentions.** `arin daemon --read-browser-tabs` lets `focus`
+  match Chrome's open tabs. Off by default, and separate from `--allow-activation`.
+- **`arin service enable|disable|status|restart`** manages the launch agent that starts Arin
+  at login, replacing `launch-agent.sh` and the wrong-build bugs that came with it.
+- **Arin no longer opens System Settings every time it starts.** Under a launch agent it did
+  this at every login.
+- **A Screen Recording grant now holds on builds installed from source**, where it used to
+  read as missing however many times you switched it on. It holds until that build is
+  replaced, not yet across an upgrade.
+- `arin permissions` and `arin diagnose` say whether a grant can stick at all, and print the
+  commands that clear it when the signature does not verify.
+- A query that finds nothing says when the target may be on another desktop.
 
 ### Fixed
 
@@ -172,6 +193,39 @@ is a format.
   everything with an `a` in it, including what is on desktops you are not looking at. The
   ambiguous case says only that there was more than one, and never how many.
 
+- **Arin can tell when the user has arrived somewhere it could not take them.** A new
+  `await_window` message, an `arin await-window <app>` command, and a `wait_until_showing`
+  MCP tool. It polls until a window matching the name is in front of the user and returns as
+  soon as one is, matching the same way `focus` does.
+
+  Without it an agent draws "switch desktops" and then carries on as though it had been
+  followed, which puts the next mark on a screen nobody is looking at. It is a request the
+  client makes rather than an event the daemon pushes, because MCP gives a server no way to
+  interrupt a model.
+
+- **`arin service`** manages the launch agent that starts Arin at login. `enable`,
+  `disable`, `status` and `restart`, with `status` the default and the one that exits
+  non-zero when there is no agent, so a setup script can ask.
+
+  It replaces `launch-agent.sh`, which had to be told where `Arin.app` was because a shell
+  script cannot ask. That argument is where the bugs were. The documented Homebrew
+  invocation omitted it, so the script fell back to `/Applications/Arin.app`: on a machine
+  with only the Homebrew install that failed, and on a machine with both it silently
+  started the other build at login, which is the two-builds-one-TCC-row problem arriving by
+  a route that never looks like a mistake. A process can find its own bundle, so the
+  command has no path to get wrong.
+
+  `enable` resolves a Homebrew keg to its `opt` alias rather than to the versioned path
+  underneath. Writing `Cellar/arin/<version>` into the agent would break it at the next
+  `brew upgrade`, when that keg is deleted.
+
+  It refuses to manage an agent nix-darwin is managing, recognising it by the store path
+  inside. Both write the same label, and the old script would quietly win.
+
+  The plist is generated from `packaging/macos/com.anistark.arin.plist`, the file the
+  bundlers already install, so there is still one description of the agent rather than a
+  second one in Rust. Paths are XML escaped on the way in, which the script did not do.
+
 - **`arin permissions` and `arin diagnose` report whether a grant can stick at all.** The
   permission state cannot say it. A build the system cannot identify reports exactly what a
   build nobody has granted reports, and only one of them is fixed in System Settings. The
@@ -210,6 +264,10 @@ is a format.
   why running it beside a live daemon answers for your terminal rather than for Arin, and
   the install page explains how to tell a missing grant from a build that cannot hold one.
 
+- **`launch-agent.sh` is deprecated** and now forwards to `arin service`, printing what to
+  type instead. Kept because released Homebrew caveats name its path. It can go a release
+  after they stop.
+
 - **The MCP server tells agents Arin only reaches the visible desktop.** Every desktop on a
   display shares one set of screen coordinates, so a mark aimed at a desktop the user is not
   looking at landed over unrelated content on the one in front of them and was taken down as
@@ -243,37 +301,6 @@ is a format.
   length ceiling. They go into every session that loads the server, so they are a cost paid
   per request and growth should fail a test rather than wait for a reviewer.
 
-### Added
-
-- **`arin service`** manages the launch agent that starts Arin at login. `enable`,
-  `disable`, `status` and `restart`, with `status` the default and the one that exits
-  non-zero when there is no agent, so a setup script can ask.
-
-  It replaces `launch-agent.sh`, which had to be told where `Arin.app` was because a shell
-  script cannot ask. That argument is where the bugs were. The documented Homebrew
-  invocation omitted it, so the script fell back to `/Applications/Arin.app`: on a machine
-  with only the Homebrew install that failed, and on a machine with both it silently
-  started the other build at login, which is the two-builds-one-TCC-row problem arriving by
-  a route that never looks like a mistake. A process can find its own bundle, so the
-  command has no path to get wrong.
-
-  `enable` resolves a Homebrew keg to its `opt` alias rather than to the versioned path
-  underneath. Writing `Cellar/arin/<version>` into the agent would break it at the next
-  `brew upgrade`, when that keg is deleted.
-
-  It refuses to manage an agent nix-darwin is managing, recognising it by the store path
-  inside. Both write the same label, and the old script would quietly win.
-
-  The plist is generated from `packaging/macos/com.anistark.arin.plist`, the file the
-  bundlers already install, so there is still one description of the agent rather than a
-  second one in Rust. Paths are XML escaped on the way in, which the script did not do.
-
-### Changed
-
-- **`launch-agent.sh` is deprecated** and now forwards to `arin service`, printing what to
-  type instead. Kept because released Homebrew caveats name its path. It can go a release
-  after they stop.
-
 - **`just ci` runs CI's environment and not only its commands.** It ran the right commands
   with the wrong settings, so it could call a tree green that CI then rejected. The workflow
   sets `RUSTFLAGS: -D warnings` at the top level, where locally only the clippy step had it,
@@ -287,6 +314,11 @@ is a format.
   the one `rust-toolchain.toml` governs.
 
 ## [0.4.1] - 2026-08-08
+
+- **An About box in the menu bar**, carrying the running version and links to the X account
+  and the Discord invite.
+- A release can be marked a pre-release, so the update notice does not offer one to anyone on
+  a stable build.
 
 ### Added
 
@@ -309,6 +341,11 @@ is a format.
   it does not do is hold back the Homebrew tap, which fires on the tag either way.
 
 ## [0.4.0] - 2026-08-08
+
+- **Arin installs with Nix**, which makes two ways onto a Mac rather than one:
+  `nix run github:anistark/arin -- -d`. The flake ships an overlay, a dev shell, and a
+  nix-darwin module that puts the daemon's options under version control.
+- A `/license` page on the documentation site, so the terms can be read without leaving it.
 
 ### Added
 
@@ -352,7 +389,28 @@ is a format.
   unusually visible: every update is a new path and a new hash, so macOS asks for Screen
   Recording again. Signing is what fixes that, not Nix.
 
+- **A `/license` page on the documentation site.** The footer linked the words `MIT License`
+  out to the file on GitHub, which sent anyone reading the terms off the site to read them.
+  The terms are not copied: `licenseMarkdown()` reads the repository's `LICENSE` at build
+  time, the same way the changelog page reads this file, so the licence is written down once
+  and the page cannot drift from what ships in the crate and the dmg.
+
+  It is escaped and emitted as HTML rather than handed to markdown, because a licence is
+  arbitrary prose that never agreed to be markdown: Apache's numbered clauses would come out
+  as a renumbered list and BSD's indented paragraphs as code blocks. Flush prose has its hard
+  wraps joined so the text reflows with the window, and anything indented or enumerated keeps
+  the line breaks it was written with.
+
 ## [0.3.0] - 2026-08-07
+
+- **Arin can tell you when a newer version is out.** `arin update` asks once, and
+  `arin daemon --check-updates` checks daily and shows it in the menu bar. Nothing is
+  downloaded or installed either way.
+- `arin permissions` no longer reports your terminal's grant as the daemon's, which it did
+  while the daemon was logging that it could not capture.
+- A second daemon no longer puts launchd into a restart loop.
+- Known: a local build and a Homebrew install compete for one Screen Recording grant.
+  `tccutil reset ScreenCapture com.anistark.arin` clears both.
 
 ### Added
 
@@ -415,7 +473,7 @@ is a format.
   binary. A Developer ID signature is what gives the app one identity across builds, and
   that is the reason signing has a release of its own.
 
-## [0.2.1] - 2026-08-03
+## [0.2.1] - 2026-08-06
 
 Nothing in the application changed. This exists to exercise the release path, which is
 what the fix below is about.
@@ -438,6 +496,29 @@ what the fix below is about.
   the secret first and says what it is and what scopes it needs.
 
 ## [0.2.0] - 2026-08-02
+
+The first release anyone outside can install. macOS only.
+
+- **Arin.app**, a menu bar app with no Dock icon: `brew install anistark/tools/arin`.
+- **One line to point an agent at it**: `claude mcp add arin -- arin mcp`, giving `point_at`,
+  `highlight`, `annotate` and `clear`.
+- **From the command line**, `arin point`, `highlight`, `annotate`, `draw` and `clear` make
+  marks, and `status`, `displays`, `resolvers`, `permissions` and `diagnose` report what Arin
+  can see and do.
+- **What it draws:** an orb that flies to its target, outlined regions, text boxes, freehand
+  paths, and captions with `--label`.
+- **Point at things by name.** `arin point "the Submit button"` needs no coordinates once a
+  resolver is configured. `local` keeps the screenshot on your machine, `claude` sends it to
+  a hosted model. Arin asks before it reads the screen to answer a query.
+- **Aim without coordinates:** `--at top-left` through `--at bottom-right`, or `--at 50%,30%`.
+- Marks follow content that scrolls, expire with `--ttl`, pick a colour that stays visible
+  against what is behind them, and clear from the menu bar or with `Cmd+Shift+K`.
+- Several displays, with marks staying on the display they were drawn on and one orb moving
+  between them.
+- A launch agent, so Arin can start at login. Off unless you turn it on.
+- Known: builds are unsigned, so macOS refuses the dmg on first open. Homebrew builds on your
+  machine and avoids that. Scroll tracking follows about half of real scrolls and drops the
+  rest. Grounding accuracy is unmeasured.
 
 `arin-protocol` and `arin` were published to crates.io at `0.1.0` on 2026-07-30 with no tag
 and no section here. Everything from then is folded into this release rather than
@@ -467,12 +548,22 @@ could not be reused.
   claude mcp add arin -- arin mcp
   ```
 
-- `arin-resolve`: the resolver registry. No adapters yet, those land in 0.3.
+- `arin-resolve`: the resolver registry, and the `claude` and `local` adapters behind it.
+  Each is described further down, along with the grounding code the two share.
 - `arin-linux`, `arin-win`: crate scaffolds carrying their documented scope.
 - CI covering the two invariants the architecture rests on: core and the protocol build
   and test on Linux with no platform crate in the tree, and no input synthesis API is
   referenced anywhere in the source.
 - A `justfile` for the common tasks, including a `ci` recipe that mirrors what CI runs.
+- A documentation site, built from `docs/` and published to GitHub Pages. The five markdown
+  files under `docs/` could be read on GitHub one at a time and nowhere else, reachable from
+  the README as a directory listing. `docs/eleventy.config.js` names them and generates a
+  page each, so `building.md`, `cli.md`, `mcp.md`, `protocol.md` and `resolvers.md` stay the
+  single source and adding a page is an entry in that list rather than prose moved into a
+  template where it would drift. Around them, a landing page and a documentation index built
+  from the same list. `just docs` serves it locally, and `.github/workflows/pages.yml`
+  deploys on a push to main, filtered to `docs/`, `assets/` and itself, so a change to the
+  Rust workspace does not rebuild the site.
 - `arin-mac`: the overlay. One transparent, click through, non activating `NSPanel` per
   display, on all Spaces and above the menu bar, plus display enumeration from `NSScreen`
   and the orb built from three radial gradient layers. Points and highlights sent over
