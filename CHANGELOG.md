@@ -24,6 +24,28 @@ is a format.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The daemon failed to build on Linux.** `serve` read `read_browser_tabs` out of the config
+  before handing the config to the daemon, and the only thing that reads it back is behind
+  `#[cfg(target_os = "macos")]`. On Linux that binding is dead code, and CI sets
+  `RUSTFLAGS: -D warnings`, so it was not a warning there but a failed build. The binding now
+  carries the same cfg as its one reader.
+
+### Changed
+
+- **`just ci` runs the Linux half too, in a container.** It was accurate about being a macOS
+  build and said so on the way out, and the failure above still reached a pull request: a
+  note at the end is not a check. `just ci-linux` is new and runs CI's three Linux jobs, the
+  workspace, the lint job, and core with no platform crate in the tree, under `rust:latest` at
+  the native architecture rather than CI's x86_64. `just ci` calls it when Docker is running,
+  and when Docker is down it names the jobs it skipped instead of printing a plain green.
+
+  `just ci` also now notes at the top when the `cargo` on `PATH` is not the rustup shim, which
+  is the case in which `rust-toolchain.toml` pins nothing and the run is answering "would CI
+  be green" with a compiler CI never resolves. `just toolchain` said this already, at length;
+  this is the one line version, in the recipe that is asking the question.
+
 ## [0.5.0] - 2026-08-16
 
 ### Fixed

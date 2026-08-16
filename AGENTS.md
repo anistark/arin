@@ -99,8 +99,11 @@ just ci                         # all of CI, with CI's environment, before you p
 `just ci` is the one to run before handing work back. It mirrors `.github/workflows/ci.yml`
 job for job and exports what that workflow exports, `RUSTFLAGS: -D warnings` above all, so a
 warning fails locally exactly where it would fail there. A bare `cargo test --workspace` does
-not set it and will pass over warnings CI rejects. What `just ci` cannot reach is the Linux
-half: the workspace on Linux, and core built on Linux with no platform crate in the tree.
+not set it and will pass over warnings CI rejects. The Linux half of CI is `just ci-linux`,
+which runs those jobs in a container; `just ci` calls it when Docker is up and says plainly
+that it skipped them when it is not. Run it before pushing anything that touches a
+`#[cfg(target_os = ...)]` block, because the other side of that cfg is the code no macOS
+build compiles and a binding only the macOS branch reads is dead code on Linux.
 
 `nix develop` gets you a shell with that toolchain and the tools the justfile reaches for.
 It is offered rather than required: Arin is developed here with rustup and the system

@@ -226,7 +226,10 @@ async fn serve(
     report_consent(&config, resolver.is_some(), approver.is_some());
     report_activation(&config);
     // Read before the config is moved into the daemon, since the focus backend is built
-    // afterwards and needs to know.
+    // afterwards and needs to know. Gated with the one place that reads it, because on a
+    // platform with no focus backend this is a binding nothing consumes, and CI builds
+    // the workspace on Linux with `-D warnings`.
+    #[cfg(target_os = "macos")]
     let reads_tabs = config.read_browser_tabs;
 
     let daemon = Daemon::new(config, renderer, capture);

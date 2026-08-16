@@ -26,6 +26,7 @@ just run point 412 88 --display 1 --label Save
 just test
 just lint       # fmt and clippy, at the strictness CI uses
 just ci         # everything CI runs, under the environment CI runs it in
+just ci-linux   # the Linux half of CI, in a container
 just toolchain  # the compiler here, against the one CI would resolve
 ```
 
@@ -36,10 +37,15 @@ level, so a warning fails CI in a test target as readily as in library code. `ju
 its own does not set it, because an unused import should not stop you running the test you
 are halfway through writing.
 
-One gap it cannot close, and it is Linux. CI builds the workspace on macOS and Linux, and
-builds core on Linux alone, where a platform crate in the tree fails outright. `just core`
-still catches a macOS dependency reaching `arin-core`, but not one that happens to compile
-here and nowhere else.
+The half a Mac cannot run is Linux, and it is `just ci-linux`. CI builds the workspace on
+macOS and Linux, lints on Linux, and builds core on Linux alone, where a platform crate in
+the tree fails outright. That recipe runs those three jobs in a container, at the native
+architecture rather than CI's x86_64, and `just ci` calls it when Docker is up. When Docker
+is down `just ci` names the jobs it skipped rather than reporting a plain green.
+
+Run it before pushing anything behind a `#[cfg(target_os = ...)]`. The other side of that
+cfg is code no macOS build ever compiles, and a binding the macOS branch alone reads is dead
+code on Linux, which `-D warnings` turns into a failed build.
 
 Nothing pins a compiler version on either side. `rust-toolchain.toml` names a channel, and
 CI's `dtolnay/rust-toolchain@stable` resolves that same channel on every run, so the two

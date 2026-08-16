@@ -360,11 +360,15 @@ draw-only:
 # Order is cheapest first, so a run that is going to fail fails in seconds rather than after
 # a cold workspace build. CI has no order to match: these are four jobs and they run at once.
 #
-# Two things here cannot reach what CI checks, both of them Linux. The workspace job runs on
-# macOS and Linux, and this machine is one of those. The core job runs on Linux only, where a
-# platform crate in the tree fails to build at all, so `just core` catches a macOS dependency
-# reaching arin-core but not one that happens to compile here and nowhere else. Those close on
-# push. `just nix-check` closes neither: it is another macOS build.
+# What this cannot reach on its own is Linux, and Linux is half of what CI builds. The gap is
+# not theoretical and it is not obscure: every `#[cfg(target_os = "macos")]` block in the tree
+# has an other side that only Linux compiles, and a binding that block is the sole reader of is
+# dead code over there. `-D warnings` turns dead code into a failed build, so the first machine
+# to see it is a runner, in a pull request, after `just ci` said green.
+#
+# `just ci-linux` is that half, in a container, and the last step below runs it rather than
+# leaving a note at the end for somebody to read. When Docker is down this says which jobs went
+# unchecked instead of printing green. `just nix-check` closes none of it: another macOS build.
 
 # Everything CI runs, under the environment CI runs it in.
 ci:
@@ -376,6 +380,20 @@ ci:
 
     echo "==> $(rustc --version)"
     echo "    just toolchain compares this against the stable CI would resolve"
+
+    # A cargo outside the rustup shim reads no `rust-toolchain.toml`, so the pin this repo
+    # carries binds nothing and the compiler below is whatever that install happens to be.
+    # `just toolchain` explains it at length; this is one line so the run that is about to
+    # answer "would CI be green" says up front which compiler it asked.
+    if command -v rustup >/dev/null 2>&1; then
+        cargo_path=$(command -v cargo)
+        shim_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
+        rustup_home=$(rustup show home 2>/dev/null || echo "${RUSTUP_HOME:-$HOME/.rustup}")
+        case "$cargo_path" in
+        "$shim_dir"/* | "$rustup_home"/*) ;;
+        *) echo "    note: that cargo is $cargo_path, not the rustup shim, so rust-toolchain.toml binds nothing here. just toolchain" ;;
+        esac
+    fi
 
     echo "==> no input synthesis"
     just draw-only
@@ -392,8 +410,79 @@ ci:
     cargo test --workspace
 
     echo
-    echo "green. What is left is the half CI runs on Linux: the workspace there, and core"
-    echo "with no platform crate in the tree."
+    if [ "$(uname -s)" = Linux ]; then
+        echo "green, and this machine is the platform the other half of CI runs on, so that"
+        echo "was all of it."
+    elif docker info >/dev/null 2>&1; then
+        echo "green on $(uname -s). The Linux half is next."
+        echo
+        just ci-linux
+    else
+        echo "green on $(uname -s), which is half of what CI builds. The Linux half did not"
+        echo "run: the workspace there, core with no platform crate in the tree, and the lint"
+        echo "job. Start Docker and run just ci-linux, or push and find out in the pull request."
+    fi
+
+# The Linux half of CI, in a container, because the other side of a `#[cfg(target_os = "macos")]`
+# is the one thing a Mac cannot compile and CI compiles it on every push. The three commands are
+# `ci.yml`'s three Linux jobs, in the order `just ci` uses.
+#
+# Native architecture rather than CI's x86_64. `--platform linux/amd64` on an Apple Silicon
+# machine is qemu, and minutes become tens of them. What that gives up is architecture specific,
+# which this repo has none of. What it keeps is the target_os cfg, which is the entire reason to
+# run this at all.
+#
+# The build goes to a named volume rather than ./target, and this is not tidiness. The container
+# is root and its host build lands under the same `target/debug` name this machine uses, so a
+# shared directory would leave root owned artifacts in the repo and make every native build
+# afterwards a cold one. The registry gets a volume for the reverse reason: so the second run
+# does not download the index again. The source is mounted writable because cargo expects to be
+# able to touch Cargo.lock, and it is the one thing here that is not disposable.
+
+# The Linux jobs from CI, in a container. Needs Docker running.
+ci-linux:
+    #!/usr/bin/env sh
+    set -eu
+
+    if [ "$(uname -s)" = Linux ]; then
+        echo "this machine is already Linux, so just ci is the whole of it here." >&2
+        exit 1
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        echo "docker is not running, and this recipe is a container." >&2
+        exit 1
+    fi
+
+    echo "==> linux, in docker"
+    docker run --rm -i \
+        -v "$PWD:/src" \
+        -w /src \
+        -v arin-ci-linux-target:/ci/target \
+        -v arin-ci-linux-registry:/usr/local/cargo/registry \
+        -e CARGO_TARGET_DIR=/ci/target \
+        -e RUSTFLAGS="-D warnings" \
+        -e CARGO_TERM_COLOR=always \
+        rust:latest sh -eus <<'CONTAINER'
+    # rust-toolchain.toml asks for these and rustup would fetch them on first use anyway, but
+    # only partway into a command that had already started printing. Asking first puts the
+    # reason for the wait on screen before the wait.
+    rustup component add clippy rustfmt
+    echo "==> $(rustc --version), $(uname -m) linux"
+
+    echo "==> fmt and clippy"
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets
+
+    echo "==> core and protocol, with no platform crate in the tree"
+    cargo test -p arin-protocol -p arin-core --all-targets
+
+    echo "==> workspace"
+    cargo build --workspace --all-targets
+    cargo test --workspace
+    CONTAINER
+
+    echo
+    echo "green on Linux too. Both halves of CI have now run."
 
 # Neither side names a version. `rust-toolchain.toml` pins a channel, and CI's
 # `dtolnay/rust-toolchain@stable` resolves the same channel, so both are whatever stable was
