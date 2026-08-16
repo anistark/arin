@@ -93,7 +93,14 @@ This is the single largest source of bugs in this class of software. Retina scre
 cargo test --workspace          # everything, headless, no display needed
 cargo clippy --workspace --all-targets
 cargo fmt --all
+just ci                         # all of CI, with CI's environment, before you push
 ```
+
+`just ci` is the one to run before handing work back. It mirrors `.github/workflows/ci.yml`
+job for job and exports what that workflow exports, `RUSTFLAGS: -D warnings` above all, so a
+warning fails locally exactly where it would fail there. A bare `cargo test --workspace` does
+not set it and will pass over warnings CI rejects. What `just ci` cannot reach is the Linux
+half: the workspace on Linux, and core built on Linux with no platform crate in the tree.
 
 `nix develop` gets you a shell with that toolchain and the tools the justfile reaches for.
 It is offered rather than required: Arin is developed here with rustup and the system

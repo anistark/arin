@@ -25,10 +25,27 @@ just dev        # the daemon with no renderer
 just run point 412 88 --display 1 --label Save
 just test
 just lint       # fmt and clippy, at the strictness CI uses
-just ci         # everything CI runs, in the order it runs it
+just ci         # everything CI runs, under the environment CI runs it in
+just toolchain  # the compiler here, against the one CI would resolve
 ```
 
-`just ci` passing locally means CI passes, which is the point of it existing.
+`just ci` passing locally means CI passes, which is the point of it existing. It runs the
+commands in `.github/workflows/ci.yml` job for job, and it exports what that file exports,
+which is the half that is easy to miss: `RUSTFLAGS: -D warnings` is set at the workflow
+level, so a warning fails CI in a test target as readily as in library code. `just test` on
+its own does not set it, because an unused import should not stop you running the test you
+are halfway through writing.
+
+One gap it cannot close, and it is Linux. CI builds the workspace on macOS and Linux, and
+builds core on Linux alone, where a platform crate in the tree fails outright. `just core`
+still catches a macOS dependency reaching `arin-core`, but not one that happens to compile
+here and nowhere else.
+
+Nothing pins a compiler version on either side. `rust-toolchain.toml` names a channel, and
+CI's `dtolnay/rust-toolchain@stable` resolves that same channel on every run, so the two
+drift whenever a laptop goes a while without `rustup update`. `just toolchain` prints both
+and says which. It also notices when the `cargo` on `PATH` came from Homebrew rather than
+rustup, which reads no `rust-toolchain.toml` at all.
 
 A Nix shell with the toolchain and these tools is `nix develop`. It is offered rather than
 required: Arin is developed with rustup and the system Xcode, and what the shell has to

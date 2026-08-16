@@ -347,5 +347,121 @@ draw-only:
     fi
     echo "clean: no Accessibility APIs referenced"
 
-# Everything CI runs, in the order it runs it. Green here means green there.
-ci: lint core test draw-only
+# Green here means green there, which is the whole point of the recipe existing.
+#
+# The commands are the ones in `.github/workflows/ci.yml`, job for job, and the banners are
+# that file's job names, so the two can be read side by side. The environment is the part
+# that is easy to leave out and the part that decides the answer: the workflow sets
+# `RUSTFLAGS: -D warnings` at the top level, so it reaches every job, and a warning out of
+# rustc fails the build there in a test target as readily as in library code. `just test` on
+# its own does not set it, deliberately, because an unused import should not stop you running
+# the test you are halfway through writing. It should stop a push, and that is this recipe.
+#
+# Order is cheapest first, so a run that is going to fail fails in seconds rather than after
+# a cold workspace build. CI has no order to match: these are four jobs and they run at once.
+#
+# Two things here cannot reach what CI checks, both of them Linux. The workspace job runs on
+# macOS and Linux, and this machine is one of those. The core job runs on Linux only, where a
+# platform crate in the tree fails to build at all, so `just core` catches a macOS dependency
+# reaching arin-core but not one that happens to compile here and nowhere else. Those close on
+# push. `just nix-check` closes neither: it is another macOS build.
+
+# Everything CI runs, under the environment CI runs it in.
+ci:
+    #!/usr/bin/env sh
+    set -eu
+
+    export RUSTFLAGS="-D warnings"
+    export CARGO_TERM_COLOR=always
+
+    echo "==> $(rustc --version)"
+    echo "    just toolchain compares this against the stable CI would resolve"
+
+    echo "==> no input synthesis"
+    just draw-only
+
+    echo "==> fmt and clippy"
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets
+
+    echo "==> core and protocol"
+    cargo test -p arin-protocol -p arin-core --all-targets
+
+    echo "==> workspace"
+    cargo build --workspace --all-targets
+    cargo test --workspace
+
+    echo
+    echo "green. What is left is the half CI runs on Linux: the workspace there, and core"
+    echo "with no platform crate in the tree."
+
+# Neither side names a version. `rust-toolchain.toml` pins a channel, and CI's
+# `dtolnay/rust-toolchain@stable` resolves the same channel, so both are whatever stable was
+# on the day they asked. They drift anyway, because CI asks on every run and a laptop asks
+# when somebody remembers to `rustup update`. A clippy lint that is six weeks old is the
+# usual way that drift is discovered, and it is discovered in a pull request.
+#
+# The pin also only binds through the rustup shim. A cargo from Homebrew reads no
+# `rust-toolchain.toml` at all and can sit a release either side of stable with nothing
+# saying so, which is what the check below is looking for.
+
+# Report the compiler this machine has, against the one CI would resolve.
+toolchain:
+    #!/usr/bin/env sh
+    set -eu
+
+    local_version=$(rustc --version | cut -d' ' -f2)
+
+    echo "local"
+    printf '  %-8s %s\n' \
+        rustc "$(rustc --version)" \
+        cargo "$(cargo --version)" \
+        clippy "$(cargo clippy --version)" \
+        rustfmt "$(cargo fmt --version)" \
+        from "$(command -v cargo)"
+
+    # A cargo outside the shim directory and outside the rustup home was found on PATH ahead
+    # of rustup, by Homebrew or by a nix shell. Worth saying whether or not it agrees with the
+    # pin today, because agreeing today is not the same as being held there.
+    if command -v rustup >/dev/null 2>&1; then
+        cargo_path=$(command -v cargo)
+        shim_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
+        rustup_home=$(rustup show home 2>/dev/null || echo "${RUSTUP_HOME:-$HOME/.rustup}")
+        case "$cargo_path" in
+        "$shim_dir"/* | "$rustup_home"/*) ;;
+        *)
+            pinned=$(rustup run stable rustc --version 2>/dev/null | cut -d' ' -f2 || true)
+            echo
+            echo "  That cargo is not the rustup shim, so rust-toolchain.toml binds nothing here."
+            if [ -z "$pinned" ]; then
+                echo "  rustup has no stable toolchain to compare it against."
+            elif [ "$pinned" = "$local_version" ]; then
+                echo "  It agrees with the pin today, at $pinned. Nothing holds it there."
+            else
+                echo "  The pin resolves to $pinned and this is $local_version, so it has drifted already."
+            fi
+            ;;
+        esac
+    fi
+
+    echo
+    echo "CI, dtolnay/rust-toolchain@stable, resolved fresh on every run"
+
+    manifest=$(mktemp)
+    trap 'rm -f "$manifest"' EXIT
+    if ! curl -sSf --max-time 20 -o "$manifest" https://static.rust-lang.org/dist/channel-rust-stable.toml; then
+        echo "  could not reach static.rust-lang.org, so there is nothing to compare against."
+        exit 0
+    fi
+
+    ci_full=$(awk -F'"' '/^\[pkg\.rust\]/{f=1} f&&/^version = /{print $2; exit}' "$manifest")
+    ci_version=${ci_full%% *}
+    printf '  %-8s %s\n' rustc "rustc $ci_full"
+
+    echo
+    if [ "$ci_version" = "$local_version" ]; then
+        echo "Same stable. just ci here runs the compiler CI runs."
+    else
+        echo "Different stable: $local_version here, $ci_version there. Close it with rustup update,"
+        echo "or expect a lint CI has and this machine does not."
+    fi
