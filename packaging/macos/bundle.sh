@@ -62,10 +62,22 @@ echo "==> Arin $version"
 # universal, so the workflow installs both and this refuses to guess: it says which slice
 # it produced, and the workflow checks.
 
+# Asked of the rustc that cargo will call, rather than of rustup. Those are not always the
+# same program: a rust from Homebrew or nix earlier on PATH than ~/.cargo/bin serves every
+# build here while rustup goes on answering for a toolchain nothing is using. Believing
+# rustup then means cross compiling to a target whose std is installed somewhere else, and
+# the failure lands deep in a dependency rather than here:
+#
+#     error[E0463]: can't find crate for `core`
+#     = note: the `x86_64-apple-darwin` target may not be installed
+#
+# A target's libdir existing is the thing that decides whether the build can happen, so ask
+# for it directly and let whichever rustc is in charge answer.
 targets=(aarch64-apple-darwin x86_64-apple-darwin)
 available=()
 for target in "${targets[@]}"; do
-	if rustup target list --installed 2>/dev/null | grep -qx "$target"; then
+	libdir=$(rustc --print target-libdir --target "$target" 2>/dev/null || true)
+	if [ -n "$libdir" ] && [ -d "$libdir" ]; then
 		available+=("$target")
 	fi
 done

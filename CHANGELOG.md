@@ -13,7 +13,7 @@ failure it exists to prevent.
 
 Two things it is worth knowing before reading the versions below.
 
-**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.4 while
+**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.5 while
 the protocol they describe is still at 0.1, and the gap will keep widening. A Rust API change bumps the crate; a wire format
 change bumps `PROTOCOL_VERSION`. The protocol is not frozen, and freezing it may wait for a
 second renderer rather than landing at 1.0, since one implementation cannot prove a format
@@ -24,7 +24,25 @@ is a format.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-16
+
 ### Fixed
+
+- **`just bundle` failed outright on a machine whose `rust` came from Homebrew.** The script
+  asked `rustup` which targets were installed and then handed the build to whichever `cargo`
+  was on `PATH`, which is not the same program when a Homebrew or nix rust sits ahead of
+  `~/.cargo/bin`. rustup answered for a toolchain nothing was using, so the build went
+  cross compiling to a target whose `std` was installed somewhere else and died inside a
+  dependency rather than at the check meant to prevent it:
+
+  ```text
+  error[E0463]: can't find crate for `core`
+  = note: the `x86_64-apple-darwin` target may not be installed
+  ```
+
+  It now asks the rustc that cargo will call whether the target's libdir is there, so the
+  answer comes from whichever toolchain is doing the work. Release builds are unaffected:
+  CI installs both targets through rustup and still produces a universal binary.
 
 - **Arin no longer opens System Settings every time it starts.** A daemon that found the
   Screen Recording permission missing raised the system prompt, noticed macOS had stayed
@@ -233,6 +251,18 @@ is a format.
 - **`launch-agent.sh` is deprecated** and now forwards to `arin service`, printing what to
   type instead. Kept because released Homebrew caveats name its path. It can go a release
   after they stop.
+
+- **`just ci` runs CI's environment and not only its commands.** It ran the right commands
+  with the wrong settings, so it could call a tree green that CI then rejected. The workflow
+  sets `RUSTFLAGS: -D warnings` at the top level, where locally only the clippy step had it,
+  and it builds `--all-targets` before testing, which `cargo test --workspace` does not
+  reach. Both are now matched, the recipe mirrors the workflow job for job, and it says on
+  the way out that the Linux half is the part no macOS machine can run.
+
+  `just toolchain` is new alongside it. Neither side pins a compiler version, since
+  `rust-toolchain.toml` and CI both name the `stable` channel, so it prints what this
+  machine has against what CI would resolve today, and whether the `cargo` on `PATH` is even
+  the one `rust-toolchain.toml` governs.
 
 ## [0.4.1] - 2026-08-08
 
@@ -978,7 +1008,8 @@ macOS only. Linux and Windows are planned and nothing of either is in this relea
 core and the protocol build and test on Linux with no platform crate in the tree, which is
 what keeps that port cheap to pick up rather than evidence it works.
 
-[Unreleased]: https://github.com/anistark/arin/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/anistark/arin/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/anistark/arin/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/anistark/arin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/anistark/arin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/anistark/arin/compare/v0.2.1...v0.3.0
