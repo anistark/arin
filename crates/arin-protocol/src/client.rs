@@ -37,6 +37,8 @@ pub enum ClientMessage {
     Textbox(Textbox),
     /// Draw a freehand path.
     Draw(Draw),
+    /// Draw an arrow from one position to another.
+    Arrow(Arrow),
     /// Remove annotations owned by this session.
     Clear(Clear),
     /// Bring an application's windows to the front.
@@ -55,6 +57,7 @@ impl Validate for ClientMessage {
             Self::Highlight(m) => m.validate(),
             Self::Textbox(m) => m.validate(),
             Self::Draw(m) => m.validate(),
+            Self::Arrow(m) => m.validate(),
             Self::Clear(m) => m.validate(),
             Self::Focus(m) => m.validate(),
             Self::AwaitWindow(m) => m.validate(),
@@ -427,11 +430,33 @@ pub struct Textbox {
     pub display_id: Option<DisplayId>,
     /// The text to render.
     pub text: String,
+    /// What the text is for, which decides how loudly it is drawn.
+    ///
+    /// Omit for [`TextboxStyle::Note`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<TextboxStyle>,
     /// How long the box should live, in milliseconds.
     ///
     /// Omit to draw until cleared, invalidated, or the session ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_ms: Option<u64>,
+}
+
+/// What a text box is for.
+///
+/// Semantic rather than typographic on purpose. A client says what kind of thing it is
+/// writing, and the renderer decides what that looks like, the same split that keeps
+/// colour out of clients' hands. Raw font sizes on the wire would make every client a
+/// typographer and every renderer a chance to drift.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextboxStyle {
+    /// An explanation read alongside something else. Quiet, the default.
+    #[default]
+    Note,
+    /// An instruction read at a glance by somebody about to act. Larger and centred,
+    /// because it competes with everything else on a screen mid-action.
+    Guide,
 }
 
 impl Textbox {
@@ -442,8 +467,16 @@ impl Textbox {
             rect: None,
             display_id: None,
             text: text.into(),
+            style: None,
             ttl_ms: None,
         }
+    }
+
+    /// Say what the text is for.
+    #[must_use]
+    pub fn with_style(mut self, style: TextboxStyle) -> Self {
+        self.style = Some(style);
+        self
     }
 
     /// Set how long the box lives, in milliseconds.
@@ -561,6 +594,141 @@ pub struct StrokeStyle {
     /// reserved for the orb and is excluded from automatic selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+}
+
+/// Draw an arrow from one position to another. The head sits at `to`.
+///
+/// Curved by default. A gentle bow is how a person draws an arrow, and it keeps the
+/// shaft out of whatever sits on the straight line between two points, which is often
+/// exactly the content being talked about. `bow: 0` asks for a straight one.
+///
+/// The daemon turns the curve into an ordinary path annotation, so an arrow scrolls,
+/// expires, and picks its colour exactly as a freehand path does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Arrow {
+    /// The display both ends sit on.
+    pub display_id: DisplayId,
+    /// Where the arrow starts.
+    pub from: ArrowEnd,
+    /// Where the arrow points.
+    pub to: ArrowEnd,
+    /// How far the shaft bows off the straight line, as a signed fraction of its length.
+    ///
+    /// `0` is straight, positive bows to the right of travel, negative to the left, and
+    /// past `1` the shape stops reading as an arrow, so that is where validation stops
+    /// accepting it. Omit for the daemon's natural curve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bow: Option<f64>,
+    /// Stroke appearance. Daemon defaults apply when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<StrokeStyle>,
+    /// How long the arrow should live, in milliseconds.
+    ///
+    /// Omit to draw until cleared, invalidated, or the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+}
+
+/// One end of an arrow.
+///
+/// Either form [`Point`] takes, minus the query: coordinates for a client that measured
+/// the screen, or a named position for one that has not. The forms are different JSON
+/// shapes, a pair against a string, so an end can never be two things at once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    untagged,
+    expecting = "an [x, y] pair, or a position like `top-left` or `50%,30%`"
+)]
+pub enum ArrowEnd {
+    /// Logical coordinates, as `[x, y]`.
+    Coords([f64; 2]),
+    /// A position named relative to the display, such as `top-left` or `50%,30%`.
+    Named(String),
+}
+
+/// An [`ArrowEnd`], checked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ArrowTarget {
+    /// The client did its own grounding.
+    Coords(LogicalPoint),
+    /// A position relative to the display, which only the daemon can turn into a point.
+    Named(Position),
+}
+
+impl ArrowEnd {
+    /// Coordinates in logical points.
+    pub const fn coords(x: f64, y: f64) -> Self {
+        Self::Coords([x, y])
+    }
+
+    /// A position named relative to the display.
+    pub fn named(at: impl Into<String>) -> Self {
+        Self::Named(at.into())
+    }
+
+    /// Which form this end carries.
+    pub fn target(&self) -> Result<ArrowTarget, ValidationError> {
+        match self {
+            Self::Coords([x, y]) => {
+                let p = LogicalPoint::new(*x, *y);
+                if !p.is_finite() {
+                    return Err(ValidationError::NonFiniteCoordinate { field: "from, to" });
+                }
+                Ok(ArrowTarget::Coords(p))
+            }
+            Self::Named(at) => Position::parse(at).map(ArrowTarget::Named),
+        }
+    }
+}
+
+impl Arrow {
+    /// From one end to the other.
+    pub fn new(display_id: DisplayId, from: ArrowEnd, to: ArrowEnd) -> Self {
+        Self {
+            display_id,
+            from,
+            to,
+            bow: None,
+            style: None,
+            ttl_ms: None,
+        }
+    }
+
+    /// Set how far the shaft bows off the straight line.
+    #[must_use]
+    pub fn with_bow(mut self, bow: f64) -> Self {
+        self.bow = Some(bow);
+        self
+    }
+
+    /// Set how long the arrow lives, in milliseconds.
+    #[must_use]
+    pub fn with_ttl_ms(mut self, ttl_ms: Option<u64>) -> Self {
+        self.ttl_ms = ttl_ms;
+        self
+    }
+}
+
+impl Validate for Arrow {
+    fn validate(&self) -> Result<(), ValidationError> {
+        validate_ttl(self.ttl_ms)?;
+        let from = self.from.target()?;
+        let to = self.to.target()?;
+        // Two identical ends can only be caught here when they are literal. Named ends
+        // resolve against a display this crate has never seen, so the daemon repeats the
+        // check after resolving them.
+        if from == to {
+            return Err(ValidationError::ZeroLengthArrow);
+        }
+        if let Some(bow) = self.bow {
+            if !bow.is_finite() || bow.abs() > 1.0 {
+                return Err(ValidationError::BowOutOfRange {
+                    got: bow.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Remove annotations. Only ever affects the calling session's own annotations.

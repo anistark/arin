@@ -60,6 +60,8 @@ objc2-app-kit = { workspace = true, features = [
   "NSStatusItem",
   "NSStringDrawing",
   "NSView",
+  # The blurred material behind a text box.
+  "NSVisualEffectView",
   "NSWindow",
   "NSWorkspace",
 ] }

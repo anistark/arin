@@ -133,8 +133,9 @@ session_start  {client_name}              -> {session_id}
 point          {x, y, display_id, label?} raw coordinates, client did its own grounding
 point          {query, display_id}        natural language target, needs resolver (0.3+)
 highlight      {rect | query, display_id, label?}
-textbox        {rect | anchor, text}      display only, never an input widget
+textbox        {rect | anchor, text, style?}  display only, never an input widget. style: note | guide
 draw           {path: [pts], style?}
+arrow          {from, to, bow?, style?}   each end [x,y] or a named position, head at `to`
 clear          {annotation_id | all}
 session_end
 ```

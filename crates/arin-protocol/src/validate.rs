@@ -71,6 +71,23 @@ pub enum ValidationError {
         got: String,
     },
 
+    /// An arrow's two ends were the same place.
+    ///
+    /// An arrow exists to give a direction, and two coincident ends have none. Drawing
+    /// something plausible instead would hide what is almost always a client bug.
+    #[error("an arrow needs two different ends: from and to are the same place")]
+    ZeroLengthArrow,
+
+    /// An arrow's bow fell outside what still reads as an arrow.
+    ///
+    /// Carries the text rather than the parsed number so that [`ValidationError`] stays
+    /// `Eq`, the same trade [`ValidationError::PositionOutOfRange`] makes.
+    #[error("{got} is not a drawable bow: it must be between -1 and 1, where 0 is straight")]
+    BowOutOfRange {
+        /// The offending value, as text.
+        got: String,
+    },
+
     /// A time to live was zero.
     ///
     /// Its own error rather than a silent clamp, because a zero here is a unit mistake

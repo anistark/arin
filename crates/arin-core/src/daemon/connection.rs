@@ -7,8 +7,9 @@ use crate::error::{Error, Result};
 use crate::policy::{OrbState, Rendering};
 use crate::session::Session;
 use arin_protocol::{
-    Ack, Anchor, AnnotationId, ClientMessage, DaemonMessage, DisplayId, Envelope, Highlight,
-    HighlightTarget, LogicalPoint, LogicalRect, Point, PointTarget, SessionId, Validate,
+    Ack, Anchor, AnnotationId, ArrowEnd, ArrowTarget, ClientMessage, DaemonMessage, DisplayId,
+    Envelope, Highlight, HighlightTarget, LogicalPoint, LogicalRect, Point, PointTarget, SessionId,
+    Validate, ValidationError,
 };
 use std::sync::Arc;
 
@@ -87,7 +88,10 @@ impl Connection {
                 let annotation = Annotation::new(
                     session,
                     anchor,
-                    AnnotationKind::Textbox { text: textbox.text },
+                    AnnotationKind::Textbox {
+                        text: textbox.text,
+                        style: textbox.style.unwrap_or_default(),
+                    },
                 )
                 .with_ttl(self.daemon.ttl_for(textbox.ttl_ms))
                 .with_color(look.color)
@@ -132,6 +136,61 @@ impl Connection {
                     },
                 )
                 .with_ttl(self.daemon.ttl_for(draw.ttl_ms))
+                .with_color(look.color)
+                .with_fingerprint(look.fingerprint);
+                let id = self.daemon.store(annotation)?;
+                Ok(DaemonMessage::Ack(
+                    Ack::annotation(id).with_display(display),
+                ))
+            }
+
+            ClientMessage::Arrow(arrow) => {
+                let session = self.require_session()?;
+                let display = self.daemon.display(arrow.display_id)?;
+                let resolve = |end: &ArrowEnd| -> Result<LogicalPoint> {
+                    Ok(match end.target()? {
+                        ArrowTarget::Coords(at) => at,
+                        // Resolved here because only the daemon knows the display's
+                        // size, exactly as a point's named form is.
+                        ArrowTarget::Named(position) => position.resolve(display.logical_size),
+                    })
+                };
+                let from = resolve(&arrow.from)?;
+                let to = resolve(&arrow.to)?;
+                // Validation catches two literal ends spelled the same. Two different
+                // spellings of one place only meet after resolution, which is here.
+                if from == to {
+                    return Err(ValidationError::ZeroLengthArrow.into());
+                }
+                let bow = arrow.bow.unwrap_or(crate::arrow::NATURAL_BOW);
+                let points = crate::arrow::path(from, to, bow);
+                let bounds = bounding_rect(&points);
+                let stroke_width = arrow
+                    .style
+                    .as_ref()
+                    .and_then(|s| s.width)
+                    .unwrap_or(contrast::STROKE_WIDTH);
+                let asked = arrow.style.as_ref().and_then(|s| s.color.clone());
+                let look = self.daemon.appearance(
+                    asked.as_deref(),
+                    arrow.display_id,
+                    &Footprint::Path {
+                        points: points.clone(),
+                        width: stroke_width,
+                    },
+                    bounds,
+                );
+                // An ordinary path from here on, so an arrow scrolls, expires, and is
+                // cleared exactly as one, and renderers never learn arrows exist.
+                let annotation = Annotation::new(
+                    session,
+                    Anchor::new(bounds, arrow.display_id),
+                    AnnotationKind::Path {
+                        points,
+                        style: arrow.style,
+                    },
+                )
+                .with_ttl(self.daemon.ttl_for(arrow.ttl_ms))
                 .with_color(look.color)
                 .with_fingerprint(look.fingerprint);
                 let id = self.daemon.store(annotation)?;

@@ -4,7 +4,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use std::fmt;
 
 /// The protocol version this build speaks.
-pub const PROTOCOL_VERSION: Version = Version { major: 0, minor: 1 };
+///
+/// 0.2 added `arrow`. A 0.1 peer keeps working: majors match, and an older daemon
+/// answers the one message it does not know with an error rather than closing.
+pub const PROTOCOL_VERSION: Version = Version { major: 0, minor: 2 };
 
 /// A `major.minor` protocol version.
 ///
@@ -77,7 +80,7 @@ mod tests {
     #[test]
     fn round_trips_as_a_string() {
         let json = serde_json::to_string(&PROTOCOL_VERSION).unwrap();
-        assert_eq!(json, r#""0.1""#);
+        assert_eq!(json, r#""0.2""#);
         assert_eq!(
             serde_json::from_str::<Version>(&json).unwrap(),
             PROTOCOL_VERSION

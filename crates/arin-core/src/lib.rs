@@ -23,6 +23,7 @@
 #![warn(missing_docs)]
 
 pub mod annotation;
+pub mod arrow;
 pub mod browser;
 pub mod client;
 pub mod codec;

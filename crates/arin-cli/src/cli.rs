@@ -364,6 +364,10 @@ pub(crate) enum Command {
         /// The text to render.
         #[arg(long)]
         text: String,
+        /// What the text is for: a `note` read beside something, or a `guide`
+        /// instruction drawn larger and centred for someone about to act.
+        #[arg(long, value_enum)]
+        style: Option<TextStyle>,
         #[command(flatten)]
         target: Target,
     },
@@ -373,6 +377,39 @@ pub(crate) enum Command {
         /// Points in logical coordinates, for example `100,200 140,210 180,190`.
         #[arg(required = true, num_args = 2..)]
         points: Vec<String>,
+        /// Stroke width in logical points.
+        #[arg(long)]
+        width: Option<f64>,
+        /// Stroke colour as `#RRGGBB`. Omit to let the daemon choose.
+        #[arg(long)]
+        color: Option<String>,
+        #[command(flatten)]
+        target: Target,
+    },
+
+    /// Draw an arrow from one place to another.
+    ///
+    /// Curved by default, the way a person draws one. `arin arrow 120,600 412,88` runs
+    /// between coordinates, and either end can instead be a named position: `arin arrow
+    /// bottom-left 70%,30%`. The head sits at the second argument. `--straight` rules
+    /// the curve out, `--bow` sets it.
+    Arrow {
+        /// Where the arrow starts: `x,y` in logical points, a name like `bottom-left`,
+        /// or a pair like `70%,30%`.
+        #[arg(value_name = "FROM")]
+        from: String,
+        /// Where the arrow points, in the same forms.
+        #[arg(value_name = "TO")]
+        to: String,
+        /// How far the shaft bows off the straight line, as a fraction of its length.
+        ///
+        /// Between -1 and 1. Zero is straight, positive bows right of travel, negative
+        /// left. Omit for the natural curve.
+        #[arg(long, allow_hyphen_values = true, conflicts_with = "straight")]
+        bow: Option<f64>,
+        /// Draw a ruled arrow instead of a curved one. The same as `--bow 0`.
+        #[arg(long)]
+        straight: bool,
         /// Stroke width in logical points.
         #[arg(long)]
         width: Option<f64>,
@@ -516,6 +553,24 @@ impl Target {
     }
 }
 
+/// What a text box is for, as the flag spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum TextStyle {
+    /// An explanation read beside something else. Quiet, the default.
+    Note,
+    /// An instruction read at a glance, drawn larger and centred.
+    Guide,
+}
+
+impl From<TextStyle> for arin_protocol::TextboxStyle {
+    fn from(style: TextStyle) -> Self {
+        match style {
+            TextStyle::Note => Self::Note,
+            TextStyle::Guide => Self::Guide,
+        }
+    }
+}
+
 /// Parse an `x,y` pair from the command line.
 pub(crate) fn parse_point(raw: &str) -> Result<[f64; 2]> {
     let (x, y) = raw
@@ -632,6 +687,41 @@ mod tests {
         assert!(
             Cli::try_parse_from(["arin", "point", "the Submit button", "--at", "top-left"])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn arrow_parses_the_documented_invocation() {
+        let cli = Cli::parse_from(["arin", "arrow", "bottom-left", "70%,30%", "--bow", "-0.3"]);
+        let Command::Arrow {
+            from,
+            to,
+            bow,
+            straight,
+            ..
+        } = cli.command.expect("a subcommand was given")
+        else {
+            panic!("expected arrow");
+        };
+        assert_eq!((from.as_str(), to.as_str()), ("bottom-left", "70%,30%"));
+        // A negative bow is a direction, not a flag, so the hyphen has to survive clap.
+        assert_eq!(bow, Some(-0.3));
+        assert!(!straight);
+    }
+
+    #[test]
+    fn an_arrow_cannot_be_both_bowed_and_straight() {
+        assert!(
+            Cli::try_parse_from([
+                "arin",
+                "arrow",
+                "0,0",
+                "10,10",
+                "--bow",
+                "0.5",
+                "--straight"
+            ])
+            .is_err()
         );
     }
 

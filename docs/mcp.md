@@ -22,15 +22,18 @@ The daemon has to already be running. `arin mcp` connects to its socket and forw
 
 ## The tools
 
-Four of them, named after what an agent is trying to do rather than after the message
-underneath, so a model reaches for the right one without being told.
+Named after what an agent is trying to do rather than after the message underneath, so a
+model reaches for the right one without being told.
 
 | Tool | What it does |
 |---|---|
 | `point_at` | Puts the orb on a position, with an optional caption |
 | `highlight` | Outlines a region, with an optional caption |
-| `annotate` | Places a block of explanatory text |
+| `annotate` | Places a block of explanatory text, as a quiet note or a louder guide |
+| `draw_arrow` | Draws an arrow between two places, curved unless asked straight |
 | `clear` | Removes one mark, or every mark the agent drew |
+| `bring_to_front` | Raises an application, when the daemon allows activation |
+| `wait_until_showing` | Waits until the user has an application's window in front of them |
 
 Every call reports back the display's size and scale, so an agent working from a
 screenshot can convert pixels to logical points without asking twice.
@@ -52,8 +55,8 @@ say where, and they cost different amounts to set up.
 **The percentage form is the one most agents should reach for.** An agent holding a
 screenshot can measure the target as a fraction of the image and send that, with no idea
 how big the display is and no resolver configured. Both sides need the sign, so `"27,9"` is
-refused rather than read as points. It is on `point_at` only: a name is a spot rather than
-an area, so `highlight` has to be measured.
+refused rather than read as points. It aims `point_at` and either end of `draw_arrow`: a
+name is a spot rather than an area, so `highlight` has to be measured.
 
 Aim at the display the screenshot came from. A capture of one screen on a machine with
 three does not describe the others, and a percentage sent to the wrong one lands somewhere

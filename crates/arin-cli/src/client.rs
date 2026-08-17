@@ -7,8 +7,8 @@ use crate::cli::{Command, parse_point};
 use anyhow::{Context, Result, bail};
 use arin_core::{Client, Config};
 use arin_protocol::{
-    Anchor, Clear, ClientMessage, DaemonMessage, DisplayId, Draw, Highlight, LogicalRect, Point,
-    StrokeStyle, Textbox,
+    Anchor, Arrow, ArrowEnd, Clear, ClientMessage, DaemonMessage, DisplayId, Draw, Highlight,
+    LogicalRect, Point, Position, StrokeStyle, Textbox,
 };
 
 // client
@@ -102,19 +102,22 @@ pub(crate) async fn run_client(config: Config, command: Command) -> Result<()> {
             width,
             height,
             text,
+            style,
             target,
         } => {
             hold = target.hold;
-            ClientMessage::Textbox(
-                Textbox::new(
-                    Anchor::new(
-                        LogicalRect::new(x, y, width, height),
-                        DisplayId(target.display),
-                    ),
-                    text,
-                )
-                .with_ttl_ms(target.ttl_ms()?),
+            let mut textbox = Textbox::new(
+                Anchor::new(
+                    LogicalRect::new(x, y, width, height),
+                    DisplayId(target.display),
+                ),
+                text,
             )
+            .with_ttl_ms(target.ttl_ms()?);
+            if let Some(style) = style {
+                textbox = textbox.with_style(style.into());
+            }
+            ClientMessage::Textbox(textbox)
         }
 
         Command::Draw {
@@ -133,6 +136,36 @@ pub(crate) async fn run_client(config: Config, command: Command) -> Result<()> {
                 draw.style = Some(StrokeStyle { width, color });
             }
             ClientMessage::Draw(draw)
+        }
+
+        Command::Arrow {
+            from,
+            to,
+            bow,
+            straight,
+            width,
+            color,
+            target,
+        } => {
+            hold = target.hold;
+            // A bare `x,y` is coordinates, exactly as it is on `draw`. Anything else has
+            // to be a position the daemon will recognise, checked here so a typo is
+            // refused with the parser's explanation rather than a round trip.
+            let end = |raw: &str| -> Result<ArrowEnd> {
+                if let Ok([x, y]) = parse_point(raw) {
+                    return Ok(ArrowEnd::coords(x, y));
+                }
+                Position::parse(raw)
+                    .map(|_| ArrowEnd::named(raw))
+                    .map_err(|e| anyhow::anyhow!("{raw:?} is not an arrow end: {e}"))
+            };
+            let mut arrow = Arrow::new(DisplayId(target.display), end(&from)?, end(&to)?)
+                .with_ttl_ms(target.ttl_ms()?);
+            arrow.bow = if straight { Some(0.0) } else { bow };
+            if width.is_some() || color.is_some() {
+                arrow.style = Some(StrokeStyle { width, color });
+            }
+            ClientMessage::Arrow(arrow)
         }
 
         Command::Clear { annotation_id } => ClientMessage::Clear(match annotation_id {

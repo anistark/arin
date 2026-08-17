@@ -109,6 +109,18 @@ impl Panel {
     pub fn root(&self) -> &CALayer {
         &self.root
     }
+
+    /// The view annotation subviews are added to.
+    ///
+    /// Subviews composite above every sublayer of [`Self::root`], so anything added here
+    /// draws over the marks. Today that is the blurred glass of a text box, which samples
+    /// what is behind the window and so has to be a view: no layer can reach outside its
+    /// own window to blur what another window is showing.
+    pub fn content(&self) -> Retained<NSView> {
+        self.panel
+            .contentView()
+            .expect("the panel was built with a content view")
+    }
 }
 
 impl Drop for Panel {

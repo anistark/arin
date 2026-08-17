@@ -4,7 +4,9 @@ use crate::contrast::{self, Rgb};
 use crate::fingerprint::Fingerprint;
 use crate::policy::Rendering;
 use crate::signature::Shift;
-use arin_protocol::{Anchor, AnnotationId, DisplayId, LogicalPoint, SessionId, StrokeStyle};
+use arin_protocol::{
+    Anchor, AnnotationId, DisplayId, LogicalPoint, SessionId, StrokeStyle, TextboxStyle,
+};
 use std::time::{Duration, Instant};
 
 /// A single mark on the screen.
@@ -149,6 +151,9 @@ pub enum AnnotationKind {
     Textbox {
         /// The text to render.
         text: String,
+        /// What the text is for. Resolved from the wire's optional field before it is
+        /// stored, so a renderer never holds an opinion about the default.
+        style: TextboxStyle,
     },
     /// A freehand path.
     Path {

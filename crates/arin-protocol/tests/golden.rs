@@ -30,7 +30,7 @@ mod client_to_daemon {
     #[test]
     fn session_start() {
         let msg: Envelope<ClientMessage> =
-            round_trip(r#"{"v":"0.1","type":"session_start","client_name":"claude-code"}"#);
+            round_trip(r#"{"v":"0.2","type":"session_start","client_name":"claude-code"}"#);
         assert_eq!(msg.version, PROTOCOL_VERSION);
         let ClientMessage::SessionStart(start) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -42,7 +42,7 @@ mod client_to_daemon {
     #[test]
     fn point_with_coordinates() {
         let msg: Envelope<ClientMessage> = round_trip(
-            r#"{"v":"0.1","type":"point","x":412.0,"y":88.0,"display_id":1,"label":"Save"}"#,
+            r#"{"v":"0.2","type":"point","x":412.0,"y":88.0,"display_id":1,"label":"Save"}"#,
         );
         let ClientMessage::Point(point) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -58,7 +58,7 @@ mod client_to_daemon {
     #[test]
     fn point_with_query() {
         let msg: Envelope<ClientMessage> =
-            round_trip(r#"{"v":"0.1","type":"point","query":"the Submit button","display_id":1}"#);
+            round_trip(r#"{"v":"0.2","type":"point","query":"the Submit button","display_id":1}"#);
         let ClientMessage::Point(point) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
         };
@@ -71,7 +71,7 @@ mod client_to_daemon {
     #[test]
     fn highlight_with_rect() {
         let msg: Envelope<ClientMessage> = round_trip(
-            r#"{"v":"0.1","type":"highlight","rect":[100.0,200.0,340.0,90.0],"display_id":1,"label":"the counterargument"}"#,
+            r#"{"v":"0.2","type":"highlight","rect":[100.0,200.0,340.0,90.0],"display_id":1,"label":"the counterargument"}"#,
         );
         let ClientMessage::Highlight(highlight) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -85,7 +85,7 @@ mod client_to_daemon {
     #[test]
     fn highlight_with_query() {
         let msg: Envelope<ClientMessage> = round_trip(
-            r#"{"v":"0.1","type":"highlight","query":"the error message","display_id":1}"#,
+            r#"{"v":"0.2","type":"highlight","query":"the error message","display_id":1}"#,
         );
         let ClientMessage::Highlight(highlight) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -99,7 +99,7 @@ mod client_to_daemon {
     #[test]
     fn textbox() {
         let msg: Envelope<ClientMessage> = round_trip(
-            r#"{"v":"0.1","type":"textbox","anchor":{"screen_rect":[100.0,200.0,340.0,90.0],"display_id":1,"content_hash":null},"text":"This paragraph is the counterargument."}"#,
+            r#"{"v":"0.2","type":"textbox","anchor":{"screen_rect":[100.0,200.0,340.0,90.0],"display_id":1,"content_hash":null},"text":"This paragraph is the counterargument."}"#,
         );
         let ClientMessage::Textbox(textbox) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -107,12 +107,26 @@ mod client_to_daemon {
         let anchor = textbox.resolved_anchor().unwrap();
         assert_eq!(anchor.display_id, DisplayId(1));
         assert_eq!(anchor.content_hash, None);
+        // Style is additive: a message that says nothing about it means a note.
+        assert_eq!(textbox.style, None);
+    }
+
+    #[test]
+    fn a_textbox_can_say_what_it_is_for() {
+        let msg: Envelope<ClientMessage> = round_trip(
+            r#"{"v":"0.2","type":"textbox","rect":[300.0,200.0,320.0,80.0],"display_id":1,"text":"Move the screen to Chrome","style":"guide"}"#,
+        );
+        let ClientMessage::Textbox(textbox) = &msg.body else {
+            panic!("wrong variant: {:?}", msg.body);
+        };
+        assert_eq!(textbox.style, Some(TextboxStyle::Guide));
+        assert!(msg.body.validate().is_ok());
     }
 
     #[test]
     fn draw() {
         let msg: Envelope<ClientMessage> = round_trip(
-            r#"{"v":"0.1","type":"draw","display_id":1,"path":[[100.0,200.0],[140.0,210.0],[180.0,190.0]],"style":{"width":3.0}}"#,
+            r#"{"v":"0.2","type":"draw","display_id":1,"path":[[100.0,200.0],[140.0,210.0],[180.0,190.0]],"style":{"width":3.0}}"#,
         );
         let ClientMessage::Draw(draw) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -123,19 +137,98 @@ mod client_to_daemon {
     }
 
     #[test]
+    fn arrow_between_coordinates() {
+        let msg: Envelope<ClientMessage> = round_trip(
+            r#"{"v":"0.2","type":"arrow","display_id":1,"from":[120.0,600.0],"to":[412.0,88.0],"bow":0.3,"style":{"width":3.0}}"#,
+        );
+        let ClientMessage::Arrow(arrow) = &msg.body else {
+            panic!("wrong variant: {:?}", msg.body);
+        };
+        assert_eq!(
+            arrow.from.target().unwrap(),
+            ArrowTarget::Coords(LogicalPoint::new(120.0, 600.0))
+        );
+        assert_eq!(arrow.bow, Some(0.3));
+        assert!(msg.body.validate().is_ok());
+    }
+
+    /// The two forms mix freely: each end is its own decision.
+    #[test]
+    fn arrow_ends_take_either_form() {
+        let msg: Envelope<ClientMessage> = round_trip(
+            r#"{"v":"0.2","type":"arrow","display_id":1,"from":"bottom-left","to":"70%,30%"}"#,
+        );
+        let ClientMessage::Arrow(arrow) = &msg.body else {
+            panic!("wrong variant: {:?}", msg.body);
+        };
+        let Ok(ArrowTarget::Named(position)) = arrow.to.target() else {
+            panic!("expected a named end");
+        };
+        assert!((position.x - 0.7).abs() < 1e-9);
+        assert!(msg.body.validate().is_ok());
+    }
+
+    /// An arrow exists to give a direction, and coincident ends have none.
+    #[test]
+    fn an_arrow_needs_two_different_ends() {
+        let same = Arrow::new(
+            DisplayId(1),
+            ArrowEnd::coords(100.0, 100.0),
+            ArrowEnd::coords(100.0, 100.0),
+        );
+        assert!(matches!(
+            same.validate(),
+            Err(ValidationError::ZeroLengthArrow)
+        ));
+        let same_name = Arrow::new(
+            DisplayId(1),
+            ArrowEnd::named("center"),
+            ArrowEnd::named("center"),
+        );
+        assert!(matches!(
+            same_name.validate(),
+            Err(ValidationError::ZeroLengthArrow)
+        ));
+    }
+
+    #[test]
+    fn a_bow_past_one_is_refused() {
+        let bent = Arrow::new(
+            DisplayId(1),
+            ArrowEnd::coords(0.0, 0.0),
+            ArrowEnd::coords(100.0, 0.0),
+        )
+        .with_bow(1.5);
+        assert!(matches!(
+            bent.validate(),
+            Err(ValidationError::BowOutOfRange { .. })
+        ));
+        let unmeasurable = Arrow::new(
+            DisplayId(1),
+            ArrowEnd::coords(0.0, 0.0),
+            ArrowEnd::coords(100.0, 0.0),
+        )
+        .with_bow(f64::NAN);
+        assert!(matches!(
+            unmeasurable.validate(),
+            Err(ValidationError::BowOutOfRange { .. })
+        ));
+    }
+
+    #[test]
     fn clear_one_and_clear_all() {
         let one: Envelope<ClientMessage> =
-            round_trip(r#"{"v":"0.1","type":"clear","annotation_id":"a_7f3"}"#);
+            round_trip(r#"{"v":"0.2","type":"clear","annotation_id":"a_7f3"}"#);
         assert!(one.body.validate().is_ok());
 
-        let all: Envelope<ClientMessage> = round_trip(r#"{"v":"0.1","type":"clear","all":true}"#);
+        let all: Envelope<ClientMessage> = round_trip(r#"{"v":"0.2","type":"clear","all":true}"#);
         assert!(all.body.validate().is_ok());
     }
 
     #[test]
     fn focus_names_an_application() {
         let msg: Envelope<ClientMessage> =
-            round_trip(r#"{"v":"0.1","type":"focus","app":"Slack"}"#);
+            round_trip(r#"{"v":"0.2","type":"focus","app":"Slack"}"#);
         let ClientMessage::Focus(focus) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
         };
@@ -147,7 +240,7 @@ mod client_to_daemon {
     #[test]
     fn focus_accepts_a_bundle_identifier() {
         let msg: Envelope<ClientMessage> =
-            round_trip(r#"{"v":"0.1","type":"focus","app":"com.tinyspeck.slackmacgap"}"#);
+            round_trip(r#"{"v":"0.2","type":"focus","app":"com.tinyspeck.slackmacgap"}"#);
         assert!(msg.body.validate().is_ok());
     }
 
@@ -156,13 +249,13 @@ mod client_to_daemon {
     #[test]
     fn focus_refuses_an_empty_application() {
         let blank: Envelope<ClientMessage> =
-            serde_json::from_str(r#"{"v":"0.1","type":"focus","app":"   "}"#).unwrap();
+            serde_json::from_str(r#"{"v":"0.2","type":"focus","app":"   "}"#).unwrap();
         assert!(blank.body.validate().is_err());
     }
 
     #[test]
     fn session_end() {
-        let msg: Envelope<ClientMessage> = round_trip(r#"{"v":"0.1","type":"session_end"}"#);
+        let msg: Envelope<ClientMessage> = round_trip(r#"{"v":"0.2","type":"session_end"}"#);
         assert_eq!(msg.body, ClientMessage::SessionEnd);
     }
 }
@@ -173,7 +266,7 @@ mod daemon_to_client {
     #[test]
     fn ack_for_a_resolved_query() {
         let msg: Envelope<DaemonMessage> = round_trip(
-            r#"{"v":"0.1","type":"ack","annotation_id":"a_7f3","resolved_coords":{"x":412.0,"y":88.0},"confidence":0.94,"display":{"id":1,"scale":2.0,"logical_size":[1728.0,1117.0]}}"#,
+            r#"{"v":"0.2","type":"ack","annotation_id":"a_7f3","resolved_coords":{"x":412.0,"y":88.0},"confidence":0.94,"display":{"id":1,"scale":2.0,"logical_size":[1728.0,1117.0]}}"#,
         );
         let DaemonMessage::Ack(ack) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -187,7 +280,7 @@ mod daemon_to_client {
     #[test]
     fn ack_for_a_focus_request_answered_from_the_tab_index() {
         let msg: Envelope<DaemonMessage> = round_trip(
-            r#"{"v":"0.1","type":"ack","activated":{"app":"Google Chrome","bundle_id":"com.google.Chrome","profile":"Your Chrome"}}"#,
+            r#"{"v":"0.2","type":"ack","activated":{"app":"Google Chrome","bundle_id":"com.google.Chrome","profile":"Your Chrome"}}"#,
         );
         let DaemonMessage::Ack(ack) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -204,7 +297,7 @@ mod daemon_to_client {
     #[test]
     fn ack_for_a_focus_request() {
         let msg: Envelope<DaemonMessage> = round_trip(
-            r#"{"v":"0.1","type":"ack","activated":{"app":"Slack","bundle_id":"com.tinyspeck.slackmacgap"}}"#,
+            r#"{"v":"0.2","type":"ack","activated":{"app":"Slack","bundle_id":"com.tinyspeck.slackmacgap"}}"#,
         );
         let DaemonMessage::Ack(ack) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -220,7 +313,7 @@ mod daemon_to_client {
     #[test]
     fn invalidated() {
         let msg: Envelope<DaemonMessage> = round_trip(
-            r#"{"v":"0.1","type":"invalidated","annotation_id":"a_7f3","reason":"scroll"}"#,
+            r#"{"v":"0.2","type":"invalidated","annotation_id":"a_7f3","reason":"scroll"}"#,
         );
         let DaemonMessage::Invalidated(inv) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -231,7 +324,7 @@ mod daemon_to_client {
     #[test]
     fn error() {
         let msg: Envelope<DaemonMessage> = round_trip(
-            r#"{"v":"0.1","type":"error","code":"no_resolver","msg":"query form requires a configured resolver"}"#,
+            r#"{"v":"0.2","type":"error","code":"no_resolver","msg":"query form requires a configured resolver"}"#,
         );
         let DaemonMessage::Error(err) = &msg.body else {
             panic!("wrong variant: {:?}", msg.body);
@@ -265,7 +358,7 @@ mod compatibility {
     #[test]
     fn a_ttl_is_optional_in_both_directions() {
         let parsed: Envelope<ClientMessage> =
-            serde_json::from_str(r#"{"v":"0.1","type":"point","x":1,"y":2,"display_id":1}"#)
+            serde_json::from_str(r#"{"v":"0.2","type":"point","x":1,"y":2,"display_id":1}"#)
                 .expect("a point without a ttl must still parse");
         let ClientMessage::Point(point) = parsed.body else {
             panic!("expected a point");
@@ -284,7 +377,7 @@ mod compatibility {
         assert!(json.contains(r#""at":"50%,30%""#), "got {json}");
 
         let parsed: Envelope<ClientMessage> = serde_json::from_str(
-            r#"{"v":"0.1","type":"point","at":"bottom-right","display_id":1}"#,
+            r#"{"v":"0.2","type":"point","at":"bottom-right","display_id":1}"#,
         )
         .expect("a named position must parse");
         let ClientMessage::Point(point) = parsed.body else {
@@ -297,7 +390,7 @@ mod compatibility {
     #[test]
     fn an_unknown_type_is_an_error_not_a_panic() {
         let parsed: Result<Envelope<ClientMessage>, _> =
-            serde_json::from_str(r#"{"v":"0.1","type":"teleport","x":1}"#);
+            serde_json::from_str(r#"{"v":"0.2","type":"teleport","x":1}"#);
         assert!(parsed.is_err());
     }
 }
