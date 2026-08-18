@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// happen before the body is interpreted. On the wire the two are flat:
 ///
 /// ```json
-/// {"v":"0.1","type":"session_end"}
+/// {"v":"0.2","type":"session_end"}
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Envelope<T> {

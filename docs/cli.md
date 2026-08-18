@@ -9,7 +9,10 @@ arin point 412 88 --display 1 --label Save --hold
 arin point --at top-right --label "the close button"
 arin highlight 100 200 340 90 --label "the counterargument" --ttl 5
 arin annotate 300 200 320 80 --text "This is where the retry loop lives"
+arin annotate 300 400 360 60 --text "Move the screen to Chrome" --style guide
 arin draw 100,200 140,210 180,190 --color '#FF3B30'
+arin arrow 120,600 412,88 --hold
+arin arrow bottom-left 70%,30% --straight
 arin clear
 ```
 

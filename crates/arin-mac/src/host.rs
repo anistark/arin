@@ -16,16 +16,22 @@ use crate::flight;
 use crate::orb::{self, Orb};
 use crate::panel::Panel;
 use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result, Rgb};
-use arin_protocol::{AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect, StrokeStyle};
+use arin_protocol::{
+    AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect, StrokeStyle, TextboxStyle,
+};
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::rc::Retained;
-use objc2::{MainThreadMarker, Message};
-use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSColor};
-use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2::runtime::AnyObject;
+use objc2::{MainThreadMarker, MainThreadOnly, Message};
+use objc2_app_kit::{
+    NSApplicationDidChangeScreenParametersNotification, NSColor, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+};
+use objc2_core_foundation::{CFString, CFType, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSString};
-use objc2_quartz_core::{CALayer, CAShapeLayer, CATextLayer, CATransaction};
+use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSString};
+use objc2_quartz_core::{CAGradientLayer, CALayer, CAShapeLayer, CATextLayer, CATransaction};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
@@ -37,6 +43,25 @@ thread_local! {
     static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
 }
 
+/// The two views a text box's glass is made of.
+///
+/// The material is drawn softened, and softening a view fades everything inside it, so
+/// the rim, the sheen, and the text ride a second view above the material at full
+/// strength. The pair moves and goes away together, and only together.
+struct Glass {
+    /// The blurred material, at [`BLUR_STRENGTH`].
+    blur: Retained<NSVisualEffectView>,
+    /// The rim, the sheen, and the text, composited above it unsoftened.
+    face: Retained<NSView>,
+}
+
+impl Glass {
+    fn remove(&self) {
+        self.blur.removeFromSuperview();
+        self.face.removeFromSuperview();
+    }
+}
+
 /// Everything the renderer owns on the main thread.
 struct Host {
     panels: Vec<Panel>,
@@ -46,6 +71,13 @@ struct Host {
     /// layers with it, which the id alone cannot answer: a highlight or a text box has no
     /// other record of where it was drawn.
     layers: HashMap<AnnotationId, (DisplayId, Retained<CALayer>)>,
+    /// Blurred glass, for the annotations that have some.
+    ///
+    /// A text box's face is built from views, because blurring what is behind the window
+    /// is a thing only a view can do, and a view cannot live in [`Self::layers`]. Every
+    /// removal from that map has a twin here, and forgetting one leaves an empty pane of
+    /// glass on screen that nothing can clear.
+    box_views: HashMap<AnnotationId, (DisplayId, Glass)>,
     /// Point annotations, and the display each is on.
     ///
     /// Points have no layer of their own: they move the orb. Tracking them separately is
@@ -254,6 +286,9 @@ impl Host {
         // agree rather than holding references to a closed window's tree.
         for display in &disturbed {
             self.layers.retain(|_, (on, _)| on != display);
+            // The views went down with their panel's window, so this is bookkeeping
+            // rather than removal.
+            self.box_views.retain(|_, (on, _)| on != display);
             self.points.retain(|_, on| on != display);
         }
 
@@ -384,6 +419,7 @@ impl MacRenderer {
             *slot = Some(Host {
                 panels,
                 layers: HashMap::new(),
+                box_views: HashMap::new(),
                 points: HashMap::new(),
                 // Built here rather than per panel, and not attached to any of them until
                 // the first point decides which display it belongs on.
@@ -465,13 +501,16 @@ impl Renderer for MacRenderer {
         let kind = annotation.kind.clone();
         let color = annotation.color;
 
-        on_main(move |host, _mtm| {
+        on_main(move |host, mtm| {
             // Drawing the same id twice is a redraw, which is how a mark follows content
             // that scrolled. Replacing the map entry alone would leave the old layer on
             // screen with nothing left holding a reference to remove it: a mark that
             // multiplies every time the page moves, and only the newest one clearable.
             if let Some((_, stale)) = host.layers.remove(&id) {
                 stale.removeFromSuperlayer();
+            }
+            if let Some((_, stale)) = host.box_views.remove(&id) {
+                stale.remove();
             }
             // Read before a panel is borrowed out of the host. Drawing a point that is
             // already on screen is it following content that scrolled, not attention
@@ -484,6 +523,7 @@ impl Renderer for MacRenderer {
             };
             let mut host_points: Vec<(AnnotationId, DisplayId)> = Vec::new();
             let mut fly_to: Option<(DisplayId, CGPoint, bool)> = None;
+            let mut boxed: Option<Glass> = None;
             let info = panel.screen().info;
             let panel_size = CGSize::new(info.logical_size[0], info.logical_size[1]);
             let panel_height = panel_size.height;
@@ -525,8 +565,15 @@ impl Renderer for MacRenderer {
                         }
                     }
                 }
-                AnnotationKind::Textbox { text } => {
-                    Some(textbox_layer(anchor, text, color, scale, panel_height))
+                AnnotationKind::Textbox { text, style } => {
+                    let frame = to_layer_rect(anchor, panel_height);
+                    let glass = textbox_glass(frame, text, *style, color, scale, mtm);
+                    // The material first, the face above it.
+                    panel.content().addSubview(&glass.blur);
+                    panel.content().addSubview(&glass.face);
+                    boxed = Some(glass);
+                    // The layer half carries the glow and the lift, under the glass.
+                    Some(textbox_halo(frame, *style, color))
                 }
                 AnnotationKind::Path { points, style } => {
                     Some(path_layer(points, style.as_ref(), color, panel_height))
@@ -535,7 +582,10 @@ impl Renderer for MacRenderer {
 
             if let Some(layer) = layer {
                 panel.root().addSublayer(&layer);
-                host.layers.insert(id, (screen_id, layer));
+                host.layers.insert(id.clone(), (screen_id, layer));
+            }
+            if let Some(view) = boxed {
+                host.box_views.insert(id, (screen_id, view));
             }
             for (point, display) in host_points {
                 host.points.insert(point, display);
@@ -564,6 +614,9 @@ impl Renderer for MacRenderer {
             if let Some((_, layer)) = host.layers.remove(&id) {
                 layer.removeFromSuperlayer();
             }
+            if let Some((_, glass)) = host.box_views.remove(&id) {
+                glass.remove();
+            }
             // A point has no layer of its own, it moves the orb, so the orb only goes away
             // once nothing anywhere still wants it. Clearing a point on one display while
             // another holds one elsewhere leaves the orb where it is: a pointer does not
@@ -579,6 +632,9 @@ impl Renderer for MacRenderer {
         on_main(|host, _mtm| {
             for (_, (_, layer)) in host.layers.drain() {
                 layer.removeFromSuperlayer();
+            }
+            for (_, (_, glass)) in host.box_views.drain() {
+                glass.remove();
             }
             host.points.clear();
             // Any flight still in the air is going nowhere anyone asked for.
@@ -631,47 +687,166 @@ fn to_layer_rect(rect: LogicalRect, panel_height: f64) -> CGRect {
     )
 }
 
-/// A block of explanatory text pinned to a region.
+/// The handwritten face both text box styles are set in.
 ///
-/// Display only, and deliberately not a control. The overlay is click through, so there
-/// is nothing here to focus, select, or type into, and there will not be within 0.x.
-fn textbox_layer(
-    rect: LogicalRect,
+/// Arin is the chalk, so its writing looks written rather than typeset. Chalkboard SE
+/// ships with macOS, stays legible at a glance, and CATextLayer falls back to its
+/// default face if the name is ever missing rather than failing the draw.
+const TEXTBOX_FONT: &str = "ChalkboardSE-Regular";
+
+/// The glow and the lift behind a text box.
+///
+/// Shadows only. The box's face is a view, and subviews composite above every layer in
+/// the panel, so the shadows live here in the layer tree, cast by a rounded plate the
+/// glass covers completely. A layer casts one shadow and this box wants two, so the
+/// outer layer casts the glow, centred and in the annotation's own colour, and the
+/// plate inside it casts the dark lift. The plate's fill also deepens the material
+/// above it, which is what keeps light text readable on glass over a bright screen.
+fn textbox_halo(frame: CGRect, style: TextboxStyle, color: Rgb) -> Retained<CALayer> {
+    let (corner_radius, glow_opacity, glow_radius) = match style {
+        TextboxStyle::Note => (10.0, 0.55, 14.0),
+        TextboxStyle::Guide => (16.0, 0.7, 20.0),
+    };
+
+    let glow = CALayer::new();
+    glow.setFrame(frame);
+    glow.setShadowColor(Some(&annotation_color(color, 1.0)));
+    glow.setShadowOpacity(glow_opacity);
+    glow.setShadowRadius(glow_radius);
+    glow.setShadowOffset(CGSize::new(0.0, 0.0));
+
+    let plate = CALayer::new();
+    plate.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), frame.size));
+    plate.setBackgroundColor(Some(&srgb(0.05, 0.06, 0.09, 0.45)));
+    plate.setCornerRadius(corner_radius);
+    unsafe { plate.setCornerCurve(objc2_quartz_core::kCACornerCurveContinuous) };
+    plate.setShadowColor(Some(&srgb(0.0, 0.0, 0.0, 1.0)));
+    plate.setShadowOpacity(0.4);
+    plate.setShadowRadius(14.0);
+    plate.setShadowOffset(CGSize::new(0.0, -5.0));
+
+    glow.addSublayer(&plate);
+    glow
+}
+
+/// How much of the blurred material a box shows, against the sharp scene behind it.
+///
+/// AppKit exposes no blur radius: a material's recipe is fixed. What can soften is how
+/// much of the material reaches the eye, so the blur view is drawn at this opacity and
+/// the sharp scene blends back through the rest. `1.0` is the full frosted material,
+/// and `0.0` is a box with no blur at all.
+const BLUR_STRENGTH: f64 = 0.65;
+
+/// The face of a text box: blurred glass with the text on it.
+///
+/// Display only, and deliberately not a control. The overlay is click through at the
+/// window level, so nothing here can be focused, clicked, or typed into, and there will
+/// not be an input within 0.x.
+///
+/// Views rather than layers because the glass really blurs what is behind it, and
+/// sampling behind the window is a thing only `NSVisualEffectView` can do. The material
+/// is forced `Active`: the panel never becomes the key window, and a material left
+/// following the window's state would render flat for the overlay's whole life. It is
+/// softened to [`BLUR_STRENGTH`], and softening a view fades its whole subtree, which
+/// is why the rim, the sheen, and the text ride a second view above it.
+///
+/// The style decides how loudly the text speaks. A note sits beside something being
+/// read at leisure. A guide competes with a whole screen for somebody mid-action, so it
+/// is larger, centred, and framed harder.
+fn textbox_glass(
+    frame: CGRect,
     text: &str,
+    style: TextboxStyle,
     color: Rgb,
     scale: f64,
-    panel_height: f64,
-) -> Retained<CALayer> {
-    const PADDING: f64 = 10.0;
-    const FONT_SIZE: f64 = 13.0;
+    mtm: MainThreadMarker,
+) -> Glass {
+    let (padding, font_size, border_width, corner_radius) = match style {
+        TextboxStyle::Note => (12.0, 15.0, 1.0, 10.0),
+        TextboxStyle::Guide => (16.0, 22.0, 1.5, 16.0),
+    };
+    let size = frame.size;
 
-    let panel = CALayer::new();
-    panel.setFrame(to_layer_rect(rect, panel_height));
-    // Dark and mostly opaque, because the text has to be readable over whatever the user
-    // happens to have on screen, which is not something an annotation gets to choose.
-    panel.setBackgroundColor(Some(&srgb(0.06, 0.07, 0.10, 0.92)));
-    panel.setCornerRadius(6.0);
-    panel.setBorderWidth(1.5);
-    panel.setBorderColor(Some(&annotation_color(color, 0.9)));
+    let blur = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), frame);
+    blur.setMaterial(NSVisualEffectMaterial::HUDWindow);
+    blur.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    blur.setState(NSVisualEffectState::Active);
+    blur.setAlphaValue(BLUR_STRENGTH);
+    blur.setWantsLayer(true);
+    let material = blur.layer().expect("a view asked for a layer has a layer");
+    material.setCornerRadius(corner_radius);
+    unsafe { material.setCornerCurve(objc2_quartz_core::kCACornerCurveContinuous) };
+    material.setMasksToBounds(true);
+
+    let face = NSView::initWithFrame(NSView::alloc(mtm), frame);
+    face.setWantsLayer(true);
+    let root = face.layer().expect("a view asked for a layer has a layer");
+    root.setCornerRadius(corner_radius);
+    unsafe { root.setCornerCurve(objc2_quartz_core::kCACornerCurveContinuous) };
+    root.setBorderWidth(border_width);
+    root.setBorderColor(Some(&annotation_color(color, 0.55)));
+    root.setMasksToBounds(true);
+
+    // A wash of the annotation colour over the material, so the box stays in the same
+    // family as the marks around it.
+    let (r, g, b) = color.as_unit();
+    let tint = CALayer::new();
+    tint.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), size));
+    tint.setBackgroundColor(Some(&srgb(
+        0.72 + r * 0.28,
+        0.72 + g * 0.28,
+        0.72 + b * 0.28,
+        0.10,
+    )));
+
+    // The sheen: light falling from the top edge, the way glass catches it.
+    let sheen = CAGradientLayer::new();
+    sheen.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), size));
+    let bright = srgb(1.0, 1.0, 1.0, 0.24);
+    let faint = srgb(1.0, 1.0, 1.0, 0.02);
+    let stops: [&AnyObject; 2] = [cg_as_object(&bright), cg_as_object(&faint)];
+    unsafe { sheen.setColors(Some(&NSArray::from_slice(&stops))) };
+    // Layer space grows upward, so the top of the box is unit y 1.
+    sheen.setStartPoint(CGPoint::new(0.5, 1.0));
+    sheen.setEndPoint(CGPoint::new(0.5, 0.45));
 
     let label = CATextLayer::new();
     label.setFrame(CGRect::new(
-        CGPoint::new(PADDING, PADDING),
+        CGPoint::new(padding, padding),
         CGSize::new(
-            (rect.width - PADDING * 2.0).max(1.0),
-            (rect.height - PADDING * 2.0).max(1.0),
+            (size.width - padding * 2.0).max(1.0),
+            (size.height - padding * 2.0).max(1.0),
         ),
     ));
     unsafe { label.setString(Some(&NSString::from_str(text))) };
-    label.setFontSize(FONT_SIZE);
-    label.setForegroundColor(Some(&srgb(0.93, 0.95, 0.98, 1.0)));
+    let font = CFString::from_str(TEXTBOX_FONT);
+    unsafe { label.setFont(Some(font.as_ref())) };
+    label.setFontSize(font_size);
+    label.setForegroundColor(Some(&srgb(0.97, 0.98, 1.0, 1.0)));
     label.setWrapped(true);
+    if style == TextboxStyle::Guide {
+        // An instruction is a sign, not a paragraph. Centred text reads as one.
+        unsafe { label.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter) };
+    }
+    // Ink keeps an edge of its own, so legibility survives whatever the blur is over.
+    label.setShadowColor(Some(&srgb(0.0, 0.0, 0.0, 1.0)));
+    label.setShadowOpacity(0.65);
+    label.setShadowRadius(2.5);
+    label.setShadowOffset(CGSize::new(0.0, -1.0));
     // Without this the text renders at 1x and is then scaled up, which on a Retina panel
     // looks soft in exactly the way real text does not.
     label.setContentsScale(scale);
 
-    panel.addSublayer(&label);
-    panel
+    root.addSublayer(&tint);
+    root.addSublayer(&sheen);
+    root.addSublayer(&label);
+    Glass { blur, face }
+}
+
+/// A Core Graphics colour as the object an `NSArray` of gradient stops carries.
+fn cg_as_object(color: &CGColor) -> &AnyObject {
+    let cf: &CFType = color.as_ref();
+    cf.as_ref()
 }
 
 /// A freehand path.

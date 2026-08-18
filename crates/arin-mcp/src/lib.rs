@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use arin_core::Client;
 use arin_protocol::{
-    Anchor, Clear, ClientMessage, DaemonMessage, DisplayId, Highlight, LogicalRect, Point, Textbox,
+    Anchor, Arrow, ArrowEnd, Clear, ClientMessage, DaemonMessage, DisplayId, Highlight,
+    LogicalRect, Point, Textbox,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -46,6 +47,8 @@ pub mod tools {
     pub const HIGHLIGHT: &str = "highlight";
     /// Place explanatory text. Maps to `textbox`.
     pub const ANNOTATE: &str = "annotate";
+    /// Draw an arrow from one place to another. Maps to `arrow`.
+    pub const DRAW_ARROW: &str = "draw_arrow";
     /// Remove annotations. Maps to `clear`.
     pub const CLEAR: &str = "clear";
     /// Raise an application's windows. Maps to `focus`.
@@ -65,6 +68,7 @@ pub mod tools {
         POINT_AT,
         HIGHLIGHT,
         ANNOTATE,
+        DRAW_ARROW,
         CLEAR,
         BRING_TO_FRONT,
         WAIT_UNTIL_SHOWING,
@@ -98,8 +102,9 @@ pub const CLIENT_NAME: &str = "arin-mcp";
 pub const INSTRUCTIONS: &str = "\
 Arin draws on the user's screen so you can show them what you mean instead of describing \
 it. Point at the line you are explaining, outline the region you are discussing, place a \
-note beside what it describes. It draws only: it never clicks, types, or scrolls, so use \
-it to direct attention rather than to act.
+note beside what it describes, draw an arrow when one place leads to another. It draws \
+only: it never clicks, types, or scrolls, so use it to direct attention rather than to \
+act.
 
 When to use it. The first time you explain something the user can see on their screen, \
 annotate it as you go, and tell them once that they can ask you to stop. After that, \
@@ -246,6 +251,51 @@ pub struct AnnotateArgs {
     pub height: f64,
     /// The text to display. Rendered as a read-only panel, never an input.
     pub text: String,
+    /// What the text is for: "note" for an explanation read beside something, the
+    /// default, or "guide" for an instruction drawn larger and centred, for someone
+    /// about to act on it.
+    #[serde(default)]
+    pub style: Option<String>,
+    /// Remove the mark automatically after this many seconds. Omit to leave it up until
+    /// you clear it or the session ends.
+    #[serde(default)]
+    pub ttl_seconds: Option<f64>,
+    /// Display to draw on. Omit for the primary display.
+    #[serde(default)]
+    pub display: Option<u32>,
+}
+
+/// Arguments to `draw_arrow`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DrawArrowArgs {
+    /// Where the arrow starts, horizontally, in logical points. Pair with `from_y`, or
+    /// omit both and use `from`.
+    #[serde(default)]
+    pub from_x: Option<f64>,
+    /// Where the arrow starts, vertically, in logical points. Pair with `from_x`.
+    #[serde(default)]
+    pub from_y: Option<f64>,
+    /// Where the arrow starts, as a position relative to the display: a name like
+    /// "bottom-left", or percentages of it like "20%,80%". Use instead of from_x and
+    /// from_y.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Where the arrow points, horizontally, in logical points. Pair with `to_y`, or
+    /// omit both and use `to`.
+    #[serde(default)]
+    pub to_x: Option<f64>,
+    /// Where the arrow points, vertically, in logical points. Pair with `to_x`.
+    #[serde(default)]
+    pub to_y: Option<f64>,
+    /// Where the arrow points, as a position relative to the display, in the same forms
+    /// as `from`. Use instead of to_x and to_y.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// How far the shaft bows off the straight line, as a fraction of its length,
+    /// between -1 and 1. Zero is straight, positive bows right of travel, negative
+    /// left. Omit for a natural curve.
+    #[serde(default)]
+    pub bow: Option<f64>,
     /// Remove the mark automatically after this many seconds. Omit to leave it up until
     /// you clear it or the session ends.
     #[serde(default)]
@@ -413,18 +463,78 @@ impl Arin {
                        beside whatever it describes rather than over it, since a box on top \
                        of the thing you are explaining hides it. Logical points only, so \
                        divide screenshot pixels by the `display_scale` that any earlier \
-                       result reported."
+                       result reported. `style` says what the text is for: \"note\", the \
+                       default, sits quietly beside what it explains, and \"guide\" is for \
+                       an instruction the user should act on now, drawn larger and \
+                       centred, worth a roomier rect. Pick by intent, not by taste."
     )]
     async fn annotate(
         &self,
         Parameters(args): Parameters<AnnotateArgs>,
     ) -> Result<Json<Drawn>, ErrorData> {
+        let style = match args.style.as_deref() {
+            None | Some("note") => None,
+            Some("guide") => Some(arin_protocol::TextboxStyle::Guide),
+            Some(other) => {
+                return Err(ErrorData::invalid_params(
+                    format!("style must be \"note\" or \"guide\", got {other:?}"),
+                    None,
+                ));
+            }
+        };
         let anchor = Anchor::new(
             LogicalRect::new(args.x, args.y, args.width, args.height),
             display(args.display),
         );
-        let textbox = Textbox::new(anchor, args.text).with_ttl_ms(ttl_ms(args.ttl_seconds)?);
+        let mut textbox = Textbox::new(anchor, args.text).with_ttl_ms(ttl_ms(args.ttl_seconds)?);
+        if let Some(style) = style {
+            textbox = textbox.with_style(style);
+        }
         self.draw(ClientMessage::Textbox(textbox)).await
+    }
+
+    /// Draw an arrow from one place to another.
+    #[tool(
+        name = "draw_arrow",
+        description = "Draw an arrow between two places on the user's screen. The head \
+                       sits at the `to` end, so use it when direction matters: from a \
+                       caption to the thing it describes, from where the user is to where \
+                       you are sending them, along the way a value flows. Each end takes \
+                       one form: `from`/`to` as a named position like \"bottom-left\" or \
+                       percentages of the display like \"70%,30%\", measured off a \
+                       screenshot of it, or `from_x`/`from_y` and `to_x`/`to_y` in logical \
+                       points, which is screenshot pixels divided by the display scale \
+                       reported back to you. Curved by default, the way a person draws \
+                       one. Pass `bow: 0` for a ruled straight arrow, or up to 1 to bow \
+                       right of travel and -1 to bow left, as a fraction of the arrow's \
+                       length. Prefer point_at for one spot and highlight for an area: an \
+                       arrow earns its ink when the relationship between two places is \
+                       the thing being shown."
+    )]
+    async fn draw_arrow(
+        &self,
+        Parameters(args): Parameters<DrawArrowArgs>,
+    ) -> Result<Json<Drawn>, ErrorData> {
+        let end = |x: Option<f64>, y: Option<f64>, at: Option<String>, which: &str| match (x, y, at)
+        {
+            (Some(x), Some(y), None) => Ok(ArrowEnd::coords(x, y)),
+            (None, None, Some(at)) => Ok(ArrowEnd::named(at)),
+            _ => Err(ErrorData::invalid_params(
+                format!(
+                    "draw_arrow wants exactly one of: {which}_x and {which}_y \
+                         together, or {which}"
+                ),
+                None,
+            )),
+        };
+        let mut arrow = Arrow::new(
+            display(args.display),
+            end(args.from_x, args.from_y, args.from, "from")?,
+            end(args.to_x, args.to_y, args.to, "to")?,
+        );
+        arrow.bow = args.bow;
+        arrow.ttl_ms = ttl_ms(args.ttl_seconds)?;
+        self.draw(ClientMessage::Arrow(arrow)).await
     }
 
     /// Bring an application's windows to the front.
@@ -978,6 +1088,58 @@ mod tests {
         assert!(
             tool_description(tools::HIGHLIGHT).contains("no `at` here"),
             "highlight has no named position, and saying nothing invites the call anyway"
+        );
+    }
+
+    /// An arrow is the one mark with a direction, and the direction is the first thing a
+    /// model gets wrong: nothing else says which end grows the head. The bow's sign has
+    /// the same problem one step later.
+    #[test]
+    fn the_arrow_tool_says_which_end_is_the_head_and_what_the_bow_means() {
+        let described = tool_description(tools::DRAW_ARROW);
+        assert!(
+            described.contains("head") && described.contains("`to`"),
+            "nothing else tells a model which way its arrow will point: {described}"
+        );
+        assert!(
+            described.contains("bow: 0"),
+            "a straight arrow has to be reachable from the description alone: {described}"
+        );
+        assert!(
+            described.contains("Curved by default"),
+            "a model that expects a ruled line will read the curve as a miss: {described}"
+        );
+    }
+
+    /// The percentage form is the precise way to aim without a resolver, and an arrow
+    /// needs it twice. A description that only taught coordinates would leave
+    /// screenshot-equipped agents with no exact way to place either end.
+    #[test]
+    fn the_arrow_tool_teaches_the_percentage_form_for_both_ends() {
+        let described = tool_description(tools::DRAW_ARROW);
+        assert!(
+            described.contains("70%,30%"),
+            "the percentage form is the aiming form worth teaching: {described}"
+        );
+        assert!(
+            described.contains("`from`") && described.contains("`to`"),
+            "both ends take it, and saying so once per end is what stops a mixed call \
+             being guessed at: {described}"
+        );
+    }
+
+    /// Two styles exist so a model picks by intent. A description that never says what
+    /// "guide" is for leaves every box a note, which is the state this field replaced.
+    #[test]
+    fn the_annotate_tool_says_when_to_write_a_guide() {
+        let described = tool_description(tools::ANNOTATE);
+        assert!(
+            described.contains("\"guide\"") && described.contains("act on now"),
+            "nothing else tells a model an instruction deserves the louder box: {described}"
+        );
+        assert!(
+            described.contains("Pick by intent"),
+            "style is semantic, and left unsaid it becomes a taste knob: {described}"
         );
     }
 

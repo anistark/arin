@@ -540,6 +540,91 @@ async fn a_straight_path_still_produces_a_drawable_anchor() {
     assert_eq!(daemon.annotation_count(), 1);
 }
 
+// arrows
+
+#[tokio::test]
+async fn an_arrow_is_drawn_and_anchored_over_both_ends() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    let reply = conn
+        .handle(wrap(ClientMessage::Arrow(Arrow::new(
+            DISPLAY,
+            ArrowEnd::coords(120.0, 600.0),
+            ArrowEnd::coords(412.0, 88.0),
+        ))))
+        .await
+        .unwrap();
+
+    let DaemonMessage::Ack(ack) = reply else {
+        panic!("expected an ack, got {reply:?}");
+    };
+    let id = ack.annotation_id.expect("an arrow is a mark");
+    assert_eq!(daemon.annotation_count(), 1);
+
+    // The anchor is the bounding box of the whole curve, so both ends sit inside it
+    // and the scroll watcher follows the arrow the way it follows any path.
+    let anchors = renderer.anchors.lock().unwrap();
+    let bounds = anchors.get(&id).expect("drawn");
+    for (x, y) in [(120.0, 600.0), (412.0, 88.0)] {
+        assert!(
+            bounds.x <= x
+                && x <= bounds.x + bounds.width
+                && bounds.y <= y
+                && y <= bounds.y + bounds.height,
+            "({x}, {y}) fell outside the anchor {bounds:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_arrow_resolves_named_ends_against_the_display() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    let reply = conn
+        .handle(wrap(ClientMessage::Arrow(Arrow::new(
+            DISPLAY,
+            ArrowEnd::named("top-left"),
+            ArrowEnd::named("70%,30%"),
+        ))))
+        .await
+        .unwrap();
+
+    let DaemonMessage::Ack(ack) = reply else {
+        panic!("expected an ack, got {reply:?}");
+    };
+    let anchors = renderer.anchors.lock().unwrap();
+    let bounds = anchors.get(&ack.annotation_id.unwrap()).unwrap();
+    // The display is 1728x1117, so the head lands at 70% of one and 30% of the other.
+    let (to_x, to_y) = (1728.0 * 0.7, 1117.0 * 0.3);
+    assert!(
+        bounds.x + bounds.width >= to_x && bounds.y <= to_y,
+        "the resolved head ({to_x}, {to_y}) fell outside the anchor {bounds:?}"
+    );
+}
+
+/// `"50%,50%"` and `"center"` are two spellings of one place, which only the daemon can
+/// notice, since only it knows the display they resolve against.
+#[tokio::test]
+async fn an_arrow_whose_ends_meet_after_resolution_is_refused() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon.clone()).await;
+
+    let err = conn
+        .handle(wrap(ClientMessage::Arrow(Arrow::new(
+            DISPLAY,
+            ArrowEnd::named("50%,50%"),
+            ArrowEnd::named("center"),
+        ))))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), ErrorCode::BadSchema);
+    assert_eq!(daemon.annotation_count(), 0);
+    assert!(renderer.drawn.lock().unwrap().is_empty());
+}
+
 // time to live
 
 /// A daemon whose config differs from the harness default.

@@ -28,6 +28,109 @@ is a format.
 
 ## [Unreleased]
 
+- **Arin can draw arrows.** `arin arrow 120,600 412,88` on the command line, a
+  `draw_arrow` MCP tool, and an `arrow` message on the wire. Curved by default,
+  `--straight` or `bow: 0` for a ruled one, and either end can be a named position:
+  `arin arrow bottom-left 70%,30%`.
+- **Text boxes say what they are for, and look the part.** `--style guide` on
+  `arin annotate`, and `style` on the `textbox` message and the `annotate` MCP tool,
+  draws an instruction larger and centred. Both styles are set in a handwritten face on
+  a glass panel now, rather than 13pt system type on a dark plate.
+
+### Added
+
+- **An `arrow` message, from one place to another.** The one mark with a direction in it:
+  a point says look here, a highlight says look at this, and an arrow says this leads to
+  that, which is the relationship none of the existing marks could carry.
+
+  **Curved by default, straight on request.** A gentle bow is how a person draws an arrow,
+  and it keeps the shaft out of whatever sits on the straight line between the two ends,
+  which is often exactly the content being talked about. `bow` is a signed fraction of the
+  arrow's length: `0` is straight, positive bows right of travel, negative left, and
+  anything past `1` is refused rather than drawn, since past that the shape stops reading
+  as an arrow. Omitted, the daemon supplies a quarter.
+
+  **Each end is a coordinate pair or a named position**, independently, so
+  `{"from":[120,600],"to":"70%,30%"}` is one call. The named forms are the same grammar
+  `point.at` has taken since 0.2, resolved in the daemon because only the daemon knows the
+  display's size, and that is what makes an arrow reachable for an agent holding nothing
+  but a screenshot: measure both ends as percentages of the image and send them. There is
+  deliberately no query form yet. Grounding one end of an arrow is really grounding two
+  targets in one call, and that shape is worth designing when something asks for it rather
+  than guessed at now.
+
+  **Two coincident ends are refused rather than drawn**, with `bad_schema`: an arrow
+  exists to give a direction, and coincident ends have none. Literal duplicates are caught
+  by validation, and two spellings of one place, `"center"` against `"50%,50%"`, are
+  caught after resolution, which only the daemon can do.
+
+  **The daemon turns the curve into an ordinary path annotation.** The shaft is a
+  quadratic curve sampled into segments, the head is two barbs retracing the tip so one
+  stroked polyline draws the whole thing, and from there it is a `draw` path: the contrast
+  picker scores along the stroke, the scroll watcher moves every vertex, TTLs sweep it,
+  and the renderers never learn arrows exist, which is what keeps the Linux and Windows
+  ports at zero additional work. The geometry lives in `arin_core::arrow` with the head
+  proportional to the arrow and clamped, for the same reason colour is resolved in the
+  daemon: three renderers should not hold three opinions about what an arrow looks like.
+
+  **`PROTOCOL_VERSION` is 0.2**, the first bump since the wire format existed, and it is
+  the additive case the versioning rule was written for: majors must match, minors ride
+  along, and a 0.1 daemon answers the one message it does not know with an error rather
+  than closing the connection.
+
+- **A text box can be a `note` or a `guide`.** The distinction is what the text is for.
+  A note is an explanation read beside something at leisure, and stays the quiet default.
+  A guide is an instruction read at a glance by somebody about to act, so it is drawn
+  larger, centred, and framed harder, because it competes with a whole screen for
+  attention mid-action.
+
+  **Semantic rather than typographic, on purpose.** The wire carries intent and the
+  renderer decides what it looks like, the same split that keeps colour out of clients'
+  hands. Raw font sizes on the wire would make every client a typographer and every
+  renderer a chance to drift, and a taste knob invites a model to fiddle where it should
+  state what it means. `style` on the `textbox` message, `--style` on `arin annotate`,
+  and `style` on the `annotate` MCP tool, whose description tells a model to pick by
+  intent.
+
+  **Both styles changed clothes.** Text boxes are set in Chalkboard SE now, a handwritten
+  face that ships with macOS, because Arin is the chalk and its writing should look
+  written rather than typeset, and both sizes went up, 13pt to 15 for a note and 22 for a
+  guide. The box is glass rather than the dark plate: a translucent material tinted by
+  the annotation colour, a sheen brightest at the top edge, continuously curved corners,
+  a soft shadow lifting it off the content, and a glow behind it in the mark's own
+  colour, slightly stronger on a guide, so the box reads as lit the way the orb is. A
+  layer casts one shadow, so the glow and the lift are two nested layers, which is worth
+  knowing before looking for one shadow with two colours. The ink carries its own
+  shadow, so legibility stops depending on what happens to be behind the box.
+
+  **The glass really blurs what is behind it, softly.** Sampling behind the window is a
+  thing only a view can do, so a text box's material is an `NSVisualEffectView` with the
+  HUD material, forced `Active` because the overlay panel never becomes key and a
+  material left following the window's state would render flat forever. AppKit exposes
+  no blur radius, so the blur is softened the only way it can be: the material is drawn
+  at about two thirds opacity, `BLUR_STRENGTH` in `arin-mac`, and the sharp scene blends
+  back through the rest. Softening a view fades everything in it, so the rim, the sheen,
+  and the text ride a second view above the material at full strength.
+
+  The box's shadows could not come along either way: subviews composite above every
+  layer in a panel, so the glow and the lift stay in the layer tree, cast by a rounded
+  plate the glass covers, whose dark fill also deepens the material enough that light
+  ink stays readable over a bright screen.
+
+  The cost of the views is bookkeeping. Every mark used to be one layer in one map, and
+  a text box is now a layer and a pair of views, removed together on redraw, clear,
+  clear-all, and display change. Forgetting one leaves an empty pane of glass nothing
+  can clear, which is why the map's doc comment says exactly that. `CATextLayer` falls
+  back to the system face if the handwritten font is ever missing, so the draw cannot
+  fail on typography.
+
+  On the command line, `arin arrow <from> <to>` takes `x,y`, a name, or a percentage pair
+  for either end, `--bow` or `--straight`, and the `--width`, `--color`, `--ttl` and
+  `--hold` the other drawing commands have. Over MCP, `draw_arrow` teaches the percentage
+  form for both ends and which end grows the head, with the instruction tests pinning
+  both, and the server instructions now name the occasion: draw an arrow when one place
+  leads to another.
+
 ### Fixed
 
 - **The daemon failed to build on Linux.** `serve` read `read_browser_tabs` out of the config

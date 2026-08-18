@@ -37,8 +37,8 @@ mod version;
 
 pub use anchor::Anchor;
 pub use client::{
-    AwaitWindow, Clear, ClientMessage, Draw, Focus, Highlight, HighlightTarget, Point, PointTarget,
-    SessionStart, StrokeStyle, Textbox,
+    Arrow, ArrowEnd, ArrowTarget, AwaitWindow, Clear, ClientMessage, Draw, Focus, Highlight,
+    HighlightTarget, Point, PointTarget, SessionStart, StrokeStyle, Textbox, TextboxStyle,
 };
 pub use daemon::{
     Ack, Activated, DaemonMessage, ErrorCode, Invalidated, InvalidationReason, ProtocolError,
