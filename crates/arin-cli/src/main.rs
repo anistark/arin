@@ -57,6 +57,7 @@ fn main() -> Result<()> {
             color,
             palette,
             grounding_consent,
+            style,
             allow_activation,
             read_browser_tabs,
             no_adaptive_color,
@@ -64,6 +65,9 @@ fn main() -> Result<()> {
         } => {
             config.resolver = resolver;
             config.adaptive_color = !no_adaptive_color;
+            if let Some(style) = style {
+                config.mark_style = style.into();
+            }
             config.allow_activation = allow_activation;
             config.read_browser_tabs = read_browser_tabs;
             config.palette = configured_palette(color.as_deref(), palette.as_deref())?;

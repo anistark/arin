@@ -50,6 +50,12 @@ pub struct Config {
     ///
     /// Blue is refused wherever this is built, because it belongs to the orb.
     pub palette: crate::contrast::Palette,
+    /// How marks are drawn: by hand, or against a straightedge.
+    ///
+    /// Sits beside the palette rather than on the wire for the palette's reason. This is
+    /// how a mark looks rather than what it means, so it belongs to whoever is looking at
+    /// the screen and not to the client that asked for it. See [`crate::sketch::MarkStyle`].
+    pub mark_style: crate::sketch::MarkStyle,
     /// Whether a client may make the daemon look at the screen to ground a query.
     ///
     /// The capability split. Drawing is open to any peer that passes the uid check, because
@@ -119,6 +125,9 @@ impl Default for Config {
             resolver: None,
             adaptive_color: true,
             palette: crate::contrast::Palette::default(),
+            // Arin is the chalk. Arrows already bow because that is how a person draws
+            // one, and text is set in a hand, so a ruled rectangle was the odd mark out.
+            mark_style: crate::sketch::MarkStyle::Sketch,
             // Ask, and with nobody to ask the answer is no. A gate that opens when nobody
             // is watching is not a gate.
             grounding: crate::consent::Consent::Ask,

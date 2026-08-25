@@ -6,6 +6,7 @@ use crate::contrast::{self, Footprint};
 use crate::error::{Error, Result};
 use crate::policy::{OrbState, Rendering};
 use crate::session::Session;
+use crate::sketch::{self, MarkStyle};
 use arin_protocol::{
     Ack, Anchor, AnnotationId, ArrowEnd, ArrowTarget, ClientMessage, DaemonMessage, DisplayId,
     Envelope, Highlight, HighlightTarget, LogicalPoint, LogicalRect, Point, PointTarget, SessionId,
@@ -106,7 +107,7 @@ impl Connection {
                 let session = self.require_session()?;
                 let display = self.daemon.display(draw.display_id)?;
                 let points: Vec<LogicalPoint> = draw.points().collect();
-                let bounds = bounding_rect(&points);
+                let bounds = LogicalRect::containing(&points);
                 let display_id = draw.display_id;
                 let path = points.clone();
                 let stroke_width = draw
@@ -164,7 +165,7 @@ impl Connection {
                 }
                 let bow = arrow.bow.unwrap_or(crate::arrow::NATURAL_BOW);
                 let points = crate::arrow::path(from, to, bow);
-                let bounds = bounding_rect(&points);
+                let bounds = LogicalRect::containing(&points);
                 let stroke_width = arrow
                     .style
                     .as_ref()
@@ -291,20 +292,33 @@ impl Connection {
             }
         };
 
-        let look = self.daemon.appearance(
-            None,
-            highlight.display_id,
-            &Footprint::Outline {
+        // A sketched loop sits outside the region and cuts its corners, so its ink is
+        // nowhere near the four edge bands a ruled outline is sampled along. The anchor
+        // stays the region either way: it is what the mark is about, and what a scroll
+        // check reads to decide the mark is still on it.
+        let path = match self.daemon.config.mark_style {
+            MarkStyle::Sketch => Some(sketch::encircle(rect)),
+            MarkStyle::Ruled => None,
+        };
+        let footprint = match &path {
+            Some(points) => Footprint::Path {
+                points: points.clone(),
+                width: contrast::STROKE_WIDTH,
+            },
+            None => Footprint::Outline {
                 rect,
                 width: contrast::STROKE_WIDTH,
             },
-            rect,
-        );
+        };
+        let look = self
+            .daemon
+            .appearance(None, highlight.display_id, &footprint, rect);
         let annotation = Annotation::new(
             session,
             Anchor::new(rect, highlight.display_id),
             AnnotationKind::Highlight {
                 label: highlight.label,
+                path,
             },
         )
         .with_ttl(self.daemon.ttl_for(highlight.ttl_ms))
@@ -556,28 +570,6 @@ impl Drop for Connection {
 /// A square region centred on a point, for uncertain resolutions.
 fn region_around(point: LogicalPoint, size: f64) -> LogicalRect {
     LogicalRect::new(point.x - size / 2.0, point.y - size / 2.0, size, size)
-}
-
-/// The smallest rect containing every point in a path.
-fn bounding_rect(points: &[LogicalPoint]) -> LogicalRect {
-    let Some(first) = points.first() else {
-        return LogicalRect::new(0.0, 0.0, 1.0, 1.0);
-    };
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x, first.y, first.x, first.y);
-    for p in points {
-        min_x = min_x.min(p.x);
-        min_y = min_y.min(p.y);
-        max_x = max_x.max(p.x);
-        max_y = max_y.max(p.y);
-    }
-    // A perfectly straight path has zero extent in one axis, which is not a drawable
-    // rect. Widen it rather than emit an invalid anchor.
-    LogicalRect::new(
-        min_x,
-        min_y,
-        (max_x - min_x).max(1.0),
-        (max_y - min_y).max(1.0),
-    )
 }
 
 /// Add where else to look to a resolver failure, when there is anywhere else.
