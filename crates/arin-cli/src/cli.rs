@@ -169,6 +169,17 @@ pub(crate) enum Command {
         #[arg(long, value_name = "HEX,HEX,...", env = "ARIN_PALETTE")]
         palette: Option<String>,
 
+        /// How marks are drawn: by hand, or against a straightedge.
+        ///
+        /// `sketch` circles a region the way somebody would with a pen, with the wobble
+        /// and the crossed ends that come with one. `ruled` draws the plain rectangle.
+        ///
+        /// Yours to choose rather than your clients'. This is how a mark looks rather than
+        /// what it means, so it sits with `--color` and `--palette` and no client can
+        /// override it.
+        #[arg(long, value_enum, value_name = "sketch|ruled", env = "ARIN_MARK_STYLE")]
+        style: Option<MarkStyleArg>,
+
         /// Whether a client may make Arin look at the screen to ground a query.
         ///
         /// `ask` prompts you the first time and remembers your answer for as long as you
@@ -550,6 +561,24 @@ impl Target {
             bail!("--ttl wants a positive number of seconds, got {seconds}");
         }
         Ok(Some(((seconds * 1000.0).ceil() as u64).max(1)))
+    }
+}
+
+/// How marks are drawn, as the flag spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum MarkStyleArg {
+    /// Circled by hand, wobble and crossed ends included. The default.
+    Sketch,
+    /// Outlined against a straightedge: a plain rectangle.
+    Ruled,
+}
+
+impl From<MarkStyleArg> for arin_core::MarkStyle {
+    fn from(style: MarkStyleArg) -> Self {
+        match style {
+            MarkStyleArg::Sketch => Self::Sketch,
+            MarkStyleArg::Ruled => Self::Ruled,
+        }
     }
 }
 

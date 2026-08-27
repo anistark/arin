@@ -4,8 +4,9 @@
 //! daemon is exercised here through the platform traits, on any target, in milliseconds.
 
 use arin_core::{
-    Annotation, Approver, Capture, Config, Connection, Consent, Daemon, Decision, Error, Frame,
-    OrbState, Renderer, Rendering, Resolution, Resolver, Result, Rgb, ScrollWatcher,
+    Annotation, AnnotationKind, Approver, Capture, Config, Connection, Consent, Daemon, Decision,
+    Error, Frame, MarkStyle, OrbState, Renderer, Rendering, Resolution, Resolver, Result, Rgb,
+    ScrollWatcher,
 };
 use arin_protocol::*;
 use futures::future::BoxFuture;
@@ -24,6 +25,9 @@ struct FakeRenderer {
     /// Where each annotation was when it was last drawn, which is how a test sees a mark
     /// move without reaching inside the daemon's state.
     anchors: Mutex<std::collections::HashMap<AnnotationId, LogicalRect>>,
+    /// What each annotation was, in draw order, for the tests that care what a message
+    /// turned into rather than only that something was drawn.
+    kinds: Mutex<Vec<AnnotationKind>>,
 }
 
 impl Renderer for FakeRenderer {
@@ -38,6 +42,7 @@ impl Renderer for FakeRenderer {
     fn draw(&self, annotation: &Annotation) -> Result<()> {
         self.drawn.lock().unwrap().push(annotation.id.clone());
         self.colors.lock().unwrap().push(annotation.color);
+        self.kinds.lock().unwrap().push(annotation.kind.clone());
         self.anchors
             .lock()
             .unwrap()
@@ -1991,4 +1996,66 @@ async fn a_blank_application_name_is_refused_before_anything_moves() {
             .is_err()
     );
     assert!(focus.asked.lock().unwrap().is_empty());
+}
+
+// how a region is outlined
+
+const REGION: LogicalRect = LogicalRect::new(600.0, 300.0, 340.0, 90.0);
+
+/// The loop a sketched highlight was drawn with.
+async fn outline_of(style: MarkStyle) -> (Option<Vec<LogicalPoint>>, LogicalRect) {
+    let (daemon, renderer) = daemon_with(Config {
+        mark_style: style,
+        ..Config::with_socket_path("/tmp/arin-test.sock")
+    });
+    let mut conn = started(daemon).await;
+    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
+        REGION, DISPLAY,
+    ))))
+    .await
+    .unwrap();
+
+    let kinds = renderer.kinds.lock().unwrap();
+    let AnnotationKind::Highlight { path, .. } = kinds.first().expect("a highlight was drawn")
+    else {
+        panic!("a highlight arrived as something else");
+    };
+    let anchor = renderer.anchors.lock().unwrap().values().copied().next();
+    (path.clone(), anchor.expect("the mark was anchored"))
+}
+
+/// The default. A renderer is handed the loop rather than the rect, so it never has to
+/// know how a circled region is shaped.
+#[tokio::test]
+async fn a_sketched_highlight_reaches_the_renderer_as_a_loop() {
+    let (path, _) = outline_of(MarkStyle::Sketch).await;
+    let path = path.expect("a sketched highlight carries its loop");
+
+    assert!(
+        path.len() > 8,
+        "a loop needs enough vertices to read as one"
+    );
+    let ink = LogicalRect::containing(&path);
+    assert!(ink.x < REGION.x, "the loop cuts into what it circles");
+    assert!(ink.y < REGION.y);
+    assert!(ink.x + ink.width > REGION.x + REGION.width);
+    assert!(ink.y + ink.height > REGION.y + REGION.height);
+}
+
+/// The rectangle a renderer can draw from the anchor alone, so nothing is sent for it.
+#[tokio::test]
+async fn a_ruled_highlight_reaches_the_renderer_as_its_anchor() {
+    let (path, anchor) = outline_of(MarkStyle::Ruled).await;
+    assert_eq!(path, None);
+    assert_eq!(anchor, REGION);
+}
+
+/// The loop is drawn outside the region, and the anchor stays the region regardless. It
+/// is what the mark is about, what a caption is placed against, and what the scroll check
+/// reads to decide the mark is still on the thing it was put on.
+#[tokio::test]
+async fn a_sketched_highlight_is_still_anchored_to_the_region_it_circles() {
+    let (path, anchor) = outline_of(MarkStyle::Sketch).await;
+    assert_eq!(anchor, REGION);
+    assert_ne!(LogicalRect::containing(&path.unwrap()), REGION);
 }

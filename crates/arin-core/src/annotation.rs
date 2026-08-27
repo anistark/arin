@@ -91,14 +91,17 @@ impl Annotation {
                 at.x += shift.dx;
                 at.y += shift.dy;
             }
-            AnnotationKind::Path { points, .. } => {
+            AnnotationKind::Path { points, .. }
+            | AnnotationKind::Highlight {
+                path: Some(points), ..
+            } => {
                 for point in points {
                     point.x += shift.dx;
                     point.y += shift.dy;
                 }
             }
-            // Both are drawn from the anchor alone, which has already moved.
-            AnnotationKind::Highlight { .. } | AnnotationKind::Textbox { .. } => {}
+            // Drawn from the anchor alone, which has already moved.
+            AnnotationKind::Highlight { path: None, .. } | AnnotationKind::Textbox { .. } => {}
         }
     }
 
@@ -146,6 +149,14 @@ pub enum AnnotationKind {
     Highlight {
         /// Optional caption.
         label: Option<String>,
+        /// The loop to stroke, when the region is circled by hand.
+        ///
+        /// `None` outlines the anchor, which is the ruled rectangle a renderer can draw
+        /// from the anchor alone. A sketched loop cannot be, so the daemon computes it
+        /// once and hands it over as vertices, exactly as it does for an arrow. Computing
+        /// it once is also what keeps it still: a shape rebuilt on each redraw would
+        /// re-roll its wobble every time the content under it scrolled.
+        path: Option<Vec<LogicalPoint>>,
     },
     /// A block of explanatory text. Display only.
     Textbox {
@@ -203,7 +214,10 @@ mod tests {
         let annotation = Annotation::new(
             next_session_id(),
             anchor(),
-            AnnotationKind::Highlight { label: None },
+            AnnotationKind::Highlight {
+                label: None,
+                path: None,
+            },
         );
         assert!(!annotation.is_expired(annotation.created + Duration::from_secs(86_400)));
     }
@@ -256,13 +270,51 @@ mod tests {
         );
     }
 
+    /// A sketched highlight carries its own loop, so following a scroll moves the ink
+    /// rather than redrawing it. Recomputing the shape against the moved anchor would
+    /// re-roll its wobble on every tick, and the mark would shimmer for as long as the
+    /// page kept moving.
+    #[test]
+    fn moving_a_sketched_highlight_moves_its_loop() {
+        let rect = LogicalRect::new(100.0, 200.0, 340.0, 90.0);
+        let drawn = crate::sketch::encircle(rect);
+        let mut annotation = Annotation::new(
+            next_session_id(),
+            Anchor::new(rect, DisplayId(1)),
+            AnnotationKind::Highlight {
+                label: None,
+                path: Some(drawn.clone()),
+            },
+        );
+
+        annotation.translate(Shift {
+            dx: 12.0,
+            dy: -40.0,
+        });
+
+        let AnnotationKind::Highlight {
+            path: Some(moved), ..
+        } = annotation.kind
+        else {
+            panic!("expected a sketched highlight");
+        };
+        let expected: Vec<LogicalPoint> = drawn
+            .iter()
+            .map(|p| LogicalPoint::new(p.x + 12.0, p.y - 40.0))
+            .collect();
+        assert_eq!(moved, expected, "the loop did not travel with its anchor");
+    }
+
     #[test]
     fn a_mark_carried_off_the_edge_is_no_longer_on_screen() {
         const DISPLAY: [f64; 2] = [1728.0, 1117.0];
         let mut annotation = Annotation::new(
             next_session_id(),
             Anchor::new(LogicalRect::new(100.0, 40.0, 200.0, 60.0), DisplayId(1)),
-            AnnotationKind::Highlight { label: None },
+            AnnotationKind::Highlight {
+                label: None,
+                path: None,
+            },
         );
         assert!(annotation.is_on_screen(DISPLAY));
 
@@ -280,7 +332,10 @@ mod tests {
         let annotation = Annotation::new(
             next_session_id(),
             anchor(),
-            AnnotationKind::Highlight { label: None },
+            AnnotationKind::Highlight {
+                label: None,
+                path: None,
+            },
         );
         assert_eq!(annotation.fingerprint(), None);
 
@@ -295,7 +350,10 @@ mod tests {
         let annotation = Annotation::new(
             next_session_id(),
             anchor(),
-            AnnotationKind::Highlight { label: None },
+            AnnotationKind::Highlight {
+                label: None,
+                path: None,
+            },
         )
         .with_ttl(Some(Duration::from_secs(10)));
 

@@ -52,12 +52,17 @@ arin clear
 claude mcp add arin -- arin mcp
 ```
 
-Now ask your agent to explain something on screen. It has four tools: point at a position,
-highlight a region, annotate with a block of text, and clear. [MCP](/docs/mcp/) has the
-details, and [CLI](/docs/cli/) is the faster way to explore what the marks look like.
+Now ask your agent to explain something on screen. It can point at a position, highlight a
+region, annotate with a block of text, draw an arrow, and clear what it drew.
+[MCP](/docs/mcp/) has the details, and [CLI](/docs/cli/) is the faster way to explore what
+the marks look like.
+
+Not sure what to ask for? [Prompts](/docs/prompts/) is a page of things to try.
 
 ## What next
 
+- **[Prompts](/docs/prompts/)** for what to actually ask an agent, and the phrasing that
+  works.
 - **[Install](/docs/install/)** for the other ways in, starting at login, and uninstalling.
 - **[CLI](/docs/cli/)** for every mark Arin can draw.
 - **[Resolvers](/docs/resolvers/)** if you want to say "the Submit button" instead of a

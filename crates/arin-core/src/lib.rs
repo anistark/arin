@@ -42,6 +42,7 @@ pub mod scroll;
 pub mod server;
 pub mod session;
 pub mod signature;
+pub mod sketch;
 pub mod traits;
 
 pub use annotation::{Annotation, AnnotationKind};
@@ -61,6 +62,7 @@ pub use scroll::ScrollWatcher;
 pub use server::Server;
 pub use session::Session;
 pub use signature::{Shift, Signature};
+pub use sketch::MarkStyle;
 pub use traits::{Approver, Capture, DEFAULT_DETAIL, Focus, Frame, Renderer, Resolution, Resolver};
 
 /// The product name, in the one place it is spelled.
