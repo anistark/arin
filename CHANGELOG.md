@@ -17,8 +17,8 @@ failure it exists to prevent.
 
 Two things it is worth knowing before reading the versions below.
 
-**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.5 while
-the protocol they describe is still at 0.1, and the gap will keep widening. A Rust API change bumps the crate; a wire format
+**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.6 while
+the protocol they describe is at 0.2, and the gap will keep widening. A Rust API change bumps the crate; a wire format
 change bumps `PROTOCOL_VERSION`. The protocol is not frozen, and freezing it may wait for a
 second renderer rather than landing at 1.0, since one implementation cannot prove a format
 is a format.
@@ -26,7 +26,7 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-07
 
 - **You can draw on the screen yourself.** `Marker` in the menu bar, or `Cmd+Shift+M`
   from anywhere, turns the pointer into a marker: drag to draw on the overlay, right
@@ -1266,7 +1266,8 @@ macOS only. Linux and Windows are planned and nothing of either is in this relea
 core and the protocol build and test on Linux with no platform crate in the tree, which is
 what keeps that port cheap to pick up rather than evidence it works.
 
-[Unreleased]: https://github.com/anistark/arin/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/anistark/arin/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/anistark/arin/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/anistark/arin/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/anistark/arin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/anistark/arin/compare/v0.3.0...v0.4.0
