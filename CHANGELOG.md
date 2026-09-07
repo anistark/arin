@@ -17,8 +17,8 @@ failure it exists to prevent.
 
 Two things it is worth knowing before reading the versions below.
 
-**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.5 while
-the protocol they describe is still at 0.1, and the gap will keep widening. A Rust API change bumps the crate; a wire format
+**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.6 while
+the protocol they describe is at 0.2, and the gap will keep widening. A Rust API change bumps the crate; a wire format
 change bumps `PROTOCOL_VERSION`. The protocol is not frozen, and freezing it may wait for a
 second renderer rather than landing at 1.0, since one implementation cannot prove a format
 is a format.
@@ -26,8 +26,13 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-07
 
+- **You can draw on the screen yourself.** `Marker` in the menu bar, or `Cmd+Shift+M`
+  from anywhere, turns the pointer into a marker: drag to draw on the overlay, right
+  click, or click with two fingers on a trackpad, to wipe what you drew, and switch it
+  off the same way to get your mouse back. What you drew stays up until you clear it,
+  and `Clear annotations` takes it along with the agent's marks.
 - **Arin can draw arrows.** `arin arrow 120,600 412,88` on the command line, a
   `draw_arrow` MCP tool, and an `arrow` message on the wire. Curved by default,
   `--straight` or `bow: 0` for a ruled one, and either end can be a named position:
@@ -42,6 +47,43 @@ is a format.
   back. This is a daemon setting like `--color`: clients cannot ask for one or the other.
 
 ### Added
+
+- **A marker, for the person at the screen.** Everything else on the overlay is drawn by
+  an agent. `Marker` in the menu bar, with `Cmd+Shift+M` as the chord, is the one thing
+  on it a person draws: while it is on, the pointer becomes a tip in the ink's colour and
+  a drag leaves a stroke where it went. Strokes are smoothed through the midpoints of the
+  mouse samples rather than drawn as the polyline they arrive as, and a click leaves a
+  dot.
+
+  **A stroke is not an annotation.** It has no session, no anchor, and no place in the
+  daemon's state, so nothing on the wire can move it, expire it, or clear it, and the
+  scroll watcher leaves it where it was drawn: it is a mark on the glass rather than on
+  the content, which is what somebody drawing over a screen expects. It is cleared by the
+  person who drew it. A right click while the marker is on, which is what a two finger
+  click on a trackpad sends, wipes the strokes and nothing else. `Clear annotations` and
+  `Cmd+Shift+K` take them along with the agent's marks, since Clear means the overlay and
+  not one author's share of it. Switching the marker off leaves the strokes up, so a
+  person can draw around a thing and then go and click it.
+
+  **The click through rule bends and does not break.** The overlay ignores mouse events
+  by design, and while the marker is on it stops, which is the whole mechanism: once a
+  window has been told not to ignore mouse events it receives every click in its frame,
+  transparent or not, and the overlay's content view draws with them. Receiving a click
+  is the ordinary thing a window does and is not input synthesis, so `just draw-only`
+  stays clean and no new permission is asked for. A panel that takes every click and sits
+  above the menu bar would have covered the one place the marker can be switched off
+  from, so for as long as it is on the panel drops under the Dock and the menu bar, and
+  comes back up when it goes off. Marks under either are hidden in between.
+
+  **The marker draws in the palette's first choice**, handed to the renderer by the binary
+  at startup, so a person's strokes sit in the same family as the agent's marks without
+  the renderer holding an opinion about colour. The pointer is drawn in code from the same
+  raster helper the menu bar icon now uses, a disc in the ink's colour inside a dark ring
+  and a light one so it stays visible over anything, with the hotspot at the centre.
+
+  Each chord is bound on its own now, so another app holding one of them, or a second
+  Arin holding both, costs only what it holds. Only neither binding is reported as the
+  clear chord failing used to be, and the menu bar works either way.
 
 - **An `arrow` message, from one place to another.** The one mark with a direction in it:
   a point says look here, a highlight says look at this, and an arrow says this leads to
@@ -180,6 +222,13 @@ is a format.
   have its own label sitting on top of it.
 
 ### Fixed
+
+- **The Nix workflow's module step failed on a shallow checkout.** The nix-darwin module is
+  evaluated through `git+file://`, and the Determinate Nix the installer action now puts on
+  the runner refuses a shallow repository for that input rather than leaving `revCount`
+  out. The default checkout is one commit deep, so the step could not pass. The build job
+  now checks out with history. Every step before it, the flake check, the build, the bundle
+  check and `nix run`, was already green.
 
 - **The daemon failed to build on Linux.** `serve` read `read_browser_tabs` out of the config
   before handing the config to the daemon, and the only thing that reads it back is behind
@@ -1292,7 +1341,8 @@ macOS only. Linux and Windows are planned and nothing of either is in this relea
 core and the protocol build and test on Linux with no platform crate in the tree, which is
 what keeps that port cheap to pick up rather than evidence it works.
 
-[Unreleased]: https://github.com/anistark/arin/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/anistark/arin/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/anistark/arin/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/anistark/arin/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/anistark/arin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/anistark/arin/compare/v0.3.0...v0.4.0

@@ -44,6 +44,22 @@ disable` stops it starting at login and leaves the app alone.
 [Install](/docs/install/) has the rest, including what happens with Nix, which manages the
 same agent through `services.arin.enable` instead.
 
+## Drawing on the screen yourself
+
+Everything else on the overlay is drawn by an agent. **Marker**, in the menu bar or with
+`Cmd+Shift+M` from anywhere, is the one thing on it you draw. While it is on, the pointer
+becomes a tip in the marks' colour and a drag leaves a stroke wherever it goes. A right
+click, or a two finger click on a trackpad, wipes what you drew. Switch it off the same way
+to get your mouse back, and what you drew stays up until you clear it.
+
+While the marker is on, the overlay takes every click, so nothing underneath it can be
+clicked until it is off. The menu bar and the Dock stay reachable, which is how you switch
+it off without the keyboard. Marks under either are hidden for as long as it is on.
+
+Your strokes are not annotations. No client can move them, expire them, or clear them, and
+they do not follow content that scrolls: they are ink on the glass rather than on the page.
+`Clear annotations`, or `Cmd+Shift+K`, takes them along with the agent's marks.
+
 ## Checking the screen recording permission
 
 ```sh

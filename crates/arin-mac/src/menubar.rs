@@ -4,6 +4,10 @@
 //! overlay is click through by design, so it cannot hold a button, and a person who
 //! wants the marks gone needs somewhere to go that is not the agent that drew them.
 //!
+//! The marker switch lives here too, and it is the one thing that suspends that: while
+//! the marker is on, the overlay takes the mouse so the person can draw on it. The panel
+//! ducks under the menu bar for the duration, which is what keeps this menu the way back.
+//!
 //! # The icon
 //!
 //! Drawn rather than loaded. It is the orb primitive with its features disabled: no
@@ -11,18 +15,15 @@
 //! and the system tints it. A blue orb in the menu bar looks wrong in dark mode, and an
 //! image file would be one more thing to keep in step with the palette.
 
+use crate::{bitmap, host};
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar,
-    NSStatusItem, NSVariableStatusItemLength,
-};
-use objc2_core_foundation::{CFData, CGSize};
-use objc2_core_graphics::{
-    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
+    NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSEventModifierFlags, NSImage,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use std::sync::OnceLock;
@@ -72,6 +73,7 @@ const TITLE_INDEX: isize = 0;
 const STATUS_INDEX: isize = 1;
 const PERMISSION_INDEX: isize = 2;
 const GROUNDING_INDEX: isize = 3;
+const MARKER_INDEX: isize = 6;
 
 /// Retitle a menu item, doing nothing if the menu has been rearranged underneath us.
 fn set_title(menu: &NSMenu, index: isize, title: &str) {
@@ -197,18 +199,36 @@ define_class!(
             if let Some(item) = menu.itemAtIndex(GROUNDING_INDEX) {
                 item.setEnabled(grant.is_some());
             }
+
+            // Read off the host rather than remembered here, so the check mark agrees
+            // with a hotkey toggle the menu never saw.
+            if let Some(item) = menu.itemAtIndex(MARKER_INDEX) {
+                item.setState(if host::marker_is_on(self.mtm()) {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            }
         }
     }
 
     impl Actions {
         #[unsafe(method(clearAnnotations:))]
         fn clear_annotations(&self, _sender: Option<&AnyObject>) {
+            // The person's own strokes go with the agent's marks. Clear means the
+            // overlay, not one author's share of it.
+            host::clear_marker();
             match CLEAR.get() {
                 Some(clear) => clear(),
                 // The menu is built before the daemon, so this is reachable only if the
                 // daemon failed to start. Saying so beats a menu item that does nothing.
                 None => tracing::warn!("clear requested before the daemon was ready"),
             }
+        }
+
+        #[unsafe(method(toggleMarker:))]
+        fn toggle_marker(&self, _sender: Option<&AnyObject>) {
+            host::toggle_marker();
         }
 
         #[unsafe(method(revokeGrounding:))]
@@ -323,11 +343,23 @@ impl MenuBar {
         unsafe { clear.setTarget(Some(&actions)) };
         menu.addItem(&clear);
 
+        // Index 6, its check mark rewritten every time the menu opens. The chord is shown
+        // for the same reason Clear's is, and is backed by the same global listener.
+        let marker = menu_item(mtm, "Marker", Some(sel!(toggleMarker:)), "m");
+        marker.setKeyEquivalentModifierMask(
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        );
+        if let Some(icon) = marker_icon() {
+            marker.setImage(Some(&icon));
+        }
+        unsafe { marker.setTarget(Some(&actions)) };
+        menu.addItem(&marker);
+
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
         // Below the separator with Quit rather than at the top, where the convention would
-        // put it. The top four rows are positional, rewritten by index every time the menu
-        // opens, and an item above them shifts all four.
+        // put it. The rows above are positional, rewritten by index every time the menu
+        // opens, and an item above them shifts every one.
         let about = menu_item(mtm, "About Arin", Some(sel!(showAbout:)), "");
         unsafe { about.setTarget(Some(&actions)) };
         menu.addItem(&about);
@@ -376,58 +408,34 @@ fn menu_item(
 fn template_icon() -> Option<Retained<NSImage>> {
     const SIZE: usize = 36;
     const POINTS: f64 = 18.0;
-    let centre = (SIZE as f64 - 1.0) / 2.0;
     // Tighter than the on screen orb: below the featured size the halo pulls in, which
     // at this scale is the difference between a dot and a smudge.
     let radius = SIZE as f64 * 0.36;
 
-    let mut pixels = vec![0u8; SIZE * SIZE * 4];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = x as f64 - centre;
-            let dy = y as f64 - centre;
-            let distance = (dx * dx + dy * dy).sqrt() / radius;
-            // Solid core with a short falloff, rather than the wide halo the full size
-            // orb carries.
-            let alpha = if distance <= 0.62 {
-                1.0
-            } else {
-                ((1.0 - distance) / 0.38).clamp(0.0, 1.0)
-            };
-            let idx = (y * SIZE + x) * 4;
-            // Premultiplied black: only the alpha channel carries the shape.
-            pixels[idx + 3] = (alpha * 255.0) as u8;
-        }
-    }
+    bitmap::raster(SIZE, POINTS, |dx, dy| {
+        let distance = (dx * dx + dy * dy).sqrt() / radius;
+        // Solid core with a short falloff, rather than the wide halo the full size orb
+        // carries.
+        let alpha = if distance <= 0.62 {
+            1.0
+        } else {
+            ((1.0 - distance) / 0.38).clamp(0.0, 1.0)
+        };
+        // Premultiplied black: only the alpha channel carries the shape.
+        [0, 0, 0, (alpha * 255.0) as u8]
+    })
+}
 
-    // SAFETY: the pointer and length describe `pixels`, which CFData copies out of.
-    let data = unsafe { CFData::new(None, pixels.as_ptr(), pixels.len() as isize) }?;
-    let provider = CGDataProvider::with_cf_data(Some(&data))?;
-    let space = CGColorSpace::new_device_rgb()?;
-    // SAFETY: the dimensions, stride, and bitmap info describe the buffer above.
-    let cg = unsafe {
-        CGImage::new(
-            SIZE,
-            SIZE,
-            8,
-            32,
-            SIZE * 4,
-            Some(&space),
-            CGBitmapInfo(CGImageAlphaInfo::PremultipliedLast.0),
-            Some(&provider),
-            std::ptr::null(),
-            true,
-            CGColorRenderingIntent::RenderingIntentDefault,
-        )
-    }?;
-
-    // Sized in points rather than pixels, so the image is drawn at 2x on a Retina panel
-    // instead of being scaled up from a smaller one.
-    Some(NSImage::initWithCGImage_size(
-        NSImage::alloc(),
-        &cg,
-        CGSize::new(POINTS, POINTS),
-    ))
+/// The marker item's icon: a pen tip from the system's symbol set.
+///
+/// A symbol rather than a drawing, unlike the orb beside it in the menu bar. The orb is
+/// Arin's own primitive and has to be drawn, while a pen is a thing the system already
+/// knows how to draw in every appearance, and it says "draw" without a word.
+fn marker_icon() -> Option<Retained<NSImage>> {
+    NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str("pencil.tip"),
+        Some(&NSString::from_str("marker")),
+    )
 }
 
 /// How long a grant has left, in words rather than seconds.

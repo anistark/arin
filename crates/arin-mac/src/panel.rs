@@ -7,20 +7,31 @@
 //!   and Arin never becomes the frontmost application.
 //! - **Click through.** `setIgnoresMouseEvents` means events land on whatever is
 //!   underneath. There are no controls in the overlay, so there is nothing to click.
+//!   The one exception is the marker, which the person switches on themselves: for as
+//!   long as it is on, the panel takes the mouse so they can draw on it, and drops under
+//!   the menu bar and the Dock so the way to switch it off stays reachable.
 //! - **All Spaces, stationary.** The overlay does not travel with a Space switch or
 //!   slide during the transition, and it shows up over full screen apps.
 //! - **Borderless and transparent.** No title bar, no shadow, no background.
 //!
-//! Not one of these needs the Accessibility permission. That is the point.
+//! Not one of these needs the Accessibility permission. That is the point. Nor does
+//! taking the mouse for the marker: a window receiving a click is the ordinary thing a
+//! window does, and nothing here posts one.
 
 use crate::display::Screen;
+use crate::host;
+use crate::marker::Input;
+use arin_protocol::DisplayId;
 use objc2::rc::Retained;
-use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSPanel, NSScreenSaverWindowLevel, NSView,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+use objc2::runtime::AnyObject;
+use objc2::{
+    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
 };
-use objc2_foundation::NSRect;
+use objc2_app_kit::{
+    NSBackingStoreType, NSColor, NSEvent, NSPanel, NSScreenSaverWindowLevel, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+};
+use objc2_foundation::{NSPoint, NSRect};
 use objc2_quartz_core::CALayer;
 
 /// How far above ordinary windows the overlay sits.
@@ -31,11 +42,107 @@ fn overlay_level() -> isize {
     NSScreenSaverWindowLevel - 1
 }
 
+/// Where the overlay sits while the marker is on.
+///
+/// One below the Dock, which is at 20, `kCGDockWindowLevel`, with the menu bar above it
+/// at `NSMainMenuWindowLevel`. A panel that takes every click and covers the menu bar
+/// has just covered the one place the marker can be switched off from, so for as long
+/// as it is on the panel goes under both. AppKit's own name for the Dock's level is
+/// deprecated, which is why the number is written here.
+fn marker_level() -> isize {
+    19
+}
+
+/// What the content view carries: the display its panel covers.
+struct Ivars {
+    display: DisplayId,
+}
+
+define_class!(
+    // SAFETY: NSView has no subclassing requirements beyond the main thread, which the
+    // thread kind enforces, and this type has no Drop.
+    #[unsafe(super(NSView))]
+    #[name = "ArinOverlayView"]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = Ivars]
+    struct OverlayView;
+
+    /// Mouse handling, which only ever runs while the marker is on.
+    ///
+    /// With the marker off, the window ignores mouse events and none of this is reached:
+    /// there is no path by which the overlay takes a click the person did not ask it to.
+    impl OverlayView {
+        /// Every click is a first click. The panel is never key, and a view in a window
+        /// that is not key is asked this before it is handed a mouse down.
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        /// The overlay takes the click itself, whatever subview is under the pointer.
+        /// The only subviews are the glass of a text box, which is display only.
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, _point: NSPoint) -> Option<Retained<NSView>> {
+            Some(Retained::into_super(self.retain()))
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            self.input(Input::Begin(event.locationInWindow()));
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            self.input(Input::Extend(event.locationInWindow()));
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            self.input(Input::End);
+        }
+
+        /// A right click, which is what a two finger click on a trackpad is.
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, _event: &NSEvent) {
+            self.input(Input::Clear);
+        }
+
+        /// Asked by the tracking area whenever the pointer arrives over the panel.
+        #[unsafe(method(cursorUpdate:))]
+        fn cursor_update(&self, _event: &NSEvent) {
+            host::show_marker_cursor(self.mtm());
+        }
+    }
+);
+
+impl OverlayView {
+    fn new(frame: NSRect, display: DisplayId, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars { display });
+        // SAFETY: `initWithFrame:` is NSView's designated initialiser, and the ivars are
+        // set before it runs.
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+
+    /// Hand the mouse to the marker, in this panel's own coordinates.
+    ///
+    /// The window's coordinates are the view's, which are the layer tree's: the view
+    /// fills a borderless window and the root layer fills the view, all with the origin
+    /// at the bottom left. So a location in the window is a point in the layer tree with
+    /// no conversion, which is the one thing that makes drawing where the pointer is a
+    /// matter of handing the number on.
+    fn input(&self, input: Input) {
+        host::marker_input(self.ivars().display, input, self.mtm());
+    }
+}
+
 /// A full screen overlay for one display.
 pub struct Panel {
     screen: Screen,
     panel: Retained<NSPanel>,
+    view: Retained<OverlayView>,
     root: Retained<CALayer>,
+    /// What asks the view for a cursor while the marker is on. Absent while it is off.
+    tracking: Option<Retained<NSTrackingArea>>,
 }
 
 impl Panel {
@@ -68,7 +175,7 @@ impl Panel {
         unsafe { panel.setReleasedWhenClosed(false) };
 
         let bounds = NSRect::new(objc2_foundation::NSPoint::new(0.0, 0.0), screen.frame.size);
-        let view = NSView::initWithFrame(NSView::alloc(mtm), bounds);
+        let view = OverlayView::new(bounds, screen.info.id, mtm);
 
         let root = CALayer::new();
         root.setFrame(bounds);
@@ -90,7 +197,9 @@ impl Panel {
         Self {
             screen,
             panel,
+            view,
             root,
+            tracking: None,
         }
     }
 
@@ -120,6 +229,43 @@ impl Panel {
         self.panel
             .contentView()
             .expect("the panel was built with a content view")
+    }
+
+    /// Hand the mouse to the marker, or give it back.
+    ///
+    /// On, the panel stops ignoring mouse events, and that is the whole of how a click
+    /// reaches [`OverlayView`]: once `setIgnoresMouseEvents` has been called with `false`,
+    /// a window receives every click in its frame, transparent or not. The panel also
+    /// drops to [`marker_level`], so marks under the menu bar or the Dock are hidden for
+    /// as long as the marker is on and come back when it goes off. The tracking area is
+    /// what turns the pointer into a marker tip: the panel is never key, so the cursor
+    /// has to be asked for by an area that is active always.
+    pub fn set_marker(&mut self, on: bool) {
+        self.panel.setIgnoresMouseEvents(!on);
+        self.panel
+            .setLevel(if on { marker_level() } else { overlay_level() });
+        if on {
+            if self.tracking.is_none() {
+                let owner: &AnyObject = &self.view;
+                // SAFETY: the owner answers `cursorUpdate:`, and the panel holds both the
+                // view and the area, so neither outlives the other.
+                let area = unsafe {
+                    NSTrackingArea::initWithRect_options_owner_userInfo(
+                        NSTrackingArea::alloc(),
+                        self.view.bounds(),
+                        NSTrackingAreaOptions::CursorUpdate
+                            | NSTrackingAreaOptions::ActiveAlways
+                            | NSTrackingAreaOptions::InVisibleRect,
+                        Some(owner),
+                        None,
+                    )
+                };
+                self.view.addTrackingArea(&area);
+                self.tracking = Some(area);
+            }
+        } else if let Some(area) = self.tracking.take() {
+            self.view.removeTrackingArea(&area);
+        }
     }
 }
 

@@ -60,7 +60,9 @@ const BODY: &str = "An annotation layer any agent can draw on.\n\n\
      you what it means instead of describing it.\n\n\
      It draws, and does nothing else. It never clicks, types, or scrolls, and the overlay \
      has no buttons in it to click by accident.\n\n\
-     Clear the marks from this menu, or with \u{2318}\u{21e7}K from anywhere.";
+     Clear the marks from this menu, or with \u{2318}\u{21e7}K from anywhere.\n\n\
+     Switch on Marker, here or with \u{2318}\u{21e7}M, to draw on the screen yourself. \
+     A right click wipes what you drew.";
 
 /// The name and the running version, which is the line somebody quotes in a bug report.
 fn title() -> String {
