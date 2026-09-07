@@ -65,7 +65,13 @@ jobs:
     # that platform at all. Worth knowing before anyone relies on the second slice.
     runs-on: macos-latest
     steps:
+      # With history, because the module step below reads the repository through
+      # `git+file://`, and Determinate Nix refuses a shallow repository for that rather
+      # than leaving `revCount` out: "is a shallow Git repository, so 'revCount' is not
+      # available". The default checkout is one commit deep, which is exactly that.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       # Pinned to main because that is how this action is published and versioned tags lag
       # behind the macOS changes it exists to keep up with.

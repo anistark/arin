@@ -223,6 +223,13 @@ is a format.
 
 ### Fixed
 
+- **The Nix workflow's module step failed on a shallow checkout.** The nix-darwin module is
+  evaluated through `git+file://`, and the Determinate Nix the installer action now puts on
+  the runner refuses a shallow repository for that input rather than leaving `revCount`
+  out. The default checkout is one commit deep, so the step could not pass. The build job
+  now checks out with history. Every step before it, the flake check, the build, the bundle
+  check and `nix run`, was already green.
+
 - **The daemon failed to build on Linux.** `serve` read `read_browser_tabs` out of the config
   before handing the config to the daemon, and the only thing that reads it back is behind
   `#[cfg(target_os = "macos")]`. On Linux that binding is dead code, and CI sets
