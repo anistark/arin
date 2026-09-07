@@ -281,3 +281,24 @@ part of the orb rather than as a separate thing. A palette containing one is rej
 startup with the hue range and an explanation, rather than accepted and quietly stripped:
 silently dropping the colour you asked for leaves you watching marks come out amber with
 nothing to explain it.
+
+## Choosing how marks are drawn
+
+`arin highlight` circles a region by hand, the way you would with a pen: an uneven loop
+that sits outside what it marks and crosses itself where it closes. `--style ruled` draws
+the plain rectangle instead.
+
+```sh
+arin daemon --style ruled     # outline regions with a rectangle
+arin daemon --style sketch    # circle them by hand, the default
+```
+
+Reads `ARIN_MARK_STYLE`. Every loop is worked out from the region it goes around, so the
+same region is always circled the same way, and two regions of the same size on one screen
+are not circled identically. A mark that follows scrolling content keeps the shape it was
+drawn with rather than being redrawn as it goes.
+
+**This is yours to set, not your clients'.** It is how a mark looks rather than what it
+means, so it sits with `--color` and `--palette` and nothing sent over the socket can
+override it. What a client does choose is what kind of thing it is drawing, such as `note`
+against `guide` on `arin annotate`.

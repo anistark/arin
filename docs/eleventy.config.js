@@ -71,6 +71,13 @@ const DOCS = [
     description: "Connect Arin to any agent that speaks MCP.",
   },
   {
+    file: "prompts.md",
+    slug: "prompts",
+    section: "Use",
+    title: "Prompts",
+    description: "Things to ask an agent for once Arin is connected, and how to phrase them.",
+  },
+  {
     file: "resolvers.md",
     slug: "resolvers",
     section: "Use",

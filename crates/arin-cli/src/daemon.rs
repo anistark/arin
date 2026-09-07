@@ -215,6 +215,17 @@ fn report_palette(palette: &arin_core::Palette, adaptive: bool) {
     );
 }
 
+/// Say how marks are drawn, when it is not how they are drawn by default.
+///
+/// [`report_palette`]'s reason. "Why are my highlights rectangles" is a question the daemon
+/// can answer and the person asking cannot, months after the flag was set.
+fn report_mark_style(style: arin_core::MarkStyle) {
+    if style == arin_core::MarkStyle::Sketch {
+        return;
+    }
+    tracing::info!("outlining regions with a rectangle rather than circling them");
+}
+
 async fn serve(
     config: Config,
     renderer: Arc<dyn Renderer>,
@@ -321,6 +332,7 @@ async fn serve(
 
     tracing::info!(socket = %server.socket_path().display(), "arin daemon ready");
     report_palette(&daemon.config().palette, daemon.config().adaptive_color);
+    report_mark_style(daemon.config().mark_style);
 
     let watcher = tokio::spawn(watch_for_scrolling(Arc::clone(&daemon)));
     let expiry = tokio::spawn(expire_annotations(Arc::clone(&daemon)));

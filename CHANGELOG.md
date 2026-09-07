@@ -41,6 +41,10 @@ is a format.
   `arin annotate`, and `style` on the `textbox` message and the `annotate` MCP tool,
   draws an instruction larger and centred. Both styles are set in a handwritten face on
   a glass panel now, rather than 13pt system type on a dark plate.
+- **Highlights are circled by hand.** `arin highlight` now draws an uneven loop around a
+  region rather than a rectangle, sitting outside what it marks and crossing itself where
+  it closes. `arin daemon --style ruled`, or `ARIN_MARK_STYLE=ruled`, gives the rectangle
+  back. This is a daemon setting like `--color`: clients cannot ask for one or the other.
 
 ### Added
 
@@ -173,6 +177,50 @@ is a format.
   both, and the server instructions now name the occasion: draw an arrow when one place
   leads to another.
 
+- **A highlight is circled by hand, and `--style` picks which.** `arin-core/src/sketch.rs`
+  turns a region into a loop drawn around it: a superellipse sampled at 72 points, with
+  three low-frequency sinusoids deviating it off that curve. Sinusoids rather than
+  per-vertex randomness because randomness reads as static, and at frequencies that are
+  not whole numbers so the loop does not repeat itself once a turn.
+
+  **The ends cross, which took more than overshooting.** Carrying on past the start is
+  what a hand does, but on its own it lays the tail back down along the head and the two
+  run parallel: two arms offset the same way never meet however far the pen travels. The
+  loop opens outward as it goes round and then dives back inside over the overshoot, so
+  the closing stroke passes through the opening one. `the_ends_of_the_stroke_cross`
+  asserts a real segment intersection rather than a distance between the endpoints,
+  because a distance check passes for exactly the shape this is here to rule out.
+
+  **The shoulders flatten as the region gets longer.** An ellipse drawn around a line of
+  text has to balloon a long way above and below it to clear the ends, and what it
+  balloons into is the lines above and below. The superellipse exponent runs from 2 at
+  square to 3 by an aspect ratio of 6, and a higher exponent needs less inflation to reach
+  the corners, so a long region covers its own ends without reaching into its neighbours.
+  Inflation toward the corners is capped in absolute points as well: it is a fraction of
+  the region, and a highlight over half the screen would otherwise be circled from a
+  hundred points outside it and run off the display.
+
+  **The roughening scales down on a small region.** The wobble, the drift off centre and
+  the opening are all in absolute points, which is right for something the size of a button
+  and wrong for a favicon: two points of drift is an eighth of a sixteen point icon and the
+  opening a quarter of it, so the loop stopped reading as centred on the thing it circled.
+  Found by circling a bookmark on a real screen, where the coordinate was accurate to a
+  point and the mark still sat visibly to the right of it.
+
+  **Computed once and stored on the annotation, the way an arrow's path is.** Marks are
+  redrawn whenever the content under them scrolls, so a shape rebuilt against the moved
+  anchor would re-roll its wobble on every tick and shimmer for as long as the page kept
+  moving. `AnnotationKind::Highlight` carries the vertices and `translate` moves them, and
+  the seed comes from the region rather than being carried, so the same rect is always
+  circled the same way and two regions of one size are not circled identically.
+
+  The anchor stays the region either way: it is what the mark is about, what a caption is
+  placed against, and what the scroll check reads. The colour sampler now measures a
+  sketched highlight along its stroke through the existing `Footprint::Path` rather than
+  along four edge bands, which is where none of its ink is. Captions are placed against
+  the ink rather than the anchor, since a loop drawn outside the region would otherwise
+  have its own label sitting on top of it.
+
 ### Fixed
 
 - **The daemon failed to build on Linux.** `serve` read `read_browser_tabs` out of the config
@@ -194,6 +242,26 @@ is a format.
   is the case in which `rust-toolchain.toml` pins nothing and the run is answering "would CI
   be green" with a compiler CI never resolves. `just toolchain` said this already, at length;
   this is the one line version, in the recipe that is asking the question.
+
+- **A highlight is sketched unless told otherwise, which changes what every existing
+  `highlight` call looks like.** The ruled rectangle was the one mark that did not follow
+  the rest: arrows already bow because that is how a person draws one, text boxes are set
+  in a handwritten face because Arin is the chalk. Moved now rather than later because a
+  default can still move in 0.x, and `--style ruled` keeps the old look for anyone who
+  wants it.
+
+  **Which of the two is the daemon's to pick, not a client's.** `Config::mark_style` sits
+  with `palette` and nothing on the wire overrides it. `TextboxStyle` is on the wire
+  because `note` against `guide` says what a box is *for*, which only the client knows,
+  and its own doc comment rejects putting typographic choices there for the reason that
+  applies here. Adding a per-message field later would be additive, so the option stays
+  open if agents turn out to need one.
+
+- **`LogicalRect::containing` replaces a private bounding box helper.** Three callers in
+  the daemon had it and the macOS renderer now needs the same answer to place a caption
+  against a loop. It lives on the protocol type because it is geometry over protocol
+  types, and it still widens a degenerate result rather than returning a rect that renders
+  as nothing.
 
 ## [0.5.0] - 2026-08-16
 

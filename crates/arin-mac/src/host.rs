@@ -685,8 +685,14 @@ impl Renderer for MacRenderer {
                     caption::is_drawable(label.as_ref())
                         .map(|text| caption::beside_orb(text, target, color, panel_size, scale))
                 }
-                AnnotationKind::Highlight { label } => {
-                    let outline = highlight_layer(anchor, color, panel_height);
+                AnnotationKind::Highlight { label, path } => {
+                    // A loop the daemon drew, or the rectangle this renderer draws itself.
+                    // Which one is not this crate's decision, the same way the colour it
+                    // arrives in is not.
+                    let outline = match path {
+                        Some(points) => path_layer(points, None, color, panel_height),
+                        None => highlight_layer(anchor, color, panel_height),
+                    };
                     match caption::is_drawable(label.as_ref()) {
                         None => Some(outline),
                         // `clear` removes one layer per annotation, so an outline and its
@@ -696,9 +702,16 @@ impl Renderer for MacRenderer {
                             let group = CALayer::new();
                             group.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), panel_size));
                             group.addSublayer(&outline);
+                            // Against the ink rather than the region. A sketched loop is
+                            // drawn outside what it circles, so a caption placed off the
+                            // anchor would land on top of the stroke it belongs to.
+                            let against = match path {
+                                Some(points) => LogicalRect::containing(points),
+                                None => anchor,
+                            };
                             group.addSublayer(&caption::against_rect(
                                 text,
-                                to_layer_rect(anchor, panel_height),
+                                to_layer_rect(against, panel_height),
                                 color,
                                 panel_size,
                                 scale,

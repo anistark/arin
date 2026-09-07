@@ -172,6 +172,10 @@ Marks are the opposite: a highlight, a text box, a path, and a point's caption s
 
 The phoenix logo is a static brand asset. It is never rendered by the daemon. Do not add bird geometry to any renderer.
 
+**Mark geometry is computed in core, not per platform.** `arin-core/src/arrow.rs` builds an arrow and `arin-core/src/sketch.rs` builds a sketched highlight's loop, both as ordinary polylines a renderer strokes exactly as it strokes a freehand path. Three renderers would otherwise hold three opinions about what an arrow or a circled region looks like, and the two nobody was looking at would drift. A renderer that finds itself deciding what a shape is has been handed the wrong thing.
+
+Anything roughened is computed once and stored, never regenerated per frame. Marks are redrawn whenever the content under them scrolls, so a shape that re-rolled its wobble on each redraw would shimmer for as long as the page kept moving. `sketch::encircle` is a pure function of the region for the same reason, and takes its seed from the rect rather than carrying one.
+
 Orb state vocabulary. The client never requests these. They follow from daemon state.
 
 | State | Rendering |
@@ -232,6 +236,8 @@ Do not relitigate these without asking.
 | Crossing a screen | The flight is computed once in the desktop's global space and cut into one segment per window it crosses, because a window cannot draw outside its own display. Each segment is drawn by its own window at its own backing scale, which is what keeps the orb sharp on a mixed DPI arrangement. A single window spanning every display would make the geometry trivial and has one backing scale for all of them, so the orb would render soft on whichever display did not win. |
 | Pacing a flight | The easing is carried by how the sampled positions are spaced along the arc, not by a timing function. Core Animation gives each adjacent pair of samples an equal slice of time, so spacing them is what sets the speed, and a flight drawn in three segments still accelerates once. A timing function per segment would ease within each one and the orb would surge at every screen boundary. |
 | Who captures | The daemon, never the adapter. A resolver declares how much detail it needs through `Resolver::detail` and is handed a frame, so an adapter never touches the screen and a fake one in a test never has to. |
+| How a mark looks | The daemon's, never the client's. `--style sketch\|ruled` sits with `--color` and `--palette` in `Config`, and no message can override it. The split is the one `TextboxStyle` already documents: `note` against `guide` is on the wire because it says what a box is *for*, which only the client knows, while sketch against ruled is how it is drawn, which is the same kind of decision as colour. Adding a wire field later is additive and stays available if agents turn out to need one. |
+| Sketch as the default | A highlight is circled by hand unless `--style ruled` says otherwise. Arrows already bow because that is how a person draws one, text boxes are set in Chalkboard SE because Arin is the chalk, and the ruled rectangle was the one mark that did not follow. Changed in 0.x deliberately, which is when a default can still move. |
 | Textboxes | Display only through all of 0.x. No input widgets. |
 | Sequencing | Brain side. The daemon has no concept of step 2 of 7. |
 | Audio | Never in the daemon. TTS belongs to the client. |

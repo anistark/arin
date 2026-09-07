@@ -106,6 +106,31 @@ impl LogicalRect {
     pub fn into_valid(self) -> Option<Self> {
         self.is_valid().then_some(self)
     }
+
+    /// The smallest rectangle containing every one of these points.
+    ///
+    /// Always drawable. An empty run of points has no extent to describe and a straight
+    /// one has none in a single axis, and both come back a point wide rather than as a
+    /// rect that renders as nothing.
+    pub fn containing(points: &[LogicalPoint]) -> Self {
+        let Some(first) = points.first() else {
+            return Self::new(0.0, 0.0, 1.0, 1.0);
+        };
+        let (mut min_x, mut min_y) = (first.x, first.y);
+        let (mut max_x, mut max_y) = (first.x, first.y);
+        for point in points {
+            min_x = min_x.min(point.x);
+            min_y = min_y.min(point.y);
+            max_x = max_x.max(point.x);
+            max_y = max_y.max(point.y);
+        }
+        Self::new(
+            min_x,
+            min_y,
+            (max_x - min_x).max(1.0),
+            (max_y - min_y).max(1.0),
+        )
+    }
 }
 
 impl From<[f64; 4]> for LogicalRect {
@@ -134,6 +159,28 @@ pub struct DisplayInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bounding_rect_covers_every_point() {
+        let rect = LogicalRect::containing(&[
+            LogicalPoint::new(40.0, 90.0),
+            LogicalPoint::new(10.0, 200.0),
+            LogicalPoint::new(75.0, 55.0),
+        ]);
+        assert_eq!(rect, LogicalRect::new(10.0, 55.0, 65.0, 145.0));
+        assert!(rect.is_valid());
+    }
+
+    /// Callers anchor marks to these, and an anchor of no extent renders as nothing.
+    #[test]
+    fn a_bounding_rect_is_always_drawable() {
+        let flat = LogicalRect::containing(&[
+            LogicalPoint::new(10.0, 40.0),
+            LogicalPoint::new(90.0, 40.0),
+        ]);
+        assert!(flat.is_valid(), "a straight path came back with no height");
+        assert!(LogicalRect::containing(&[]).is_valid());
+    }
 
     #[test]
     fn rects_are_arrays_on_the_wire() {
