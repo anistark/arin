@@ -12,7 +12,8 @@
 //! - **It never synthesises input.** No `CGEventPost`, no `CGEventTap`, nothing that
 //!   posts to the event stream. Screen Recording is the only permission Arin asks for,
 //!   and that stays true only if nothing here reaches for Accessibility. The overlay is
-//!   click through, so there is nothing to actuate anyway.
+//!   click through, so there is nothing to actuate anyway. The marker is the one time it
+//!   is not, and even then the overlay only receives clicks, which every window does.
 //! - **It activates and never arranges.** [`MacFocus`] can bring an application forward,
 //!   which is a public call any process may make and one the window server may refuse.
 //!   Moving, resizing, or closing a window is a different thing entirely: it needs
@@ -27,7 +28,7 @@
 //!
 //! Complete for 0.1. The overlay, display enumeration, every annotation kind, the orb
 //! with its flight and ember trail, ScreenCaptureKit capture and its permission flow,
-//! the menu bar item, and the global hotkey all work.
+//! the menu bar item, the global hotkeys, and the marker all work.
 //!
 //! # Building
 //!
@@ -40,12 +41,14 @@
 
 mod about;
 mod approval;
+mod bitmap;
 mod caption;
 mod capture;
 mod display;
 mod flight;
 mod focus;
 mod host;
+mod marker;
 mod menubar;
 mod orb;
 mod panel;
@@ -55,7 +58,9 @@ pub use approval::{AlertApprover, WINDOW as GROUNDING_WINDOW, approver};
 pub use capture::MacCapture;
 pub use display::Screen;
 pub use focus::MacFocus;
-pub use host::{MacRenderer, known_screens, on_displays_changed};
+pub use host::{
+    MacRenderer, clear_marker, known_screens, on_displays_changed, set_marker_color, toggle_marker,
+};
 pub use menubar::{MenuBar, on_clear, on_grounding, on_quit, on_status, on_update_available};
 pub use orb::MINIMUM_FEATURED_SIZE;
 pub use permission::{

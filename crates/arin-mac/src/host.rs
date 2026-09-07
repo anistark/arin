@@ -13,6 +13,7 @@
 use crate::caption;
 use crate::display::{Screen, screens};
 use crate::flight;
+use crate::marker::{self, Marker};
 use crate::orb::{self, Orb};
 use crate::panel::Panel;
 use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result, Rgb};
@@ -25,7 +26,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
-    NSApplicationDidChangeScreenParametersNotification, NSColor, NSView,
+    NSApplicationDidChangeScreenParametersNotification, NSColor, NSCursor, NSView,
     NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
 };
 use objc2_core_foundation::{CFString, CFType, CGPoint, CGRect, CGSize};
@@ -100,6 +101,11 @@ struct Host {
     /// generation it belongs to and does nothing if it is no longer the current one, so a
     /// superseded flight cannot drag the orb back off the target it has moved on to.
     flight: u64,
+    /// The person's own ink, and whether they are holding the pen.
+    ///
+    /// Beside the layers rather than in them: a stroke is not an annotation, has no id
+    /// the daemon knows, and is cleared by the person rather than by a client.
+    marker: Marker,
 }
 
 impl Host {
@@ -278,7 +284,12 @@ impl Host {
         for screen in attached {
             if self.panel_for(screen.info.id).is_none() {
                 tracing::info!(display = %screen.info.id, "display attached, adding an overlay");
-                self.panels.push(Panel::new(screen, mtm));
+                let mut panel = Panel::new(screen, mtm);
+                // A display attached while the marker is on takes the mouse like the rest.
+                if self.marker.is_on() {
+                    panel.set_marker(true);
+                }
+                self.panels.push(panel);
             }
         }
 
@@ -290,6 +301,7 @@ impl Host {
             // rather than removal.
             self.box_views.retain(|_, (on, _)| on != display);
             self.points.retain(|_, on| on != display);
+            self.marker.forget_display(*display);
         }
 
         // A flight in the air was planned against the arrangement that just changed, and
@@ -312,6 +324,60 @@ impl Host {
             }
         }
         disturbed
+    }
+
+    /// Switch the marker on or off, on every panel at once.
+    ///
+    /// Every panel rather than the one under the pointer, because the pointer can be on
+    /// any display when the marker is switched on and a stroke can start on any of them.
+    /// Off lets go of a stroke still under the button and hands the pointer back, so the
+    /// arrow does not linger as a marker tip over an app that now has the clicks.
+    fn set_marker(&mut self, on: bool) {
+        if self.marker.is_on() == on {
+            return;
+        }
+        self.marker.set_on(on);
+        for panel in &mut self.panels {
+            panel.set_marker(on);
+        }
+        if on {
+            self.show_marker_cursor();
+        } else {
+            NSCursor::arrowCursor().set();
+        }
+        tracing::info!(on, "marker");
+    }
+
+    fn show_marker_cursor(&mut self) {
+        if !self.marker.is_on() {
+            return;
+        }
+        if let Some(cursor) = self.marker.cursor() {
+            cursor.set();
+        }
+    }
+
+    /// Ink from the mouse, on one display.
+    fn marker_input(&mut self, display: DisplayId, input: marker::Input) {
+        if !self.marker.is_on() {
+            return;
+        }
+        match input {
+            marker::Input::Begin(at) => {
+                let Some(root) = self.root_for(display) else {
+                    return;
+                };
+                self.marker.begin(display, &root, at);
+            }
+            marker::Input::Extend(at) => self.marker.extend(at),
+            marker::Input::End => self.marker.end(),
+            marker::Input::Clear => {
+                let cleared = self.marker.clear();
+                if cleared > 0 {
+                    tracing::info!(count = cleared, "marker strokes cleared by right click");
+                }
+            }
+        }
     }
 }
 
@@ -378,6 +444,81 @@ where
     });
 }
 
+/// Run a block on the main thread at once, for work that is already there.
+///
+/// Mouse events arrive on the main thread, and a stroke handed to [`on_main`] would land
+/// a queue turn behind the pointer. The borrow is tried rather than taken: an event that
+/// arrives while a render command holds the host is dropped with a note rather than a
+/// panic, and the next drag carries the pointer's position anyway.
+fn on_main_now<F>(mtm: MainThreadMarker, work: F)
+where
+    F: FnOnce(&mut Host, MainThreadMarker),
+{
+    CATransaction::begin();
+    CATransaction::setDisableActions(true);
+    HOST.with(|slot| match slot.try_borrow_mut() {
+        Ok(mut host) => match host.as_mut() {
+            Some(host) => work(host, mtm),
+            None => tracing::warn!("marker input arrived before the host was set up"),
+        },
+        Err(_) => tracing::warn!("marker input arrived while the host was busy, dropped"),
+    });
+    CATransaction::commit();
+}
+
+/// Hand the marker what the mouse did on a display.
+pub(crate) fn marker_input(display: DisplayId, input: marker::Input, mtm: MainThreadMarker) {
+    on_main_now(mtm, |host, _| host.marker_input(display, input));
+}
+
+/// Put the marker tip up as the pointer, if the marker is on.
+pub(crate) fn show_marker_cursor(mtm: MainThreadMarker) {
+    on_main_now(mtm, |host, _| host.show_marker_cursor());
+}
+
+/// Whether the marker is on. Answered from the main thread, which is where a menu asks.
+pub(crate) fn marker_is_on(_mtm: MainThreadMarker) -> bool {
+    HOST.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .and_then(|host| host.as_ref().map(|host| host.marker.is_on()))
+            .unwrap_or(false)
+    })
+}
+
+/// Switch the marker on if it is off, and off if it is on.
+///
+/// From any thread: the menu bar and the global hotkey both come through here.
+pub fn toggle_marker() {
+    on_main(|host, _mtm| {
+        let on = !host.marker.is_on();
+        host.set_marker(on);
+    });
+}
+
+/// Take every marker stroke off every display.
+///
+/// Separate from [`Renderer::clear_all`] on purpose. That one is what the daemon calls
+/// for the annotations it holds, and a stroke is not one of those: it is the person's,
+/// so it goes with the person's own affordances, a right click and the Clear item.
+pub fn clear_marker() {
+    on_main(|host, _mtm| {
+        let cleared = host.marker.clear();
+        if cleared > 0 {
+            tracing::info!(count = cleared, "marker strokes cleared");
+        }
+    });
+}
+
+/// The colour the marker draws in.
+///
+/// Set by the binary from the configured palette, so the person's strokes sit in the same
+/// family as the agent's marks rather than in a colour the renderer chose for itself.
+/// Until it is set, the marker draws in the default amber.
+pub fn set_marker_color(color: Rgb) {
+    on_main(move |host, _mtm| host.marker.set_color(color));
+}
+
 /// What to run after the displays change, once the panels have caught up.
 ///
 /// Set by the binary, because the renderer has no handle on the daemon and the daemon is
@@ -426,6 +567,7 @@ impl MacRenderer {
                 orb,
                 orb_on: None,
                 flight: 0,
+                marker: Marker::new(),
             });
         });
 
@@ -629,6 +771,7 @@ impl Renderer for MacRenderer {
     }
 
     fn clear_all(&self) -> Result<()> {
+        // The marker's strokes are not among these. See `clear_marker`.
         on_main(|host, _mtm| {
             for (_, (_, layer)) in host.layers.drain() {
                 layer.removeFromSuperlayer();
@@ -869,20 +1012,28 @@ fn path_layer(
         }
     }
 
-    let layer = CAShapeLayer::new();
+    let width = style
+        .and_then(|s| s.width)
+        .unwrap_or(arin_core::contrast::STROKE_WIDTH);
+    let layer = stroke_layer(color, width);
     layer.setPath(Some(&path));
+    Retained::into_super(layer)
+}
+
+/// A layer that strokes whatever path it is given, in a colour and a width.
+///
+/// Shared by an agent's path, built once, and a marker stroke, rebuilt on every drag, so
+/// the two kinds of ink look like the same pen.
+pub(crate) fn stroke_layer(color: Rgb, width: f64) -> Retained<CAShapeLayer> {
+    let layer = CAShapeLayer::new();
     layer.setStrokeColor(Some(&annotation_color(color, 1.0)));
     // A stroked path, not a filled shape. Without this the path closes itself and fills,
     // which turns a gesture into a blob.
     layer.setFillColor(None);
-    layer.setLineWidth(
-        style
-            .and_then(|s| s.width)
-            .unwrap_or(arin_core::contrast::STROKE_WIDTH),
-    );
+    layer.setLineWidth(width);
     layer.setLineCap(unsafe { objc2_quartz_core::kCALineCapRound });
     layer.setLineJoin(unsafe { objc2_quartz_core::kCALineJoinRound });
-    Retained::into_super(layer)
+    layer
 }
 
 /// A colour the daemon resolved, at some alpha.

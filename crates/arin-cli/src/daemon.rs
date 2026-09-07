@@ -275,6 +275,11 @@ async fn serve(
         });
         arin_mac::on_update_available(crate::update::available);
 
+        // The marker draws in the palette's first choice, so the person's strokes sit in
+        // the same family as the agent's marks rather than in a colour of the renderer's
+        // own. The renderer never sees the palette otherwise, and should not.
+        arin_mac::set_marker_color(daemon.config().palette.preferred());
+
         // The consent prompt says a grant can be taken back from the menu bar. This is
         // what makes that true, and a promise like that has to be kept or the prompt
         // becomes a reason not to grant anything.
@@ -339,7 +344,7 @@ async fn serve(
         Err(e) => {
             // Losing the hotkey costs the user their escape hatch, but the daemon is
             // still useful without it and refusing to start would be worse.
-            tracing::warn!(error = %e, "clear hotkey unavailable");
+            tracing::warn!(error = %e, "hotkeys unavailable");
             None
         }
     };

@@ -187,7 +187,7 @@ A circle has no facing, so travel reads through stretch, never rotation.
 ### Rendering rules
 
 1. Glow requires radial falloff. On macOS use CAGradientLayer or a layer with a blur. In wgpu it is a short fragment shader. Do not try to fake it with stacked flat circles.
-2. The overlay is 100 percent click through. There are no buttons in it. Clear is a menu bar item and a global hotkey.
+2. The overlay is 100 percent click through. There are no buttons in it. Clear is a menu bar item and a global hotkey. The marker is the one exception, and it is the user's rather than a client's: switched on from the menu bar or with Cmd+Shift+M, it makes the overlay take the mouse so the person can draw on it, and drops the panel under the menu bar and the Dock so the way out stays reachable. Still no buttons, and still nothing synthesised. A window receiving a click is not a window posting one, and `just draw-only` stays clean.
 3. Below 20 logical points, embers stop spawning and the halo tightens. The menu bar icon is the same primitive with features disabled, not a separate asset.
 4. macOS menu bar needs a template image, monochrome, system tinted. Use the template asset, not the colour orb: a blue orb in the menu bar looks wrong in dark mode.
 
@@ -220,6 +220,7 @@ Do not relitigate these without asking.
 | Scroll response | Follow the content where the movement can be measured, invalidate where it cannot. Never guess: a mark that vanishes is a failure the client can see, and a mark confidently pointing at the wrong thing is one it cannot. |
 | Annotation lifetime | Session scoped. Clear 5 seconds after `session_end` or socket disconnect. |
 | Clear affordance | Menu bar item plus global hotkey. No overlay button. |
+| Marker | The person can draw on the overlay themselves, and their strokes are not annotations. No session, no anchor, nothing on the wire: the daemon never learns they exist, so a client cannot move, expire, or clear them, and the scroll watcher leaves them where they were drawn. A right click while the marker is on wipes them, Clear takes them along with everything else on the overlay, and switching the marker off leaves them up. Colour is the palette's first choice, handed to the renderer by the binary, so the marker matches the marks around it without the renderer holding an opinion. Lives entirely in `arin-mac`: `marker.rs` for the ink, `panel.rs` for taking the mouse. |
 | Grounding | CUA class models only. Raw coordinates from the client in 0.1. Resolver plugin registry from 0.3. |
 | Grounding shape | Ask a vision model where something is and constrain the answer to a schema, rather than handing it the computer use tool and reading the coordinate out of a click it wants to make. A tool call carries no confidence, and Arin does not actuate, so a request shaped like "click this" asks for something that will never happen. |
 | Resolver consent | Off unless named. An API key in the environment is not consent, so no adapter is selected by inference, and a daemon told to use a remote one says so at startup, and again at the moment a screenshot goes out. |
