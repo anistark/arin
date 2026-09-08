@@ -263,7 +263,8 @@ pub(crate) enum Command {
     ///
     /// Not something to run by hand. An MCP client starts it, speaks MCP on stdin and
     /// stdout, and closes stdin when it is done. Point a client at it with
-    /// `claude mcp add arin -- arin mcp`.
+    /// `claude mcp add --scope user arin -- arin mcp`, where the scope is what makes Arin
+    /// reachable from every session rather than from the one directory it was added in.
     ///
     /// This was a separate `arin-mcp` binary. One binary means one path in an agent's
     /// config and one version to keep straight, which matters because that config is

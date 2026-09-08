@@ -49,8 +49,11 @@ arin clear
 ## 4. Give it to an agent
 
 ```sh
-claude mcp add arin -- arin mcp
+claude mcp add --scope user arin -- arin mcp
 ```
+
+`--scope user` registers Arin for every session you start. Without it Claude Code files it
+under the current directory only, and asking for a mark from anywhere else does nothing.
 
 Now ask your agent to explain something on screen. It can point at a position, highlight a
 region, annotate with a block of text, draw an arrow, and clear what it drew.

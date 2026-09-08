@@ -194,21 +194,32 @@ function changelogMarkdown(currentVersion) {
     if (!matched) {
       throw new Error(`CHANGELOG.md heading is not \`## [version] - date\`: ## ${heading}`);
     }
+    // A section says it is unreleased one of two ways: `## [Unreleased]`, which has no
+    // version to show yet, or `## [0.6.0] - Unreleased`, a version prepared in the manifest
+    // and not yet tagged. Reading only the first left the second looking like a release
+    // dated "Unreleased", which took the Latest badge off the version that actually shipped.
+    const dated = (matched[2] || "").trim();
+    const unreleased =
+      matched[1].toLowerCase() === "unreleased" || dated.toLowerCase() === "unreleased";
     return {
       version: matched[1],
-      date: (matched[2] || "").trim(),
+      // Nothing to print where a date goes, and the badge carries the news instead.
+      date: unreleased ? "" : dated,
       body: chunk.slice(split + 1).trim(),
-      unreleased: matched[1].toLowerCase() === "unreleased",
+      unreleased,
     };
   });
 
   const released = entries.filter((entry) => !entry.unreleased);
-  // Falls back to the newest section when the manifest has been bumped ahead of the tag,
-  // so the page always has exactly one entry open rather than none.
+  // Falls back to the newest released section when the manifest has been bumped ahead of
+  // the tag, which is how Latest stays on the last version anyone can install while the one
+  // being prepared sits above it. Either way exactly one entry is open rather than none.
   const open = released.find((entry) => entry.version === currentVersion) || released[0];
 
   const sections = entries.map((entry) => {
-    const title = entry.unreleased ? "Upcoming" : entry.version;
+    // `## [Unreleased]` has no number of its own to print. A prepared version does, and
+    // showing it is the point: the badge already says it has not shipped.
+    const title = entry.version.toLowerCase() === "unreleased" ? "Upcoming" : entry.version;
     const badge = entry.unreleased ? "Unreleased" : entry === open ? "Latest" : "";
 
     return [
