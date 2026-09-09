@@ -5,8 +5,14 @@ Arin speaks MCP over stdio. An MCP client launches `arin mcp` as a subprocess.
 For Claude Code that is one line:
 
 ```sh
-claude mcp add arin -- arin mcp
+claude mcp add --scope user arin -- arin mcp
 ```
+
+`--scope user` is the part worth getting right. Leave it off and the server is registered
+against whichever directory you happened to run the command in, so every session started
+anywhere else has no Arin at all: no tools, and no way to know it was meant to have any.
+Arin draws on your screen rather than on a repository, so it belongs to you and not to one
+project.
 
 Or, in any client that takes the standard JSON:
 

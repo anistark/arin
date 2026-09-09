@@ -26,7 +26,7 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
-## [0.6.0] - 2026-09-07
+## [0.6.0] - Unreleased
 
 - **You can draw on the screen yourself.** `Marker` in the menu bar, or `Cmd+Shift+M`
   from anywhere, turns the pointer into a marker: drag to draw on the overlay, right
@@ -45,6 +45,10 @@ is a format.
   region rather than a rectangle, sitting outside what it marks and crossing itself where
   it closes. `arin daemon --style ruled`, or `ARIN_MARK_STYLE=ruled`, gives the rectangle
   back. This is a daemon setting like `--color`: clients cannot ask for one or the other.
+- **The line that connects an agent was wrong, and is now
+  `claude mcp add --scope user arin -- arin mcp`.** Without the scope, Claude Code files
+  Arin under whichever directory you ran the command in, and every session started
+  anywhere else has no Arin in it. If you added it before, run it again with the scope.
 
 ### Added
 
@@ -222,6 +226,18 @@ is a format.
   have its own label sitting on top of it.
 
 ### Fixed
+
+- **The documented install line registered Arin against a single directory.**
+  `claude mcp add arin -- arin mcp` is what the quickstart, the MCP page, the landing page
+  and `arin mcp --help` all printed, and Claude Code's default scope is `local`, which files
+  the server under the working directory the command happened to run in. Arin draws on a
+  screen rather than on a repository, so the directory it attached itself to was almost
+  always the wrong one. A session started anywhere else got no tools and no server
+  instructions, which is worse than an error: there was nothing for a model to call and no
+  way for it to know it was meant to have anything, so asking one to annotate looked like
+  the agent ignoring the request rather than like Arin being absent. All four lines now
+  carry `--scope user`, and the two prose pages say what the flag buys. Adding it again is
+  what fixes an existing install, since the old registration stays where it was written.
 
 - **The Nix workflow's module step failed on a shallow checkout.** The nix-darwin module is
   evaluated through `git+file://`, and the Determinate Nix the installer action now puts on
