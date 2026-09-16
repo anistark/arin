@@ -26,7 +26,7 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
-## [0.6.0] - Unreleased
+## [0.6.0] - 2026-09-16
 
 - **You can draw on the screen yourself.** `Marker` in the menu bar, or `Cmd+Shift+M`
   from anywhere, turns the pointer into a marker: drag to draw on the overlay, right
@@ -49,6 +49,8 @@ is a format.
   `claude mcp add --scope user arin -- arin mcp`.** Without the scope, Claude Code files
   Arin under whichever directory you ran the command in, and every session started
   anywhere else has no Arin in it. If you added it before, run it again with the scope.
+- **`arin update` says when GitHub's rate limit is the problem**, and how long until it
+  clears, rather than reporting `403 Forbidden`.
 
 ### Added
 
@@ -226,6 +228,17 @@ is a format.
   have its own label sitting on top of it.
 
 ### Fixed
+
+- **`arin update` reported a spent rate limit as `403 Forbidden`.** The check is one
+  unauthenticated request, and GitHub allows sixty of those an hour per address. When the
+  quota is gone the API answers 403, and the command passed that status on as the whole
+  explanation, which reads as Arin having been refused when nothing of the kind happened.
+  The limit is per address rather than per program, so a machine behind a shared connection
+  can arrive there having made no requests of its own. GitHub says which it is in
+  `x-ratelimit-remaining` and when it clears in `x-ratelimit-reset`, so the command now
+  reads both and says "GitHub's rate limit for this address is used up. It resets in about
+  39 minutes." A duration rather than a clock time, because a duration needs no time zone
+  to be read. Any other failure still reports the status as before.
 
 - **The documented install line registered Arin against a single directory.**
   `claude mcp add arin -- arin mcp` is what the quickstart, the MCP page, the landing page

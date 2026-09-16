@@ -91,8 +91,30 @@ pub(crate) async fn latest_release() -> Result<String> {
     // A rate limit reads as a 403 with a body that is not a release, so the status is
     // checked before the body is parsed. Otherwise the failure surfaces as a confusing
     // deserialization error rather than as what actually happened.
+    //
+    // The limit is per address, so a machine behind a shared connection can arrive here
+    // having made no requests of its own, and "403 Forbidden" reads as Arin being refused
+    // rather than as a quota somebody else used up. GitHub says which it is in the
+    // headers, so that is what is reported, along with when it clears.
     let status = response.status();
     if !status.is_success() {
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        if status == reqwest::StatusCode::FORBIDDEN
+            && header("x-ratelimit-remaining").as_deref() == Some("0")
+        {
+            let reset = header("x-ratelimit-reset").and_then(|v| v.parse().ok());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            anyhow::bail!("{}", rate_limited(reset, now));
+        }
         anyhow::bail!("GitHub answered {status} rather than a release");
     }
 
@@ -101,6 +123,24 @@ pub(crate) async fn latest_release() -> Result<String> {
         .await
         .context("reading the release GitHub sent back")?;
     Ok(release.tag_name)
+}
+
+/// What to say when GitHub's unauthenticated quota for this address is spent.
+///
+/// `reset` is the epoch second GitHub says the window reopens at, if it sent one, and
+/// `now` is passed in rather than read so the wording can be tested. The answer is a
+/// duration rather than a clock time because a duration needs no time zone to be read.
+fn rate_limited(reset: Option<u64>, now: u64) -> String {
+    let what = "GitHub's rate limit for this address is used up";
+    match reset {
+        Some(at) if at > now => {
+            let minutes = (at - now).div_ceil(60);
+            let s = if minutes == 1 { "" } else { "s" };
+            format!("{what}. It resets in about {minutes} minute{s}.")
+        }
+        Some(_) => format!("{what}. It should have reset by now, so try again."),
+        None => format!("{what}. Try again in an hour."),
+    }
 }
 
 /// The newer version found by the background check, if there is one.
@@ -249,6 +289,30 @@ mod tests {
         let notice = super::report("v0.2.1", "0.2.1");
         assert_eq!(notice, "Arin 0.2.1 is the latest.");
         assert!(!notice.contains("brew"), "nothing to do, so nothing to run");
+    }
+
+    /// A spent quota is not a refusal, and the message has to say which it is and when it
+    /// clears, or the reader is left thinking Arin has been blocked.
+    #[test]
+    fn a_spent_rate_limit_says_so_and_when_it_resets() {
+        let notice = super::rate_limited(Some(1_000 + 40 * 60), 1_000);
+        assert!(notice.contains("rate limit"), "names the cause: {notice}");
+        assert!(
+            notice.contains("40 minutes"),
+            "says when it clears: {notice}"
+        );
+        assert!(
+            !notice.contains("403"),
+            "the status is not the explanation: {notice}"
+        );
+
+        // Partial minutes round up rather than promising a reset that has not happened.
+        assert!(super::rate_limited(Some(1_000 + 61), 1_000).contains("2 minutes"));
+        assert!(super::rate_limited(Some(1_000 + 60), 1_000).contains("1 minute."));
+
+        // A reset already in the past, or none sent, still gives the reader something to do.
+        assert!(super::rate_limited(Some(500), 1_000).contains("try again"));
+        assert!(super::rate_limited(None, 1_000).contains("an hour"));
     }
 
     /// The version this build reports has to be readable by the comparison it feeds, or
