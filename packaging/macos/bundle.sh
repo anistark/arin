@@ -101,7 +101,8 @@ fi
 # --- the icon ---------------------------------------------------------------------------
 #
 # Generated from the same 1024px logo the README uses, so there is one source of truth for
-# what Arin looks like. iconutil wants an .iconset directory of specific names and sizes.
+# what Arin looks like. The .iconset layout is the documented one: five point sizes, each
+# at 1x and 2x, named for the size they stand for.
 
 iconset="$output_dir/AppIcon.iconset"
 rm -rf "$iconset"
@@ -111,7 +112,53 @@ for size in 16 32 128 256 512; do
 	double=$((size * 2))
 	sips -z "$double" "$double" assets/logo.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$iconset" -o "$output_dir/AppIcon.icns"
+
+# Assembled here rather than by `iconutil -c icns`, which did it until 2026-09-16.
+#
+# Homebrew 7.0.0 (2026-09-13) refuses a build every mach lookup outside a short allowlist,
+# and iconutil asks LaunchServices (com.apple.lsd.mapdb) whether the directory it was handed
+# is an iconset before it reads a byte of it. Refused, it prints "Invalid Iconset" and exits
+# 1, so from that release on every `brew install` stopped here, on every Mac, with nothing
+# in this repository having changed. The resizes above are fine in there. `sips -s format
+# icns` is not, for the same reason, so there is no tool to swap in.
+#
+# The format is small: a header, then one chunk per image, each a four letter tag, a
+# length, and the PNG as it is. The tags are the ones iconutil writes for the same files,
+# so Finder and the Dock see what they saw before. Two differences, neither visible: the 16
+# and 32 point slots hold PNG (icp4, icp5) where iconutil writes raw ARGB (ic04, ic05),
+# which macOS has taken since 10.7, and there is no `info` chunk, which is optional.
+
+be32() {
+	local n=$1 shift_by
+	for shift_by in 24 16 8 0; do
+		printf "\\$(printf '%03o' $(((n >> shift_by) & 255)))"
+	done
+}
+
+# iconset file -> ICNS tag. 16@2x and 32 are the same 32 pixels, and both slots have to be
+# filled, because macOS chooses by point size and scale rather than by pixel width.
+slots=(
+	icon_16x16.png:icp4 icon_16x16@2x.png:ic11
+	icon_32x32.png:icp5 icon_32x32@2x.png:ic12
+	icon_128x128.png:ic07 icon_128x128@2x.png:ic13
+	icon_256x256.png:ic08 icon_256x256@2x.png:ic14
+	icon_512x512.png:ic09 icon_512x512@2x.png:ic10
+)
+
+total=8
+for slot in "${slots[@]}"; do
+	total=$((total + 8 + $(stat -f%z "$iconset/${slot%%:*}")))
+done
+{
+	printf 'icns'
+	be32 "$total"
+	for slot in "${slots[@]}"; do
+		png="$iconset/${slot%%:*}"
+		printf '%s' "${slot##*:}"
+		be32 $((8 + $(stat -f%z "$png")))
+		cat "$png"
+	done
+} >"$output_dir/AppIcon.icns"
 rm -rf "$iconset"
 
 # --- assembly ---------------------------------------------------------------------------

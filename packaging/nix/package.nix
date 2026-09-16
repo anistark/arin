@@ -6,7 +6,7 @@
 # environment. A package that installed `bin/arin` alone would build the same code and be a
 # different product, so this mirrors what packaging/macos/bundle.sh assembles.
 #
-# It is not that script. `bundle.sh` shells out to `sips`, `iconutil`, `lipo` and `rustup`,
+# It is not that script. `bundle.sh` shells out to `sips`, `lipo`, `codesign` and `rustup`,
 # none of which a Nix build may assume, so the assembly is written twice on purpose and the
 # two are held together by using the same Info.plist, the same launch agent template, and
 # the same logo. What differs, deliberately:
@@ -14,8 +14,9 @@
 #   - One architecture, not a universal binary. Nix builds the package for the system it is
 #     evaluated on, so a universal slice would mean cross compiling to produce half an
 #     output nobody on this machine will run.
-#   - The icon is built with imagemagick and libicns instead of sips and iconutil, and
-#     carries no @2x entries. The sizes below are the ones png2icns maps to an icns type.
+#   - The icon is built with imagemagick and libicns instead of sips and the icns the script
+#     writes itself, and carries no @2x entries. The sizes below are the ones png2icns maps
+#     to an icns type.
 {
   lib,
   rustPlatform,

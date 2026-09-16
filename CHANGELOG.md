@@ -26,6 +26,30 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
+## [Unreleased]
+
+### Fixed
+
+- **`brew install` failed on every Mac from 2026-09-13, with nothing in Arin having
+  changed.** Homebrew 7.0.0 started refusing a build every mach lookup outside a short
+  allowlist, and `iconutil`, which the bundle script used to turn ten PNGs into
+  `AppIcon.icns`, asks LaunchServices whether the directory it was handed is an iconset
+  before it reads a byte of it. Refused that lookup (`com.apple.lsd.mapdb`), it reports
+  every iconset as invalid, and the formula stopped there after a full compile:
+
+  ```text
+  target/bundle/AppIcon.iconset:Invalid Iconset.
+  ```
+
+  The upgrade to 0.6.0 was the first thing to hit it here, but any `brew install` or
+  `brew upgrade` of any version did the same, on Apple silicon and Intel alike, and
+  Homebrew 7 has no way to switch the sandbox off for a formula. `sips -s format icns` needs
+  the same lookup, so there was no tool to swap in. The bundle script now writes the
+  `.icns` itself: a header and one tagged PNG chunk per size, the same tags `iconutil`
+  writes, so Finder and the Dock see the same icon. The release workflow and the dmg were
+  never affected, since neither runs under Homebrew's sandbox. Reported to Homebrew as
+  well, since anything else that calls `iconutil` in a formula is broken the same way.
+
 ## [0.6.0] - 2026-09-16
 
 - **You can draw on the screen yourself.** `Marker` in the menu bar, or `Cmd+Shift+M`
