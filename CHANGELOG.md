@@ -26,7 +26,11 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
-## [Unreleased]
+## [0.6.1] - 2026-09-16
+
+- **`brew install arin` and `brew upgrade arin` work again on Homebrew 7.** Every attempt
+  since 2026-09-13 stopped at `Invalid Iconset` after a full compile. Nothing to do on your
+  side beyond running the upgrade.
 
 ### Fixed
 
@@ -1394,7 +1398,8 @@ macOS only. Linux and Windows are planned and nothing of either is in this relea
 core and the protocol build and test on Linux with no platform crate in the tree, which is
 what keeps that port cheap to pick up rather than evidence it works.
 
-[Unreleased]: https://github.com/anistark/arin/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/anistark/arin/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/anistark/arin/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/anistark/arin/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/anistark/arin/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/anistark/arin/compare/v0.4.0...v0.4.1
