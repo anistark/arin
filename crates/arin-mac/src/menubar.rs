@@ -241,7 +241,7 @@ define_class!(
 
         #[unsafe(method(openScreenRecording:))]
         fn open_screen_recording(&self, _sender: Option<&AnyObject>) {
-            if !crate::permission::open_screen_recording_settings() {
+            if !crate::permission::ask_for_screen_recording() {
                 tracing::warn!("could not open System Settings");
             }
         }

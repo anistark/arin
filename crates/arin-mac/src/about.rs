@@ -32,9 +32,9 @@ use objc2_foundation::{NSData, NSString, NSURL};
 /// That covers `cargo run` during development and anything else that runs the executable
 /// directly, and a box introducing Arin is the wrong place to show macOS's stand-in.
 ///
-/// `assets/logo.png` stays the single source it already is for `AppIcon.icns`: this reads
-/// the same 1024px file `bundle.sh` and `package.nix` build the icns from, rather than
-/// adding a second copy at a second size for somebody to forget.
+/// The bare phoenix rather than `assets/app-icon.png`, which is the same bird on the tile the
+/// bundle's icon needs and is drawn from this file by `just app-icon`. One source for the
+/// bird, at one size, rather than a second copy for somebody to forget.
 const LOGO: &[u8] = include_bytes!("../../../assets/logo.png");
 
 /// The size `NSAlert` gives its icon. Set on the image, so the 1024px source is drawn down

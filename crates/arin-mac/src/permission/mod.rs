@@ -23,11 +23,13 @@
 //!
 //! - [`tcc`] asks the system, and is the only place the CoreGraphics calls appear.
 //! - [`identity`] answers whether a grant can stick to this build at all.
+//! - [`record`] remembers, per build, what the system cannot be asked about.
 //! - [`settings`] opens the pane with the switch on it.
 //! - [`flow`] is the startup sequence, and owns the decision to interrupt the user.
 
 mod flow;
 mod identity;
+mod record;
 mod settings;
 mod tcc;
 
@@ -39,6 +41,9 @@ use crate::capture::MacCapture;
 use arin_core::{Access, Capture as _, Permissions};
 use arin_protocol::DisplayId;
 use objc2_core_graphics::CGMainDisplayID;
+
+/// What macOS files a grant under, and what `tccutil` has to be told to reset one.
+const BUNDLE_ID: &str = "com.anistark.arin";
 
 /// What to tell someone who has to grant this by hand.
 pub const SCREEN_RECORDING_HELP: &str = "open System Settings, go to Privacy and Security, then Screen and System Audio \
@@ -72,6 +77,20 @@ impl Permissions for MacPermissions {
 /// Whether the system reports the permission. Never prompts, never captures.
 pub fn screen_recording_granted() -> bool {
     tcc::granted()
+}
+
+/// Ask macOS for the permission, then open the pane with the switch on it.
+///
+/// What the menu bar item does. The startup flow asks once per build, so once a user has
+/// removed Arin from the list, or reset it with `tccutil`, only asking again puts it back
+/// for them to switch on. The pane alone would open on a list with no Arin in it.
+///
+/// Only for the daemon. macOS attributes a request to whatever started the process, so from
+/// a terminal this would ask on behalf of the terminal, which is why `arin permissions
+/// --open` opens the pane and nothing more.
+pub fn ask_for_screen_recording() -> bool {
+    tcc::request();
+    open_screen_recording_settings()
 }
 
 /// What macOS can pin a Screen Recording grant to for this build.

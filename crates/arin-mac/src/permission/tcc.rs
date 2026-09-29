@@ -5,42 +5,23 @@
 //! file rather than a rule about a habit.
 
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
-use std::time::{Duration, Instant};
-
-/// Below this, the system prompt did not appear. See [`request`].
-const PROMPT_SHOWN_AFTER: Duration = Duration::from_millis(400);
 
 /// What the system says about the permission, without asking the user anything.
 pub fn granted() -> bool {
     CGPreflightScreenCaptureAccess()
 }
 
-/// Whether the system actually put a dialog in front of the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Prompt {
-    /// The dialog appeared and the user answered it.
-    Shown,
-    /// Nothing appeared, because macOS has asked this user about Arin before.
-    Silent,
-}
-
-/// Raise the system prompt, and report whether it was actually shown.
+/// Ask macOS to put its Screen Recording dialog in front of the user.
 ///
-/// The return value of `CGRequestScreenCaptureAccess` cannot answer that. It reports whether
-/// the permission is granted, which for Screen Recording is false either way: the prompt
-/// sends the user to System Settings rather than granting anything itself. So the signal is
-/// how long the call took. It blocks while the dialog is up, and returns at once when the
-/// user has answered it before and the system stays silent.
+/// Whether the dialog appears is decided by macOS, and this call cannot tell. It returns at
+/// once either way, because tccd refuses the request on the spot and has a separate process,
+/// `universalAccessAuthWarn`, put the dialog up afterwards. Measured on macOS 26.6: the call
+/// returned in about 10ms and the dialog followed. Arin used to read a slow return as the
+/// dialog having been shown, and so reported silence while the dialog was on screen.
 ///
-/// A heuristic, and the cost of being wrong is small in both directions now that a
-/// [`Prompt::Silent`] answer no longer sends anybody to System Settings on its own. See
-/// [`super::flow`] for what does.
-pub fn request() -> Prompt {
-    let started = Instant::now();
+/// macOS shows it whenever it holds no answer for this exact build. That includes the state
+/// after an upgrade, where its one row for Arin belongs to the build before, and there it
+/// shows it at every call. [`super::flow`] is what keeps that to once per build.
+pub fn request() {
     CGRequestScreenCaptureAccess();
-    if started.elapsed() >= PROMPT_SHOWN_AFTER {
-        Prompt::Shown
-    } else {
-        Prompt::Silent
-    }
 }

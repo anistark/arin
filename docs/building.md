@@ -87,7 +87,7 @@ rather than `com.anistark.arin`. macOS will not keep a Screen Recording grant ag
 so the permission reads as missing however many times you switch it on.
 
 A grant made against an ad-hoc signed build holds until that build is replaced, which means
-every rebuild asks again. That is the cost of developing without a certificate.
+every rebuild needs it granted again. That is the cost of developing without a certificate.
 
 Two bundles carrying one identifier also compete for a single Screen Recording record, so if
 a development build and an installed one are both on the machine, expect to
