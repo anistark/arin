@@ -25,6 +25,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "assets/logo.png"
+      - "assets/app-icon.png"
       - ".github/workflows/nix.yml"
   pull_request:
     paths:
@@ -35,6 +36,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "assets/logo.png"
+      - "assets/app-icon.png"
       - ".github/workflows/nix.yml"
   workflow_dispatch:
 

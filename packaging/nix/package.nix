@@ -9,7 +9,7 @@
 # It is not that script. `bundle.sh` shells out to `sips`, `lipo`, `codesign` and `rustup`,
 # none of which a Nix build may assume, so the assembly is written twice on purpose and the
 # two are held together by using the same Info.plist, the same launch agent template, and
-# the same logo. What differs, deliberately:
+# the same icon. What differs, deliberately:
 #
 #   - One architecture, not a universal binary. Nix builds the package for the system it is
 #     evaluated on, so a universal slice would mean cross compiling to produce half an
@@ -42,7 +42,9 @@ let
       ../../Cargo.toml
       ../../Cargo.lock
       ../../crates
+      # The About box compiles the logo in, and the bundle's icon is drawn from the other.
       ../../assets/logo.png
+      ../../assets/app-icon.png
       # arin-cli include_str!s Info.plist to check the identifier has not drifted, so this
       # is a build input and not only an installation one.
       ../../packaging/macos
@@ -96,7 +98,7 @@ rustPlatform.buildRustPackage {
     mkdir -p "$contents/MacOS" "$contents/Resources"
 
     for size in 16 32 48 128 256 512; do
-      magick assets/logo.png -resize "''${size}x''${size}" "icon_$size.png"
+      magick assets/app-icon.png -resize "''${size}x''${size}" "icon_$size.png"
     done
     png2icns "$contents/Resources/AppIcon.icns" \
       icon_16.png icon_32.png icon_48.png icon_128.png icon_256.png icon_512.png

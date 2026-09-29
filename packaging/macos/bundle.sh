@@ -100,17 +100,19 @@ fi
 
 # --- the icon ---------------------------------------------------------------------------
 #
-# Generated from the same 1024px logo the README uses, so there is one source of truth for
-# what Arin looks like. The .iconset layout is the documented one: five point sizes, each
-# at 1x and 2x, named for the size they stand for.
+# Resized from `assets/app-icon.png`, the phoenix from the README's logo on a tile drawn to
+# Apple's icon grid. The bare logo got shrunk onto a grey plate by macOS 26, which does that
+# to any icon not drawn to its shape. `just app-icon` redraws it when the logo changes. The
+# .iconset layout is the documented one: five point sizes, each at 1x and 2x, named for the
+# size they stand for.
 
 iconset="$output_dir/AppIcon.iconset"
 rm -rf "$iconset"
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
-	sips -z "$size" "$size" assets/logo.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+	sips -z "$size" "$size" assets/app-icon.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
 	double=$((size * 2))
-	sips -z "$double" "$double" assets/logo.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+	sips -z "$double" "$double" assets/app-icon.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 
 # Assembled here rather than by `iconutil -c icns`, which did it until 2026-09-16.

@@ -31,6 +31,11 @@ release:
 bundle *ARGS:
     packaging/macos/bundle.sh {{ ARGS }}
 
+# Redraw assets/app-icon.png from assets/logo.png. By hand when the logo changes, since it
+# needs Xcode's swift and no build may assume that.
+app-icon:
+    swift packaging/macos/app-icon.swift assets/logo.png assets/app-icon.png
+
 # Start Arin at login, from the bundle so the Screen Recording grant sticks.
 startup-enable app="/Applications/Arin.app":
     packaging/macos/launch-agent.sh enable {{ app }}
