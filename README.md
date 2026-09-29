@@ -18,7 +18,7 @@ It draws. It never clicks.
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)](https://github.com/anistark/arin/releases/latest)
 [![Homebrew](https://img.shields.io/badge/brew-anistark%2Ftools%2Farin-FBB040?logo=homebrew&logoColor=white)](https://github.com/anistark/homebrew-tools)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-CE422B?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-CE422B?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![MCP](https://img.shields.io/badge/MCP-server-6E7DDB)](https://anistark.github.io/arin/docs/mcp/)
 
 ```sh

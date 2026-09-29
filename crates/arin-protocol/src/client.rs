@@ -720,12 +720,12 @@ impl Validate for Arrow {
         if from == to {
             return Err(ValidationError::ZeroLengthArrow);
         }
-        if let Some(bow) = self.bow {
-            if !bow.is_finite() || bow.abs() > 1.0 {
-                return Err(ValidationError::BowOutOfRange {
-                    got: bow.to_string(),
-                });
-            }
+        if let Some(bow) = self.bow
+            && (!bow.is_finite() || bow.abs() > 1.0)
+        {
+            return Err(ValidationError::BowOutOfRange {
+                got: bow.to_string(),
+            });
         }
         Ok(())
     }

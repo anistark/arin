@@ -29,7 +29,7 @@ use arin_protocol::{
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ErrorData, ServerHandler, schemars, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -707,12 +707,12 @@ impl Arin {
 // request is work with no result.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Arin {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // Not `Implementation::from_build_env`, which would report the SDK's version
-        // rather than Arin's. `ServerInfo` is `#[non_exhaustive]`, hence field by field.
+        // rather than Arin's. `ServerConfig` is `#[non_exhaustive]`, hence field by field.
         let server_info = Implementation::new(CLIENT_NAME, env!("CARGO_PKG_VERSION"));
 
-        let mut info = ServerInfo::default();
+        let mut info = ServerConfig::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server_info;
         info.instructions = Some(INSTRUCTIONS.into());
