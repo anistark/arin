@@ -26,6 +26,49 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
+## [Unreleased]
+
+- **Arin stops asking for Screen Recording at every start.** After an upgrade, macOS put its
+  dialog up at every login while System Settings showed Arin already switched on. Arin now
+  asks once per build, and its log names the build the switch belongs to and the command
+  that moves it: `tccutil reset ScreenCapture com.anistark.arin`.
+- **Screen Recording in the menu bar asks macOS before opening System Settings**, so Arin is
+  back in the list to switch on after its row has been reset.
+- **Starting Arin by hand no longer opens System Settings on its own.** The macOS dialog has
+  a button for that.
+
+### Fixed
+
+- **The Screen Recording dialog came back at every start once Arin had been upgraded.**
+  macOS keeps one row for `com.anistark.arin` and pins it to the `cdhash` of the build it
+  was granted to, which for an ad-hoc signature is the whole designated requirement. After
+  `brew upgrade` the row still showed Arin switched on, and tccd refused the new build:
+
+  ```text
+  Failed to match existing code requirement for subject com.anistark.arin
+      and service kTCCServiceScreenCapture
+  Notifying for access  kTCCServiceScreenCapture for target PID[5003]
+  ```
+
+  In that state macOS records no answer for the new build, so every request brings the
+  dialog back. The flow asked at every start, on the understanding that macOS stays silent
+  after the first time. It now asks once per build, recorded against the binary's path and
+  modification time in `~/Library/Application Support/Arin/screen-recording-prompted`.
+  Launched through LaunchServices with that record in place, tccd received a preflight from
+  the daemon and nothing else.
+- **A switch that showed on with the permission missing was left for the user to explain.**
+  The daemon now records which build capture last worked for, and when a different build
+  finds the permission missing it says so by version and path, with the `tccutil` command
+  that clears the row. The row cannot be read without Full Disk Access, so this is the
+  daemon's own memory rather than a look at the row. It is phrased to stay true if the grant
+  was switched off since.
+- **Arin read the macOS dialog as silence.** It judged whether a dialog had appeared by how
+  long `CGRequestScreenCaptureAccess` took to return. On macOS 26.6 the call returned in
+  about 10ms and `universalAccessAuthWarn` put the dialog up afterwards, so a daemon started
+  by hand opened System Settings underneath it. The heuristic is gone, and so is opening the
+  pane from the startup flow. The pane now opens only from the menu bar item and from
+  `arin permissions --open`.
+
 ## [0.6.1] - 2026-09-16
 
 - **`brew install arin` and `brew upgrade arin` work again on Homebrew 7.** Every attempt

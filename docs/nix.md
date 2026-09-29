@@ -117,20 +117,20 @@ Arin asks for Screen Recording on first run. It is the only permission it ever a
 and it needs it for two things: noticing when content moves under a mark, and picking a
 colour that can be seen against whatever is underneath.
 
-**Today, every update asks again.** Nothing is signed yet, and macOS identifies unsigned
+**Today, every update needs it granted again.** Nothing is signed yet, and macOS identifies unsigned
 code by its hash and its path, both of which change on every Nix build. This is not
 peculiar to Nix, `brew upgrade` has the same problem, but a store path makes it visible.
 Signing lands in 0.7, after which the grant follows the certificate and the bundle
 identifier rather than the path, and updating stops costing anything.
 
-If the daemon keeps asking after you have granted it, two builds are competing for one row
-in System Settings:
+If Screen Recording reads as missing while System Settings shows Arin switched on, the
+switch belongs to another build, and the daemon's log names it. Clear the row:
 
 ```sh
 tccutil reset ScreenCapture com.anistark.arin
 ```
 
-Then start whichever one you meant to run.
+Then choose Screen Recording from Arin's menu bar item, switch it on, and restart Arin.
 
 ## Building on it
 

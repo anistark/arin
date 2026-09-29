@@ -93,8 +93,9 @@ impl Identity {
                  will keep reporting the permission as missing however many times you switch \
                  it on. Fix the build rather than the setting:\n  \
                  codesign --force --sign - /path/to/Arin.app\n  \
-                 tccutil reset ScreenCapture com.anistark.arin\n\
-                 then start Arin and grant it once more."
+                 tccutil reset ScreenCapture {}\n\
+                 then start Arin and grant it once more.",
+                super::BUNDLE_ID
             ),
         }
     }

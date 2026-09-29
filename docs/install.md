@@ -34,10 +34,14 @@ brew uninstall arin     # and gone
 ```
 
 Two consequences of the app living in the Homebrew prefix rather than `/Applications`:
-Spotlight will not find it, and every upgrade asks for Screen Recording again. Both are
+Spotlight will not find it, and every upgrade needs Screen Recording granted again. Both are
 things a certificate fixes. Without one, the grant is pinned to the exact binary it was made
 against, so replacing that binary voids it. A build signed with a Developer ID satisfies the
 same requirement as the one before it, which is what lets a grant outlive an upgrade.
+
+Until then, System Settings goes on showing Arin switched on after an upgrade, because the
+switch belongs to the build before. [When permissions go wrong](#when-permissions-go-wrong)
+has the command that moves it.
 
 ## Nix
 
@@ -138,7 +142,14 @@ than overwriting it and leaving two definitions of one agent.
 
 ## When permissions go wrong
 
-If the daemon keeps asking for Screen Recording after you have granted it, start here:
+If Screen Recording reads as missing after you have granted it, start with the daemon's log,
+which says on every start what it found:
+
+```sh
+tail ~/Library/Logs/Arin/arin.log
+```
+
+Then:
 
 ```sh
 arin permissions
@@ -151,7 +162,23 @@ not verify reports exactly what a build nobody has granted reports. Only one of 
 fixed in System Settings, and switching the row on for the other does nothing however many
 times you do it.
 
-Two causes, and the command above tells them apart.
+Two causes. The log names the first, and `arin permissions` names the second.
+
+**The grant belongs to another build.** The usual one. Every `brew upgrade` leaves it
+behind, and so does a development build from `just bundle` sitting beside an installed one.
+macOS keeps a single row for Arin and pins it to the exact build it was granted to, so the
+switch shows on while every other build is refused. The log says so and names the build the
+grant belongs to. Clearing the row is what moves it:
+
+```sh
+tccutil reset ScreenCapture com.anistark.arin
+```
+
+Then, from the build you mean to run, choose Screen Recording from Arin's menu bar item,
+which puts Arin back in the list, switch it on, and restart Arin, with `arin service
+restart` for the login agent. Arin asks macOS once for each build rather than at every
+start, because in this state macOS would put its dialog up every time. That is why the menu
+bar item is the way back in.
 
 **The build is not signed properly.** Arin installed before this was fixed carries a
 signature that does not verify. Re-signing it is enough, and any ad-hoc signature will do:
@@ -162,12 +189,8 @@ tccutil reset ScreenCapture com.anistark.arin
 ```
 
 Then start Arin and grant it once more. A grant made this way holds until that build is
-replaced, so an upgrade will ask again until releases are signed with a certificate.
-
-**Two builds are competing for one row.** macOS identifies unsigned code per binary and
-shows a single row for the identifier, so toggling it updates whichever record it reaches
-and the other keeps asking. Reset the same way, then start the one you actually meant to
-run. `arin diagnose` reports which build you are talking to.
+replaced, so it has to be given again after every upgrade until releases are signed with a
+certificate. `arin diagnose` reports which build you are talking to.
 
 ## Uninstalling
 
