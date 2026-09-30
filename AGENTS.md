@@ -65,7 +65,7 @@ Claude Code, Cursor, Cline, custom agents, arin CLI
 | `arin-mac` | `Renderer` and `Capture` impls. NSPanel, Core Animation, ScreenCaptureKit via objc2. | macOS | done for 0.1 |
 | `arin-linux` | Renderer via wgpu on wlr layer shell. Capture via xdg desktop portal. v2. | Linux | empty |
 | `arin-win` | Layered window renderer, DXGI capture. v2. | Windows | empty |
-| `arin-mcp` | MCP server. Translates MCP tool calls into socket messages. A library, served by `arin mcp`. 0.2. | no | four tools over stdio |
+| `arin-mcp` | MCP server. Translates MCP tool calls into socket messages. A library, served by `arin mcp`. 0.2. | no | seven tools over stdio, connects to the daemon on the first call |
 | `arin` | Facade library published to crates.io. Re-exports `arin-protocol` under the plain name. | no | published |
 | `arin-cli` | The `arin` binary, the only one in the workspace: daemon control, MCP, debug commands, scripting client. | no | working |
 
