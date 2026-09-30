@@ -39,6 +39,29 @@ is a format.
 - **Arin's icon shows the phoenix at full size on macOS 26.** It was shrunk onto a grey
   plate in System Settings and Finder. The icon now draws that dark tile itself, with the
   phoenix filling it.
+- **Building Arin from source needs Rust 1.88 or newer**, up from 1.85, and so does
+  depending on `arin-protocol` or `arin`. Homebrew and Nix already build with a newer Rust,
+  so neither install changes.
+
+### Changed
+
+- **Rust 1.88 is the minimum.** Raised so `rmcp` 3 and the crates the old floor held back
+  could update: `icu_*` 2.3, `darling` 0.23, `encoding_rs` 0.8.42 and `idna_adapter` 1.2.2.
+  Clippy follows the floor, so 11 sites moved to what 1.88 made stable: `as_chunks` in
+  place of `chunks_exact`, `is_multiple_of`, and a let-chain in `Validate for Arrow`.
+- **`rmcp` 3.5, from 2.2.** The one change it needed was `ServerInfo`, deprecated in 3.4,
+  becoming `ServerConfig`. Over stdio, with a client on protocol version 2025-06-18, the
+  handshake and all seven tool schemas match what 2.2 sent.
+- **Every other dependency to its latest compatible release**, 101 packages in
+  `Cargo.lock`. The workspace requirements for `base64`, `clap`, `futures`, `reqwest`,
+  `thiserror` and `uuid` rise to match.
+- **GitHub Actions to their latest majors:** `checkout`, `setup-node` and `upload-artifact`
+  to v7, `pnpm/action-setup` and `configure-pages` to v6, `upload-pages-artifact` and
+  `deploy-pages` to v5. None of their breaking changes touches an input these workflows
+  use.
+- **`markdown-it-anchor` 10 for the docs site.** Its one breaking change shares heading ids
+  across renders that reuse an `env`, which Eleventy does not do. The built site is byte
+  for byte the one 9.2.1 produced.
 
 ### Fixed
 

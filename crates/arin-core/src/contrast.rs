@@ -608,7 +608,7 @@ mod tests {
     fn flat(color: Rgb) -> Frame {
         let (w, h) = (64usize, 64usize);
         let mut pixels = vec![0u8; w * h * 4];
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             px[0] = color.b;
             px[1] = color.g;
             px[2] = color.r;
@@ -705,7 +705,7 @@ mod tests {
     fn dark_text_on_a_light_page_answers_to_the_page() {
         let (w, h) = (64usize, 64usize);
         let mut pixels = vec![0u8; w * h * 4];
-        for (i, px) in pixels.chunks_exact_mut(4).enumerate() {
+        for (i, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             // Bands of near-black text over near-white paper.
             let dark = (i / w) % 4 == 0;
             let v = if dark { 0x14 } else { 0xF8 };
@@ -740,7 +740,7 @@ mod tests {
     fn white_text_on_a_dark_panel_keeps_the_default() {
         let (w, h) = (64usize, 64usize);
         let mut pixels = vec![0u8; w * h * 4];
-        for (i, px) in pixels.chunks_exact_mut(4).enumerate() {
+        for (i, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             // A quarter of the rows are text, the rest is panel.
             let ink = (i / w) % 4 == 0;
             let v = if ink { 0xFF } else { 0x1E };

@@ -802,7 +802,7 @@ impl Capture for FlatCapture {
     fn capture(&self, display: DisplayId) -> Result<Frame> {
         let (w, h) = (64usize, 64usize);
         let mut pixels = vec![0u8; w * h * 4];
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             px[0] = self.0.b;
             px[1] = self.0.g;
             px[2] = self.0.r;

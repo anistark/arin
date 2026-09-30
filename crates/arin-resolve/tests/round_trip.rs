@@ -24,7 +24,7 @@ use tokio::net::TcpListener;
 fn frame() -> Frame {
     let (width, height) = (64u32, 40u32);
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
-    for (i, chunk) in pixels.chunks_exact_mut(4).enumerate() {
+    for (i, chunk) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         chunk[0] = (i % 256) as u8;
         chunk[3] = 255;
     }

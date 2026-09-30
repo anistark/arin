@@ -137,7 +137,10 @@ impl Fingerprint {
             return None;
         }
         let mut samples = [0u8; GRID * GRID];
-        for (slot, pair) in samples.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
+        for (slot, pair) in samples
+            .iter_mut()
+            .zip(encoded.as_bytes().as_chunks::<2>().0)
+        {
             let pair = std::str::from_utf8(pair).ok()?;
             *slot = u8::from_str_radix(pair, 16).ok()?;
         }
@@ -259,7 +262,11 @@ mod tests {
             let mut pixels = vec![0u8; WIDTH as usize * HEIGHT as usize * 4];
             for y in 0..HEIGHT as usize {
                 for x in 0..WIDTH as usize {
-                    let v = if (x + y + phase) % 2 == 0 { 0 } else { 255 };
+                    let v = if (x + y + phase).is_multiple_of(2) {
+                        0
+                    } else {
+                        255
+                    };
                     let idx = (y * WIDTH as usize + x) * 4;
                     pixels[idx] = v;
                     pixels[idx + 1] = v;

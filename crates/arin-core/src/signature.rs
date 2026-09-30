@@ -765,7 +765,7 @@ pub(crate) mod tests {
                 let src = y + offset;
                 // Deterministic pseudo glyphs. Ink covers a similar share of every line,
                 // which is what makes averaging blind to it.
-                let ink = ((x * 7 + src * 13) ^ (x / 3 + src * 5)) % 5 == 0;
+                let ink = ((x * 7 + src * 13) ^ (x / 3 + src * 5)).is_multiple_of(5);
                 let v = if ink { 230 } else { 20 };
                 pixels[idx] = v;
                 pixels[idx + 1] = v;

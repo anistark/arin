@@ -55,7 +55,7 @@ jobs:
     name: nixfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@main
       - run: nix fmt -- flake.nix packaging/nix/package.nix packaging/nix/darwin-module.nix
       - run: git diff --exit-code
@@ -71,7 +71,7 @@ jobs:
       # `git+file://`, and Determinate Nix refuses a shallow repository for that rather
       # than leaving `revCount` out: "is a shallow Git repository, so 'revCount' is not
       # available". The default checkout is one commit deep, which is exactly that.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

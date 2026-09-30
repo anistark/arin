@@ -184,7 +184,7 @@ impl Capture for MatrixCapture {
             .unwrap_or(Rgb::new(0x1E, 0x1E, 0x1E));
 
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
-        for chunk in pixels.chunks_exact_mut(4) {
+        for chunk in pixels.as_chunks_mut::<4>().0 {
             chunk[0] = color.b;
             chunk[1] = color.g;
             chunk[2] = color.r;
