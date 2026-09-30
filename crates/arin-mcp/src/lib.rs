@@ -6,10 +6,18 @@
 //!
 //! # One session for the process
 //!
-//! Annotations live as long as the session that made them, so the server opens one on
-//! startup and keeps it for as long as the client holds the server open. That is what
-//! lets an agent leave a mark up across several turns of a conversation. The CLI's
+//! Annotations live as long as the session that made them, so the server opens one on the
+//! first tool call and keeps it for as long as the client holds the server open. That is
+//! what lets an agent leave a mark up across several turns of a conversation. The CLI's
 //! `--hold` exists because a one-shot command has the opposite problem.
+//!
+//! # Connecting late
+//!
+//! An MCP client spawns this server once, usually at launch, and marks it failed for the
+//! rest of the session if it exits. So the server starts whether or not the daemon is up,
+//! and a missing daemon is a tool error the agent can relay rather than a session with no
+//! Arin in it. A daemon that restarts is reconnected to on the next call, with a new
+//! session, since the old one's marks went with the process that drew them.
 //!
 //! # Why the tools are not named after the messages
 //!
@@ -20,12 +28,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use arin_core::Client;
 use arin_protocol::{
     Anchor, Arrow, ArrowEnd, Clear, ClientMessage, DaemonMessage, DisplayId, Highlight,
-    LogicalRect, Point, Textbox,
+    InvalidationReason, LogicalRect, Point, Textbox,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -146,8 +155,9 @@ pub struct Drawn {
     /// Marks of yours that went away since your last call, and why.
     ///
     /// Empty almost always. A non-empty list means the screen moved on without you: the
-    /// user scrolled, a time to live ran out, or they cleared the overlay themselves.
-    /// Anything you were relying on being visible is not.
+    /// user scrolled, a time to live ran out, they cleared the overlay themselves, or
+    /// Arin restarted and took every mark with it. Anything you were relying on being
+    /// visible is not.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gone: Vec<Gone>,
 }
@@ -360,6 +370,62 @@ pub struct ClearArgs {
     pub annotation_id: Option<String>,
 }
 
+/// The daemon connection, opened by the first tool call that needs one.
+struct Link {
+    socket: PathBuf,
+    /// `None` until the first call, and again after the connection is lost.
+    client: Option<Client>,
+    /// A connection holding a session was lost, and no result has said so yet.
+    lost: bool,
+}
+
+impl Link {
+    /// One request and its reply, connecting first if there is no connection.
+    ///
+    /// Any failure here is the transport's, since a refusal by the daemon arrives as a
+    /// reply. Either way the stream can no longer be trusted to pair a reply with its
+    /// request, so the connection is dropped and the next call opens a fresh one.
+    async fn send(&mut self, message: ClientMessage) -> Result<DaemonMessage, ErrorData> {
+        let client = match self.client.take() {
+            Some(client) => client,
+            None => self.open().await?,
+        };
+        let client = self.client.insert(client);
+
+        match client.send(message).await {
+            Ok(reply) => Ok(reply),
+            Err(e) => {
+                tracing::warn!(error = %e, "lost the connection to the daemon");
+                self.client = None;
+                self.lost = true;
+                Err(ErrorData::internal_error(
+                    format!("the arin daemon: {e}"),
+                    None,
+                ))
+            }
+        }
+    }
+
+    /// Connect and open a session.
+    async fn open(&self) -> Result<Client, ErrorData> {
+        let mut client = Client::connect_to(&self.socket).await.map_err(|e| {
+            ErrorData::internal_error(
+                format!(
+                    "could not reach the arin daemon on {}; is `arin daemon` running? ({e}) \
+                     Once it is, call again: this server connects on its own.",
+                    self.socket.display()
+                ),
+                None,
+            )
+        })?;
+        let session = client.start_session(CLIENT_NAME).await.map_err(|e| {
+            ErrorData::internal_error(format!("the arin daemon refused the session: {e}"), None)
+        })?;
+        tracing::info!(%session, "connected to the daemon");
+        Ok(client)
+    }
+}
+
 /// The MCP server.
 #[derive(Clone)]
 pub struct Arin {
@@ -368,16 +434,20 @@ pub struct Arin {
     /// The socket is a request and reply stream with no message ids, so a second call
     /// writing while the first is waiting would read the other's reply. The lock is what
     /// makes concurrent tool calls safe, and it is held only across a single round trip.
-    client: Arc<Mutex<Client>>,
+    link: Arc<Mutex<Link>>,
     tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
 impl Arin {
-    /// Wrap a client that already has a session open.
-    pub fn new(client: Client) -> Self {
+    /// A server for the daemon on `socket`, which it connects to on the first tool call.
+    pub fn new(socket: impl Into<PathBuf>) -> Self {
         Self {
-            client: Arc::new(Mutex::new(client)),
+            link: Arc::new(Mutex::new(Link {
+                socket: socket.into(),
+                client: None,
+                lost: false,
+            })),
             tool_router: Self::tool_router(),
         }
     }
@@ -655,17 +725,29 @@ impl Arin {
     /// MCP has no way for a server to interrupt a model, so an invalidation cannot be
     /// delivered when it happens. It rides along with the next tool result instead, which
     /// is the first moment the model is listening anyway.
+    ///
+    /// A lost connection is reported here too, as one `session_end` with no id, because
+    /// every mark the old session drew went with the daemon that drew it.
     async fn gone(&self) -> Vec<Gone> {
-        self.client
-            .lock()
-            .await
-            .take_invalidations()
+        let mut link = self.link.lock().await;
+        let mut gone: Vec<Gone> = link
+            .client
+            .as_mut()
+            .map(Client::take_invalidations)
+            .unwrap_or_default()
             .into_iter()
             .map(|event| Gone {
                 annotation_id: event.annotation_id.map(|id| id.to_string()),
-                reason: format!("{:?}", event.reason).to_lowercase(),
+                reason: reason_name(&event.reason),
             })
-            .collect()
+            .collect();
+        if std::mem::take(&mut link.lost) {
+            gone.push(Gone {
+                annotation_id: None,
+                reason: reason_name(&InvalidationReason::SessionEnd),
+            });
+        }
+        gone
     }
 
     /// Send a drawing message and describe what landed.
@@ -692,13 +774,18 @@ impl Arin {
     }
 
     /// One request and its reply, holding the socket for the round trip.
+    ///
+    /// A connection opened by an earlier call may belong to a daemon that has since
+    /// restarted, and nothing notices until it is used. So a failure on one of those is
+    /// retried once on a fresh connection, which makes a restart cost the agent its marks
+    /// and nothing else. A failure on a connection this call opened is not retried.
     async fn round_trip(&self, message: ClientMessage) -> Result<DaemonMessage, ErrorData> {
-        self.client
-            .lock()
-            .await
-            .send(message)
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("the arin daemon: {e}"), None))
+        let mut link = self.link.lock().await;
+        let reused = link.client.is_some();
+        match link.send(message.clone()).await {
+            Err(_) if reused => link.send(message).await,
+            result => result,
+        }
     }
 }
 
@@ -746,6 +833,14 @@ fn ttl_ms(seconds: Option<f64>) -> Result<Option<u64>, ErrorData> {
     Ok(Some(((seconds * 1000.0).ceil() as u64).max(1)))
 }
 
+/// The wire spelling of an invalidation reason, which is what [`Gone::reason`] documents.
+fn reason_name(reason: &InvalidationReason) -> String {
+    match serde_json::to_value(reason) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => format!("{reason:?}"),
+    }
+}
+
 /// Turn a refusal into an MCP error the agent can act on.
 ///
 /// The daemon's own message is passed through rather than summarised. Its errors say what
@@ -778,28 +873,12 @@ pub async fn serve(socket: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     use rmcp::ServiceExt as _;
 
-    // Fail here rather than at the first tool call: a client that cannot reach the daemon
-    // should find out while it is still starting up.
-    let mut client = arin_core::Client::connect_to(socket)
-        .await
-        .with_context(|| {
-            format!(
-                "could not reach the arin daemon on {}; is `arin daemon` running?",
-                socket.display()
-            )
-        })?;
-
-    let session = client
-        .start_session(CLIENT_NAME)
-        .await
-        .context("daemon refused the session")?;
-
-    tracing::info!(%session, tools = ?tools::ALL, "connected to the daemon");
+    tracing::info!(socket = %socket.display(), tools = ?tools::ALL, "serving MCP on stdio");
 
     // Runs until the client closes stdin, which is how an MCP client says it is done.
     // Ending here drops the session, and the daemon clears whatever it drew shortly
     // after, so a client going away does not leave marks on the user's screen.
-    let service = Arin::new(client)
+    let service = Arin::new(socket)
         .serve(rmcp::transport::stdio())
         .await
         .context("could not start the MCP server on stdio")?;
@@ -1158,6 +1237,21 @@ mod tests {
     fn an_unnamed_display_falls_back_to_the_default() {
         assert_eq!(display(None), DisplayId::DEFAULT);
         assert_eq!(display(Some(214)), DisplayId(214));
+    }
+
+    /// `gone` documents the wire names, and `Debug` lowercased reads `displaychange`.
+    #[test]
+    fn a_reason_is_reported_by_its_wire_name() {
+        assert_eq!(
+            reason_name(&InvalidationReason::DisplayChange),
+            "display_change"
+        );
+        assert_eq!(reason_name(&InvalidationReason::SessionEnd), "session_end");
+        assert_eq!(
+            reason_name(&InvalidationReason::Unknown("occluded".into())),
+            "occluded",
+            "a reason from a newer daemon is passed on as it was sent"
+        );
     }
 
     #[test]

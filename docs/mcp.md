@@ -24,7 +24,10 @@ Or, in any client that takes the standard JSON:
 }
 ```
 
-The daemon has to already be running. `arin mcp` connects to its socket and forwards.
+`arin mcp` starts whether or not the daemon is running, and connects to its socket on the
+first tool call. A call made with no daemon comes back as an error naming the socket, and
+the next call after the daemon starts goes through, with no need to restart the agent. The
+same goes for a daemon that restarts partway through a session.
 
 ## The tools
 
@@ -77,4 +80,5 @@ disconnects. Pass `ttl_seconds` to have one remove itself instead.
 
 When a mark goes away for a reason the agent did not ask for, that arrives as a `gone`
 field on the next tool result. There is no way for an MCP server to interrupt a model
-mid-thought, so the news waits for the next exchange.
+mid-thought, so the news waits for the next exchange. A daemon restart shows up the same
+way, as one `session_end` with no annotation id, since every mark went with it.
