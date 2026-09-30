@@ -28,6 +28,10 @@ is a format.
 
 ## [Unreleased]
 
+- **`arin mcp` no longer needs the daemon running first.** An agent launched before Arin
+  used to get no Arin tools for the whole session. It now gets them, and a tool call made
+  before the daemon is up returns an error naming the socket. The next call after the
+  daemon starts works, and a daemon restart is picked up the same way.
 - **Arin stops asking for Screen Recording at every start.** After an upgrade, macOS put its
   dialog up at every login while System Settings showed Arin already switched on. Arin now
   asks once per build, and its log names the build the switch belongs to and the command
@@ -45,6 +49,14 @@ is a format.
 
 ### Changed
 
+- **`arin mcp` connects to the daemon on the first tool call rather than at startup.**
+  MCP clients spawn the server once and mark it failed if it exits, so a daemon that was
+  not up yet, or restarted after an update, left the session with no tools and no
+  instructions. That read as the agent ignoring a request to annotate. Any transport
+  failure now drops the connection, and the next call opens a new one with a new session.
+  A connection from an earlier call that fails is retried once on a fresh one, so a
+  restart costs the agent its marks and not the call. The loss is reported once, as a
+  `gone` entry with reason `session_end` and no id. Closes #7.
 - **Rust 1.88 is the minimum.** Raised so `rmcp` 3 and the crates the old floor held back
   could update: `icu_*` 2.3, `darling` 0.23, `encoding_rs` 0.8.42 and `idna_adapter` 1.2.2.
   Clippy follows the floor, so 11 sites moved to what 1.88 made stable: `as_chunks` in
@@ -65,6 +77,9 @@ is a format.
 
 ### Fixed
 
+- **`gone` reasons in MCP results used the Rust variant name, not the wire name.**
+  `display_change` arrived as `displaychange` and `session_end` as `sessionend`, which
+  matched neither the field's own documentation nor the protocol.
 - **The Screen Recording dialog came back at every start once Arin had been upgraded.**
   macOS keeps one row for `com.anistark.arin` and pins it to the `cdhash` of the build it
   was granted to, which for an ad-hoc signature is the whole designated requirement. After
