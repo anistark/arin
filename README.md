@@ -36,6 +36,8 @@ nix run github:anistark/arin -- -d
 [Docs](https://anistark.github.io/arin/docs/) ·
 [Website](https://anistark.github.io/arin/)
 
+<img src="assets/demo.gif" width="880" alt="Arin drawing on the whole screen: circling a word on its own website, underlining a line, pointing at the install command, then leaving the browser to circle a desktop widget and point at the menu bar">
+
 </div>
 
 ---
