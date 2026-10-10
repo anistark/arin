@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.png" width="150" alt="Arin">
-
-# ARIN
+<img src="assets/banner.gif" width="880" alt="Arin: the phoenix logo flapping its wings above the words It draws. It never clicks.">
 
 **An annotation layer any agent can draw on.**
 
