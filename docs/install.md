@@ -214,7 +214,7 @@ None of those remove what Arin left in your home directory, because none of them
 guess. If you want it gone completely:
 
 ```sh
-rm -rf ~/Library/Logs/Arin
+rm -rf ~/Library/Logs/Arin "$HOME/Library/Application Support/Arin"
 tccutil reset ScreenCapture com.anistark.arin
 ```
 

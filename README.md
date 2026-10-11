@@ -58,7 +58,10 @@ should compose Arin with a separate actuator.
 
 ## Privacy
 
-TBD.
+No accounts, no analytics, and no network connections with the default settings. Screen
+captures stay in memory on your Mac. The two settings that send anything anywhere, the
+`claude` resolver and the update check, are off until you turn them on.
+[PRIVACY.md](PRIVACY.md) has what Arin reads, stores and sends.
 
 ## License
 

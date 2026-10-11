@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 readme = "README.md"
 # Matching `arin-protocol`, and for the same reason: this is a library about a wire
 # format, looked for under different words than the tool is. The workspace lists describe
