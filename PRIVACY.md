@@ -51,7 +51,7 @@ The `local` resolver talks to a model server on your own machine. It refuses any
 |---|---|---|
 | `~/Library/Logs/Arin/arin.log` | Startup settings, client names, grounding decisions, which application was brought forward, and errors | When Arin is started by the login agent |
 | `~/Library/Application Support/Arin` | Whether this build has asked macOS for Screen Recording, and which build capture last worked for: its version and the path to its binary | Always |
-| `~/Library/LaunchAgents/com.anistark.arin.plist` | The login agent | After `arin service enable` |
+| `~/Library/LaunchAgents/dev.anirudha.arin.plist` | The login agent | After `arin service enable` |
 
 The log does not record screen contents, window titles, tabs, descriptions sent for grounding, or the text of marks.
 
@@ -76,7 +76,7 @@ Homebrew, GitHub and crates.io see a download the way they see any other, under 
 ```sh
 arin service disable
 rm -rf ~/Library/Logs/Arin "$HOME/Library/Application Support/Arin"
-tccutil reset ScreenCapture com.anistark.arin
+tccutil reset ScreenCapture dev.anirudha.arin
 ```
 
 [Uninstalling](docs/install.md#uninstalling) covers removing the app itself.

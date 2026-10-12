@@ -14,7 +14,7 @@
 //! ran `codesign` when it was handed an identity, so every install built from source shipped
 //! a bundle carrying nothing but the linker's ad-hoc signature. `codesign --verify` on it
 //! fails outright with "code has no resources but signature indicates they must be present",
-//! its identifier is the linker's `arin-<hash>` rather than `com.anistark.arin`, and its
+//! its identifier is the linker's `arin-<hash>` rather than `dev.anirudha.arin`, and its
 //! Info.plist is not bound to the signature at all.
 //!
 //! # Why this shells out to codesign
@@ -204,12 +204,12 @@ mod tests {
     fn a_field_is_read_from_what_codesign_prints() {
         let described = "\
 Executable=/opt/homebrew/opt/arin/Arin.app/Contents/MacOS/arin
-Identifier=com.anistark.arin
+Identifier=dev.anirudha.arin
 Format=app bundle with Mach-O thin (arm64)
 Signature=adhoc
 TeamIdentifier=not set
 ";
-        assert_eq!(field(described, "Identifier"), Some("com.anistark.arin"));
+        assert_eq!(field(described, "Identifier"), Some("dev.anirudha.arin"));
         assert_eq!(field(described, "TeamIdentifier"), Some("not set"));
         assert_eq!(field(described, "Nothing"), None);
     }
@@ -230,11 +230,11 @@ TeamIdentifier=not set
     fn every_identity_says_something_and_only_a_signed_one_holds_a_grant() {
         let cases = [
             Identity::Certified {
-                identifier: "com.anistark.arin".into(),
+                identifier: "dev.anirudha.arin".into(),
                 team: "ABCDE12345".into(),
             },
             Identity::AdHoc {
-                identifier: "com.anistark.arin".into(),
+                identifier: "dev.anirudha.arin".into(),
             },
             Identity::Unstable(Fault::NotBundled),
             Identity::Unstable(Fault::Unsealed {
@@ -268,7 +268,7 @@ TeamIdentifier=not set
             "{explained}"
         );
         assert!(
-            explained.contains("tccutil reset ScreenCapture com.anistark.arin"),
+            explained.contains("tccutil reset ScreenCapture dev.anirudha.arin"),
             "{explained}"
         );
     }

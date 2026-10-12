@@ -14,7 +14,7 @@
 //!
 //! # Why launchctl rather than a crate
 //!
-//! The plist is generated from `packaging/macos/com.anistark.arin.plist`, the same file the
+//! The plist is generated from `packaging/macos/dev.anirudha.arin.plist`, the same file the
 //! bundlers install and the nix-darwin module is checked against, so there is nothing here
 //! to build a plist with. What is left is `bootstrap`, `bootout` and `kickstart`, which no
 //! crate wraps and which have no API besides the tool.
@@ -23,14 +23,16 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::cli::{BUNDLE_ID, ServiceAction};
+use arin_core::{BUNDLE_ID, LEGACY_BUNDLE_IDS};
+
+use crate::cli::ServiceAction;
 
 /// The launch agent, from the file the bundlers install and the Nix module tracks.
 ///
 /// Included rather than rebuilt so there is one description of the agent. The plist is the
 /// reference, and a second definition in Rust would be a copy to keep in step with it and
 /// with `packaging/nix/darwin-module.nix`.
-const TEMPLATE: &str = include_str!("../../../packaging/macos/com.anistark.arin.plist");
+const TEMPLATE: &str = include_str!("../../../packaging/macos/dev.anirudha.arin.plist");
 
 pub(crate) fn run(action: ServiceAction) -> Result<()> {
     match action {
@@ -49,7 +51,7 @@ fn enable(app: Option<&Path>) -> Result<()> {
     };
 
     let plist = plist_path()?;
-    refuse_to_fight_over(&plist)?;
+    refuse_to_fight_over_any()?;
 
     let logs = log_dir()?;
     std::fs::create_dir_all(&logs)
@@ -60,6 +62,9 @@ fn enable(app: Option<&Path>) -> Result<()> {
     }
     std::fs::write(&plist, render(&binary, &logs))
         .with_context(|| format!("could not write {}", plist.display()))?;
+
+    // Before the new agent loads, so the two never run side by side.
+    let retired = retire_legacy()?;
 
     // Booted out first so that enabling is repeatable. Re-running this after the app moved
     // should replace the agent rather than fail on one already loaded.
@@ -76,6 +81,12 @@ fn enable(app: Option<&Path>) -> Result<()> {
 
     println!("Arin starts at login, from {}", binary.display());
     println!("Logs: {}", logs.join("arin.log").display());
+    if !retired.is_empty() {
+        println!(
+            "Replaced the agent an earlier build installed as {}.",
+            retired.join(", ")
+        );
+    }
     println!();
     println!("The Screen Recording grant belongs to this bundle. If you replace the app with");
     println!("a build macOS sees as a different one, grant it again.");
@@ -83,18 +94,15 @@ fn enable(app: Option<&Path>) -> Result<()> {
 }
 
 fn disable() -> Result<()> {
-    let plist = plist_path()?;
-    refuse_to_fight_over(&plist)?;
+    refuse_to_fight_over_any()?;
 
     let _ = launchctl(&["bootout".as_ref(), target().as_ref()]);
-    match std::fs::remove_file(&plist) {
-        Ok(()) => println!("Arin no longer starts at login. The app itself is untouched."),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("Arin was not starting at login. Nothing to remove.");
-        }
-        Err(e) => {
-            return Err(e).with_context(|| format!("could not remove {}", plist.display()));
-        }
+    let removed = remove_if_present(&plist_path()?)?;
+    let retired = retire_legacy()?;
+    if removed || !retired.is_empty() {
+        println!("Arin no longer starts at login. The app itself is untouched.");
+    } else {
+        println!("Arin was not starting at login. Nothing to remove.");
     }
     Ok(())
 }
@@ -105,27 +113,34 @@ fn disable() -> Result<()> {
 /// the same way, and the question "is Arin set up to come back after a reboot" is one a
 /// setup script wants to ask without reading prose.
 fn status() -> Result<()> {
-    let plist = plist_path()?;
-    let printed = launchctl(&["print".as_ref(), target().as_ref()])?;
-    if !printed.status.success() {
+    let Some((label, printed)) = loaded()? else {
         println!("not enabled. Run: arin service enable");
-        if plist.exists() {
-            println!();
-            println!(
-                "There is a plist at {}, so the agent was installed and",
-                plist.display()
-            );
-            println!("then unloaded. Enabling again will load it.");
+        for label in labels() {
+            let plist = plist_for(label)?;
+            if plist.exists() {
+                println!();
+                println!(
+                    "There is a plist at {}, so the agent was installed and",
+                    plist.display()
+                );
+                println!("then unloaded. Enabling again will load it.");
+                break;
+            }
         }
         std::process::exit(1);
-    }
+    };
 
-    let printed = String::from_utf8_lossy(&printed.stdout);
     println!("enabled");
     for key in ["state", "program", "pid", "last exit code"] {
         if let Some(value) = field(&printed, key) {
             println!("{key:<15}{value}");
         }
+    }
+
+    if label != BUNDLE_ID {
+        println!();
+        println!("An earlier build installed this agent as {label}. It still starts Arin,");
+        println!("and `arin service enable` moves it to {BUNDLE_ID}.");
     }
 
     // launchd does not create the directory it is told to write to, and says nothing when it
@@ -144,7 +159,12 @@ fn status() -> Result<()> {
 }
 
 fn restart() -> Result<()> {
-    let kicked = launchctl(&["kickstart".as_ref(), "-k".as_ref(), target().as_ref()])?;
+    let label = loaded()?.map_or(BUNDLE_ID, |(label, _)| label);
+    let kicked = launchctl(&[
+        "kickstart".as_ref(),
+        "-k".as_ref(),
+        target_for(label).as_ref(),
+    ])?;
     if !kicked.status.success() {
         bail!(
             "launchctl would not restart the agent: {}\n\
@@ -155,6 +175,50 @@ fn restart() -> Result<()> {
     println!("Restarted. The daemon is the build the agent points at, which after an");
     println!("upgrade is the new one.");
     Ok(())
+}
+
+/// The label the agent is loaded under, with what `launchctl print` says about it.
+///
+/// The current label is asked first. An agent an earlier build installed under a retired
+/// label still names the same bundle, so it is a working agent rather than a missing one.
+fn loaded() -> Result<Option<(&'static str, String)>> {
+    for label in labels() {
+        let printed = launchctl(&["print".as_ref(), target_for(label).as_ref()])?;
+        if printed.status.success() {
+            return Ok(Some((
+                label,
+                String::from_utf8_lossy(&printed.stdout).into_owned(),
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// Unload and delete any agent an earlier build installed under a retired label.
+///
+/// Left in place, launchd would start it beside the current agent at the next login, and
+/// two daemons would contend for one socket. Returns the labels that were there.
+fn retire_legacy() -> Result<Vec<&'static str>> {
+    let mut retired = Vec::new();
+    for &label in LEGACY_BUNDLE_IDS {
+        let loaded = launchctl(&["bootout".as_ref(), target_for(label).as_ref()])?
+            .status
+            .success();
+        let removed = remove_if_present(&plist_for(label)?)?;
+        if loaded || removed {
+            retired.push(label);
+        }
+    }
+    Ok(retired)
+}
+
+/// Delete a file, and say whether there was one.
+fn remove_if_present(path: &Path) -> Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("could not remove {}", path.display())),
+    }
 }
 
 /// Read one `key = value` out of `launchctl print`.
@@ -252,6 +316,17 @@ fn homebrew_opt(binary: &Path) -> Option<PathBuf> {
     Some(alias)
 }
 
+/// Refuse when nix-darwin manages the agent under the current label or a retired one.
+///
+/// A retired one counts because `enable` and `disable` delete those too, and a store
+/// generation that still installs the old label is nix-darwin's to replace.
+fn refuse_to_fight_over_any() -> Result<()> {
+    for label in labels() {
+        refuse_to_fight_over(&plist_for(label)?)?;
+    }
+    Ok(())
+}
+
 /// Refuse to write over an agent something else is managing.
 ///
 /// nix-darwin writes `services.arin.enable` to this same path under this same label, and
@@ -305,8 +380,17 @@ fn escape(raw: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Every label the agent has been installed under, the current one first.
+fn labels() -> impl Iterator<Item = &'static str> {
+    std::iter::once(BUNDLE_ID).chain(LEGACY_BUNDLE_IDS.iter().copied())
+}
+
 fn plist_path() -> Result<PathBuf> {
-    Ok(home()?.join(format!("Library/LaunchAgents/{BUNDLE_ID}.plist")))
+    plist_for(BUNDLE_ID)
+}
+
+fn plist_for(label: &str) -> Result<PathBuf> {
+    Ok(home()?.join(format!("Library/LaunchAgents/{label}.plist")))
 }
 
 fn log_dir() -> Result<PathBuf> {
@@ -327,7 +411,11 @@ fn domain() -> String {
 }
 
 fn target() -> String {
-    format!("{}/{BUNDLE_ID}", domain())
+    target_for(BUNDLE_ID)
+}
+
+fn target_for(label: &str) -> String {
+    format!("{}/{label}", domain())
 }
 
 fn launchctl(args: &[&std::ffi::OsStr]) -> Result<Output> {
@@ -366,6 +454,13 @@ mod tests {
             "the plist template does not declare {BUNDLE_ID} as its label"
         );
         assert!(target().ends_with(BUNDLE_ID));
+    }
+
+    /// `enable` writes the current plist and then deletes every retired one, so the current
+    /// label appearing among them would delete the agent it had just written.
+    #[test]
+    fn the_current_label_is_not_among_the_retired_ones() {
+        assert!(!LEGACY_BUNDLE_IDS.contains(&BUNDLE_ID));
     }
 
     #[test]
@@ -465,8 +560,8 @@ mod tests {
     #[test]
     fn a_field_is_read_from_what_launchctl_prints() {
         let printed = "\
-com.anistark.arin = {
-	path = /Users/someone/Library/LaunchAgents/com.anistark.arin.plist
+dev.anirudha.arin = {
+	path = /Users/someone/Library/LaunchAgents/dev.anirudha.arin.plist
 	state = running
 	program = /opt/homebrew/opt/arin/Arin.app/Contents/MacOS/arin
 	pid = 35284
@@ -498,7 +593,7 @@ com.anistark.arin = {
     #[test]
     fn an_agent_that_is_not_there_is_not_mistaken_for_a_nix_one() {
         assert!(!nix_managed(Path::new(
-            "/nonexistent/Library/LaunchAgents/com.anistark.arin.plist"
+            "/nonexistent/Library/LaunchAgents/dev.anirudha.arin.plist"
         )));
     }
 }

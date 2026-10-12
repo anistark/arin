@@ -70,3 +70,16 @@ pub use traits::{Approver, Capture, DEFAULT_DETAIL, Focus, Frame, Renderer, Reso
 /// Binary name, socket file, log target, and menu bar title all derive from this. A
 /// rename should be a day of work, not a migration.
 pub const APP_NAME: &str = "arin";
+
+/// The macOS bundle identifier, which is also the launch agent's label.
+///
+/// macOS files the Screen Recording grant under it, so changing it costs every existing
+/// install that grant. `packaging/macos/Info.plist` declares the same string, and a test in
+/// `arin-cli` keeps the two in step. [`LEGACY_BUNDLE_IDS`] holds the ones it replaced.
+pub const BUNDLE_ID: &str = "dev.anirudha.arin";
+
+/// Identifiers earlier builds shipped under, newest first.
+///
+/// A login agent installed by one of those builds is still on disk under its old label, and
+/// would start a second daemon beside the new one. `arin service` clears them.
+pub const LEGACY_BUNDLE_IDS: &[&str] = &["com.anistark.arin"];

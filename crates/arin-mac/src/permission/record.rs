@@ -185,7 +185,7 @@ mod tests {
             .explain();
         assert!(explained.contains("Arin 0.6.0"), "{explained}");
         assert!(
-            explained.contains("tccutil reset ScreenCapture com.anistark.arin"),
+            explained.contains("tccutil reset ScreenCapture dev.anirudha.arin"),
             "{explained}"
         );
         assert!(explained.contains("menu bar"), "{explained}");

@@ -120,7 +120,7 @@ rustPlatform.buildRustPackage {
     # services.arin in the nix-darwin module and should prefer it, but an app that only
     # starts at login when your configuration is written in Nix would be a worse app.
     install -m555 packaging/macos/launch-agent.sh "$contents/Resources/launch-agent.sh"
-    install -m444 packaging/macos/com.anistark.arin.plist "$contents/Resources/"
+    install -m444 packaging/macos/dev.anirudha.arin.plist "$contents/Resources/"
 
     printf 'APPL????' > "$contents/PkgInfo"
   '';

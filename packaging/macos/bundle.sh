@@ -179,7 +179,7 @@ sed "s/@VERSION@/$version/g" packaging/macos/Info.plist >"$contents/Info.plist"
 # it, kept because released Homebrew caveats name this path, and the template itself, kept
 # as the readable copy of what the agent is. They go together, and they go at the same time.
 cp packaging/macos/launch-agent.sh "$contents/Resources/launch-agent.sh"
-cp packaging/macos/com.anistark.arin.plist "$contents/Resources/com.anistark.arin.plist"
+cp packaging/macos/dev.anirudha.arin.plist "$contents/Resources/dev.anirudha.arin.plist"
 chmod +x "$contents/Resources/launch-agent.sh"
 
 # Ancient, and still what Finder reads first to decide this is an application.
@@ -195,7 +195,7 @@ printf 'APPL????' >"$contents/PkgInfo"
 # broken one: the linker ad-hoc signs the Mach-O on Apple silicon whatever anyone does, so
 # the binary carries a signature that claims sealed resources while the bundle around it has
 # no `_CodeSignature` at all. `codesign --verify` fails on it outright, its identifier is the
-# linker's `arin-<hash>` rather than `com.anistark.arin`, and its Info.plist is not bound.
+# linker's `arin-<hash>` rather than `dev.anirudha.arin`, and its Info.plist is not bound.
 #
 # TCC will not keep a Screen Recording grant against that. The daemon comes up reporting the
 # permission missing on a machine where System Settings lists Arin with the switch on, and
@@ -241,9 +241,9 @@ lipo -archs "$contents/MacOS/arin" | sed 's/^/    architectures: /'
 installed="$(ls -d /opt/homebrew/opt/arin/Arin.app /Applications/Arin.app 2>/dev/null | head -1 || true)"
 if [ -n "$installed" ]; then
 	echo
-	echo "    note: $installed also exists, and both claim com.anistark.arin."
+	echo "    note: $installed also exists, and both claim dev.anirudha.arin."
 	echo "    Screen Recording is granted per binary, so they compete. If it reads as"
 	echo "    missing after you have granted it:"
-	echo "        tccutil reset ScreenCapture com.anistark.arin"
+	echo "        tccutil reset ScreenCapture dev.anirudha.arin"
 	echo "    then grant it from the menu bar item of the one you meant to run."
 fi

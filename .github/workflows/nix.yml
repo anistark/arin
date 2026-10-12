@@ -121,7 +121,7 @@ jobs:
           # first, an overlay that draws on top of your work also looks like your work.
           # Without the second, opening the app prints help into nothing.
           [ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$plist")" = "true" ]
-          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = "com.anistark.arin" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = "dev.anirudha.arin" ]
 
           # sips and iconutil are not available to a Nix build, so the icns is assembled by
           # other tools and is worth confirming is an icns rather than a file with the name.
@@ -130,7 +130,7 @@ jobs:
           # The deprecated installer and the template it predates. `arin service` needs
           # neither, and both are shipped until the released caveats stop naming the script.
           test -x "$contents/Resources/launch-agent.sh"
-          test -f "$contents/Resources/com.anistark.arin.plist"
+          test -f "$contents/Resources/dev.anirudha.arin.plist"
 
           # One binary serving as the app and the command line tool, rather than a second
           # copy on PATH that would be a second identity asking for the same permission.
@@ -184,10 +184,10 @@ jobs:
           jq . "$RUNNER_TEMP/module.json"
 
           jq -e '
-            .serviceConfig.Label == "com.anistark.arin"
+            .serviceConfig.Label == "dev.anirudha.arin"
             # The file `arin service enable` writes, so the two collide loudly instead of
             # running two daemons against one socket.
-            and (.launchAgents | index("com.anistark.arin.plist"))
+            and (.launchAgents | index("dev.anirudha.arin.plist"))
             # The binary inside the bundle. TCC attributes the Screen Recording grant to the
             # bundle, so an agent running anything else comes up unable to see the screen.
             and (.serviceConfig.ProgramArguments[0] | endswith("/Applications/Arin.app/Contents/MacOS/arin"))

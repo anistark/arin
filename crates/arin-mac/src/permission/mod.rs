@@ -38,12 +38,9 @@ pub use identity::Identity;
 pub use settings::open_screen_recording_settings;
 
 use crate::capture::MacCapture;
-use arin_core::{Access, Capture as _, Permissions};
+use arin_core::{Access, BUNDLE_ID, Capture as _, Permissions};
 use arin_protocol::DisplayId;
 use objc2_core_graphics::CGMainDisplayID;
-
-/// What macOS files a grant under, and what `tccutil` has to be told to reset one.
-const BUNDLE_ID: &str = "com.anistark.arin";
 
 /// What to tell someone who has to grant this by hand.
 pub const SCREEN_RECORDING_HELP: &str = "open System Settings, go to Privacy and Security, then Screen and System Audio \

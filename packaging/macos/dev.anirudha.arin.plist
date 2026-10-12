@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.anistark.arin</string>
+	<string>dev.anirudha.arin</string>
 
 	<!-- The binary inside the bundle, not a copy of it and not the one on PATH.
 	     TCC attributes the Screen Recording grant to the signed bundle, so a launch agent

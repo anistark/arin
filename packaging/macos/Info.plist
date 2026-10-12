@@ -14,7 +14,7 @@
 	<string>arin</string>
 
 	<key>CFBundleIdentifier</key>
-	<string>com.anistark.arin</string>
+	<string>dev.anirudha.arin</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 

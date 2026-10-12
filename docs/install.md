@@ -140,6 +140,21 @@ the same launch agent with the daemon's command line written down. See [Nix](/do
 `arin service` knows about it and refuses to manage an agent nix-darwin is managing, rather
 than overwriting it and leaving two definitions of one agent.
 
+## Upgrading from 0.6.1 or earlier
+
+Arin's bundle identifier changed from `com.anistark.arin` to `dev.anirudha.arin` after
+0.6.1. macOS files the Screen Recording grant under that identifier, so it sees the new
+build as a different app: grant Screen Recording once more. The old row stays in System
+Settings until you clear it:
+
+```sh
+tccutil reset ScreenCapture com.anistark.arin
+```
+
+A login agent an earlier build installed keeps working, because it names the same app.
+`arin service status` points it out, and `arin service enable` replaces it with one under
+the new identifier.
+
 ## When permissions go wrong
 
 If Screen Recording reads as missing after you have granted it, start with the daemon's log,
@@ -171,7 +186,7 @@ switch shows on while every other build is refused. The log says so and names th
 grant belongs to. Clearing the row is what moves it:
 
 ```sh
-tccutil reset ScreenCapture com.anistark.arin
+tccutil reset ScreenCapture dev.anirudha.arin
 ```
 
 Then, from the build you mean to run, choose Screen Recording from Arin's menu bar item,
@@ -185,7 +200,7 @@ signature that does not verify. Re-signing it is enough, and any ad-hoc signatur
 
 ```sh
 codesign --force --sign - /opt/homebrew/opt/arin/Arin.app
-tccutil reset ScreenCapture com.anistark.arin
+tccutil reset ScreenCapture dev.anirudha.arin
 ```
 
 Then start Arin and grant it once more. A grant made this way holds until that build is
@@ -215,16 +230,19 @@ guess. If you want it gone completely:
 
 ```sh
 rm -rf ~/Library/Logs/Arin "$HOME/Library/Application Support/Arin"
-tccutil reset ScreenCapture com.anistark.arin
+tccutil reset ScreenCapture dev.anirudha.arin
 ```
 
 If the app went first, there is no `arin` left to run and the two lines it would have run
 are:
 
 ```sh
-launchctl bootout gui/$UID/com.anistark.arin
-rm -f ~/Library/LaunchAgents/com.anistark.arin.plist
+launchctl bootout gui/$UID/dev.anirudha.arin
+rm -f ~/Library/LaunchAgents/dev.anirudha.arin.plist
 ```
+
+An agent installed by 0.6.1 or earlier is under `com.anistark.arin` instead, so name that
+in both lines.
 
 The socket lives in your temporary directory and is recreated on every start, so there is
 nothing to clean up there. There are no accounts, no config in `~/.config`, and no

@@ -83,7 +83,7 @@ open target/bundle/Arin.app
 Skipping `codesign` does not leave the bundle unsigned: the linker ad-hoc signs the binary
 on Apple silicon whatever you do, so the bundle ends up claiming sealed resources it does
 not have, `codesign --verify` fails on it, and its identifier is the linker's `arin-<hash>`
-rather than `com.anistark.arin`. macOS will not keep a Screen Recording grant against that,
+rather than `dev.anirudha.arin`. macOS will not keep a Screen Recording grant against that,
 so the permission reads as missing however many times you switch it on.
 
 A grant made against an ad-hoc signed build holds until that build is replaced, which means
@@ -91,7 +91,7 @@ every rebuild needs it granted again. That is the cost of developing without a c
 
 Two bundles carrying one identifier also compete for a single Screen Recording record, so if
 a development build and an installed one are both on the machine, expect to
-`tccutil reset ScreenCapture com.anistark.arin` between them. `just bundle` warns when it
+`tccutil reset ScreenCapture dev.anirudha.arin` between them. `just bundle` warns when it
 notices the other one.
 
 ## The invariants

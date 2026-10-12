@@ -35,7 +35,7 @@ is a format.
 - **Arin stops asking for Screen Recording at every start.** After an upgrade, macOS put its
   dialog up at every login while System Settings showed Arin already switched on. Arin now
   asks once per build, and its log names the build the switch belongs to and the command
-  that moves it: `tccutil reset ScreenCapture com.anistark.arin`.
+  that moves it: `tccutil reset ScreenCapture dev.anirudha.arin`.
 - **Screen Recording in the menu bar asks macOS before opening System Settings**, so Arin is
   back in the list to switch on after its row has been reset.
 - **Starting Arin by hand no longer opens System Settings on its own.** The macOS dialog has
@@ -46,6 +46,11 @@ is a format.
 - **Building Arin from source needs Rust 1.88 or newer**, up from 1.85, and so does
   depending on `arin-protocol` or `arin`. Homebrew and Nix already build with a newer Rust,
   so neither install changes.
+- **Arin's bundle identifier is now `dev.anirudha.arin`**, replacing `com.anistark.arin`.
+  macOS sees the new build as a different app, so Screen Recording has to be granted once
+  more. A login agent from an earlier build keeps working, and `arin service enable`
+  replaces it with one under the new identifier. See
+  [Upgrading from 0.6.1 or earlier](docs/install.md#upgrading-from-061-or-earlier).
 - **The MCP docs cover setup for more agents**: Claude Desktop, Cursor, Codex, opencode,
   Kilo Code and pi, and how to run Arin with a local model through Ollama.
 - **`PRIVACY.md` says what Arin reads, stores and sends**, and which settings send
@@ -53,6 +58,15 @@ is a format.
 
 ### Changed
 
+- **The bundle identifier is `dev.anirudha.arin`, from `com.anistark.arin`.** It is also
+  the launch agent's label and what TCC files the grant under, so it moved now, ahead of
+  signing in 0.7, while it costs the fewest installs a grant. It lives once in
+  `arin_core::BUNDLE_ID`, replacing the copies `arin-cli` and `arin-mac` each held, and the
+  agent template is now `packaging/macos/dev.anirudha.arin.plist`. The old identifier is
+  kept in `arin_core::LEGACY_BUNDLE_IDS`: `arin service enable` and `disable` boot out and
+  delete an agent under it before loading the new one, so an upgrade never starts two
+  daemons on one socket, `status` and `restart` find an agent still under it, and both
+  refuse when nix-darwin owns either label. The cask uninstalls and zaps both labels.
 - **`arin` and `arin-protocol` name the docs site as their homepage**, so crates.io links
   to it beside the repository.
 - **`arin mcp` connects to the daemon on the first tool call rather than at startup.**

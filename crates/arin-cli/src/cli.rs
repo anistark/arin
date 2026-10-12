@@ -35,18 +35,6 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Command>,
 }
 
-/// The bundle identifier in `packaging/macos/Info.plist`.
-///
-/// Duplicated here because the Rust side has to recognise its own bundle at runtime and
-/// cannot read a plist it may not be inside of. `the_bundle_identifier_matches_the_plist`
-/// keeps the two honest.
-///
-/// Gated to exactly where it is read. `Launch::detect` only consults it on macOS, and the
-/// drift test is worth running everywhere because comparing two strings needs no window
-/// server. Without the `test` arm this is dead code on Linux, which CI denies.
-#[cfg(any(target_os = "macos", test))]
-pub(crate) const BUNDLE_ID: &str = "com.anistark.arin";
-
 /// How this process was started, which is what a bare `arin` means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Launch {
@@ -74,7 +62,8 @@ impl Launch {
     pub(crate) fn detect() -> Self {
         use std::io::IsTerminal;
 
-        let opened = std::env::var("__CFBundleIdentifier").is_ok_and(|id| id == BUNDLE_ID);
+        let opened =
+            std::env::var("__CFBundleIdentifier").is_ok_and(|id| id == arin_core::BUNDLE_ID);
         if opened && !std::io::stdin().is_terminal() {
             Self::Bundle
         } else {
@@ -775,8 +764,9 @@ mod tests {
             .trim();
 
         assert_eq!(
-            declared, BUNDLE_ID,
-            "packaging/macos/Info.plist and cli::BUNDLE_ID disagree, so the app would not \
+            declared,
+            arin_core::BUNDLE_ID,
+            "packaging/macos/Info.plist and arin_core::BUNDLE_ID disagree, so the app would not \
              recognise itself when opened from Finder"
         );
     }

@@ -28,8 +28,11 @@ cask "arin" do
   # are then on PATH, and they are the same build the menu bar is running.
   binary "#{appdir}/Arin.app/Contents/MacOS/arin", target: "arin"
 
-  uninstall quit:       "com.anistark.arin",
-            launchctl:  "com.anistark.arin",
+  # com.anistark.arin is the identifier builds up to 0.6.1 shipped under. A login agent one
+  # of them installed is still on disk under that label until `arin service enable` runs
+  # again, so uninstalling has to know both.
+  uninstall quit:       ["dev.anirudha.arin", "com.anistark.arin"],
+            launchctl:  ["dev.anirudha.arin", "com.anistark.arin"],
             delete:     "#{appdir}/Arin.app"
 
   # The socket lives in the user's temporary directory and is recreated on every start, so
@@ -37,6 +40,7 @@ cask "arin" do
   # the log directory the launch agent writes to, and the agent itself if they enabled it.
   zap trash: [
     "~/Library/Logs/Arin",
+    "~/Library/LaunchAgents/dev.anirudha.arin.plist",
     "~/Library/LaunchAgents/com.anistark.arin.plist",
   ]
 

@@ -59,7 +59,7 @@ The flake ships a [nix-darwin](https://github.com/nix-darwin/nix-darwin) module.
 }
 ```
 
-That writes `~/Library/LaunchAgents/com.anistark.arin.plist` and starts the daemon at
+That writes `~/Library/LaunchAgents/dev.anirudha.arin.plist` and starts the daemon at
 login, from the binary inside the bundle. It is the same launch agent `arin service enable`
 installs, under the same label, so the two collide rather than running two daemons against
 one socket. Pick one.
@@ -127,7 +127,7 @@ If Screen Recording reads as missing while System Settings shows Arin switched o
 switch belongs to another build, and the daemon's log names it. Clear the row:
 
 ```sh
-tccutil reset ScreenCapture com.anistark.arin
+tccutil reset ScreenCapture dev.anirudha.arin
 ```
 
 Then choose Screen Recording from Arin's menu bar item, switch it on, and restart Arin.

@@ -1,6 +1,6 @@
 # The nix-darwin module: `services.arin.enable = true` and Arin starts at login.
 #
-# It is the same launch agent packaging/macos/com.anistark.arin.plist describes, written as
+# It is the same launch agent packaging/macos/dev.anirudha.arin.plist describes, written as
 # options instead of as a template. The plist stays the reference: if the two ever say
 # different things about KeepAlive or ProcessType, that file is right and this one is a
 # drift to fix.
@@ -203,7 +203,7 @@ in
         # The identifier the app itself carries, rather than the org.nixos.* label
         # nix-darwin would otherwise generate. It is what `launchctl` commands in the docs
         # name, what the Homebrew cask removes on uninstall, and what TCC has on file.
-        Label = "com.anistark.arin";
+        Label = "dev.anirudha.arin";
 
         ProgramArguments = [ binary ] ++ arguments;
         RunAtLoad = true;
