@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 readme = "README.md"
 # Not the workspace lists. This crate is types on a wire, so it is looked for under
 # different words than the binary is, and the workspace categories describe a tool rather

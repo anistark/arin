@@ -46,9 +46,15 @@ is a format.
 - **Building Arin from source needs Rust 1.88 or newer**, up from 1.85, and so does
   depending on `arin-protocol` or `arin`. Homebrew and Nix already build with a newer Rust,
   so neither install changes.
+- **The MCP docs cover setup for more agents**: Claude Desktop, Cursor, Codex, opencode,
+  Kilo Code and pi, and how to run Arin with a local model through Ollama.
+- **`PRIVACY.md` says what Arin reads, stores and sends**, and which settings send
+  anything off your machine.
 
 ### Changed
 
+- **`arin` and `arin-protocol` name the docs site as their homepage**, so crates.io links
+  to it beside the repository.
 - **`arin mcp` connects to the daemon on the first tool call rather than at startup.**
   MCP clients spawn the server once and mark it failed if it exits, so a daemon that was
   not up yet, or restarted after an update, left the session with no tools and no

@@ -8,6 +8,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/anistark/arin"
+homepage = "https://anistark.github.io/arin/"
 description = "An annotation layer any agent can draw on."
 keywords = ["annotation", "overlay", "agent", "mcp", "accessibility"]
 categories = ["visualization", "command-line-utilities"]

@@ -283,6 +283,37 @@ function licenseMarkdown() {
   ].join("\n");
 }
 
+// PRIVACY.md, read from the repository root at build time, for the licence's reason: the
+// file in the repository is the only copy, so the page cannot promise something the file
+// no longer does.
+//
+// Its links are written for GitHub, relative to the repository root, so each one is
+// pointed at the page this site renders the same file as. A link into docs/ that is not
+// one of the pages above throws rather than shipping a 404.
+function privacyMarkdown() {
+  const raw = fs.readFileSync(path.join(docsDir, "..", "PRIVACY.md"), "utf8").trim();
+  if (!raw) {
+    throw new Error("PRIVACY.md is empty, so /privacy/ would publish nothing");
+  }
+
+  const pages = { "CHANGELOG.md": "/changelog/", LICENSE: "/license/" };
+
+  return raw.replace(/\]\(([^)#\s]+)(#[^)\s]*)?\)/g, (link, target, anchor = "") => {
+    if (/^[a-z]+:/i.test(target)) {
+      return link;
+    }
+    const doc = target.match(/^docs\/(.+\.md)$/);
+    if (doc) {
+      const page = DOCS.find((entry) => entry.file === doc[1]);
+      if (!page) {
+        throw new Error(`PRIVACY.md links to ${target}, which is not a page on the site`);
+      }
+      return `](/docs/${page.slug}/${anchor})`;
+    }
+    return `](${pages[target] || `${REPO}/blob/main/${target}`}${anchor})`;
+  });
+}
+
 export default function (eleventyConfig) {
   eleventyConfig.addPlugin(HtmlBasePlugin);
   eleventyConfig.addPlugin(syntaxHighlight);
@@ -333,9 +364,17 @@ export default function (eleventyConfig) {
     permalink: "/license/",
   });
 
+  eleventyConfig.addTemplate("privacy.md", privacyMarkdown(), {
+    layout: "layouts/page.njk",
+    title: "Privacy",
+    description: "What Arin reads, stores and sends, from the PRIVACY.md file in the repository.",
+    permalink: "/privacy/",
+  });
+
   eleventyConfig.addWatchTarget("./*.md");
   eleventyConfig.addWatchTarget("../CHANGELOG.md");
   eleventyConfig.addWatchTarget("../LICENSE");
+  eleventyConfig.addWatchTarget("../PRIVACY.md");
   eleventyConfig.addWatchTarget("src/styles/");
 
   eleventyConfig.setServerOptions({

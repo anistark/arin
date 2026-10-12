@@ -4,8 +4,8 @@ Arin holds no model. Everything interesting comes from the agent driving it, so 
 get out of Arin is mostly a question of what you ask for. These are prompts worth trying
 once it is connected, and the phrasing that tends to work.
 
-If you have not connected it to an agent yet, [MCP](/docs/mcp/) is one line for Claude
-Code. If you would rather see it work without an agent at all, [CLI](/docs/cli/) has the
+If you have not connected it to an agent yet, [MCP](/docs/mcp/) has the setup for
+each client. If you would rather see it work without an agent at all, [CLI](/docs/cli/) has the
 shell version of everything below.
 
 ## First, how your agent sees

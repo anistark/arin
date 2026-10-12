@@ -6,12 +6,14 @@ on:
     paths:
       - "docs/**"
       - "assets/**"
-      # Two files outside docs/ that the site renders. The version in the nav is read out of
-      # the manifest and the changelog page is CHANGELOG.md itself, so a release that
-      # touches only these would otherwise leave the site serving the previous version and
-      # the previous release notes until something in docs/ happened to change.
+      # Files outside docs/ that the site renders. The version in the nav is read out of
+      # the manifest, and the changelog, licence and privacy pages are those files
+      # themselves, so a change that touches only these would otherwise leave the site
+      # serving the previous copy until something in docs/ happened to change.
       - "Cargo.toml"
       - "CHANGELOG.md"
+      - "LICENSE"
+      - "PRIVACY.md"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
