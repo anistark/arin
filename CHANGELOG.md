@@ -55,8 +55,16 @@ is a format.
   Kilo Code and pi, and how to run Arin with a local model through Ollama.
 - **`PRIVACY.md` says what Arin reads, stores and sends**, and which settings send
   anything off your machine.
+- **The docs site is at [arin.anirudha.dev](https://arin.anirudha.dev/)**, moved from
+  `anistark.github.io/arin`. Links to the old address redirect to the same page.
 
 ### Changed
+
+- **The docs site is served from `arin.anirudha.dev` at the root of the domain.** The
+  Pages build no longer sets `PATH_PREFIX`, so links are written without the `/arin/`
+  prefix a project site needed. The workspace `homepage` and the README point at the new
+  address. GitHub Pages redirects the old one, which is what keeps the homepage on the
+  crates already published working until the next release replaces it.
 
 - **The bundle identifier is `dev.anirudha.arin`, from `com.anistark.arin`.** It is also
   the launch agent's label and what TCC files the grant under, so it moved now, ahead of
