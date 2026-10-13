@@ -63,6 +63,19 @@ System Settings under Privacy and Security. If that is not something you want to
 Homebrew, which avoids the question rather than answering it. This is the one install route
 that gets easier rather than harder in 0.7.
 
+**It does not put `arin` on your PATH.** Dragging the app to Applications gets you the menu
+bar item and nothing that can drive it: no `arin mcp` for an agent to start, no `arin
+service`, and none of the [CLI](/docs/cli/). Every other route links the binary for you.
+Here it is one line, after the app is in `/Applications`:
+
+```sh
+sudo mkdir -p /usr/local/bin && sudo ln -sf /Applications/Arin.app/Contents/MacOS/arin /usr/local/bin/arin
+```
+
+`/usr/local/bin` is on PATH by default but does not always exist on Apple silicon, hence the
+`mkdir`. The link points into the app, so replacing `Arin.app` with a newer dmg keeps it
+working, and `arin service enable` follows it back to the app it belongs to.
+
 ## From source
 
 ```sh
@@ -224,6 +237,7 @@ Then the app:
 brew uninstall arin                  # Homebrew
 nix profile remove arin              # Nix
 rm -rf /Applications/Arin.app        # the dmg
+sudo rm -f /usr/local/bin/arin       # and its link, if you made one
 ```
 
 None of those remove what Arin left in your home directory, because none of them should

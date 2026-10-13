@@ -59,6 +59,9 @@ is a format.
   `anistark.github.io/arin`. Links to the old address redirect to the same page.
 - **The docs site has a [download page](https://arin.anirudha.dev/download/)** listing the
   dmg for every release, with its size and checksum, and a link to that version's changelog.
+- **The dmg does not put `arin` on your PATH, and the docs now say so.** Without it no agent
+  can start `arin mcp`. The install guide and the download page give the one line that
+  links it.
 
 ### Added
 

@@ -26,7 +26,8 @@ way to know it was meant to have any.
 A client launched as an app rather than from a terminal may not see your shell's `PATH`,
 and then it cannot find `arin`. If one says it cannot start the server, replace `arin` with
 the full path that `command -v arin` prints. A Homebrew install puts it at
-`/opt/homebrew/bin/arin` on Apple silicon and `/usr/local/bin/arin` on Intel.
+`/opt/homebrew/bin/arin` on Apple silicon and `/usr/local/bin/arin` on Intel. The dmg puts
+it nowhere until you [link it yourself](/docs/install/#the-dmg).
 
 ### Claude Code
 

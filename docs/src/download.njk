@@ -24,6 +24,11 @@ permalink: /download/
       macOS will refuse it the first time it opens, and you will have to allow it in System Settings under Privacy and Security. Homebrew builds Arin on your machine instead, so that question never comes up:
     </p>
     <pre class="mt-3 overflow-x-auto rounded-lg bg-abyss/60 px-4 py-3 font-mono text-[13px] text-frost"><code>brew install anistark/tools/arin</code></pre>
+    <p class="mt-5">
+      <strong class="text-frost">The dmg does not put <code class="font-mono text-[13px]">arin</code> on your PATH.</strong>
+      Without it no agent can start <code class="font-mono text-[13px]">arin mcp</code>, so the orb has nothing to move it. Once the app is in Applications, link it:
+    </p>
+    <pre class="mt-3 overflow-x-auto rounded-lg bg-abyss/60 px-4 py-3 font-mono text-[13px] text-frost"><code>sudo mkdir -p /usr/local/bin &amp;&amp; sudo ln -sf /Applications/Arin.app/Contents/MacOS/arin /usr/local/bin/arin</code></pre>
     <p class="mt-3">
       <a href="/docs/install/" class="font-medium text-primary-soft transition hover:text-frost">Every way to install &rarr;</a>
     </p>
