@@ -1,0 +1,99 @@
+---
+layout: layouts/base.njk
+backdrop: stars
+title: Download
+description: The Arin dmg for every release, straight from GitHub.
+permalink: /download/
+---
+
+{# The newest release that is not a pre-release, because that is what `/releases/latest`
+   points at as well, and the button at the top should agree with GitHub about it. #}
+{% set latest = (releases or []) | rejectattr("prerelease") | first %}
+
+<div class="mx-auto max-w-7xl px-6 pb-16 pt-36">
+  <div>
+    <h1 class="font-display text-4xl font-bold tracking-tight text-frost sm:text-5xl">Download</h1>
+    <p class="mt-4 text-lg text-mist">
+      A universal dmg for macOS 14 or newer, on Apple silicon or Intel. Every release attaches one.
+    </p>
+  </div>
+
+  <div class="glass mt-10 rounded-2xl px-6 py-5 text-sm leading-relaxed text-fog">
+    <p>
+      <strong class="text-frost">The dmg is unsigned until 0.7.</strong>
+      macOS will refuse it the first time it opens, and you will have to allow it in System Settings under Privacy and Security. Homebrew builds Arin on your machine instead, so that question never comes up:
+    </p>
+    <pre class="mt-3 overflow-x-auto rounded-lg bg-abyss/60 px-4 py-3 font-mono text-[13px] text-frost"><code>brew install anistark/tools/arin</code></pre>
+    <p class="mt-3">
+      <a href="/docs/install/" class="font-medium text-primary-soft transition hover:text-frost">Every way to install &rarr;</a>
+    </p>
+  </div>
+
+  {% if releases %}
+
+  {% if latest %}
+  <section class="glass glass-edge mt-10 rounded-3xl px-6 py-8 sm:px-10">
+    <div class="flex flex-wrap items-baseline gap-3">
+      <h2 class="font-display text-2xl font-semibold text-frost">Arin {{ latest.version }}</h2>
+      <span class="release-badge">Latest</span>
+      <span class="font-mono text-xs text-mist">{{ latest.date }}</span>
+    </div>
+    {% for dmg in latest.dmgs %}
+    <div class="mt-6 flex flex-wrap items-center gap-4">
+      <a href="{{ dmg.url }}" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-abyss shadow-lg shadow-primary/25 transition hover:bg-primary-soft">
+        Download {{ dmg.name }}
+      </a>
+      <span class="text-sm text-mist">{{ dmg.size }}</span>
+    </div>
+    {% if dmg.sha256 %}
+    <p class="mt-4 break-all font-mono text-xs text-mist">sha256 {{ dmg.sha256 }}</p>
+    {% endif %}
+    {% endfor %}
+    {% if changelogAnchors[latest.version] %}
+    <p class="mt-6 text-sm">
+      <a href="/changelog/#{{ changelogAnchors[latest.version] }}" class="font-medium text-primary-soft transition hover:text-frost">What changed &rarr;</a>
+    </p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="mt-14">
+    <h2 class="font-display text-2xl font-semibold text-frost">Every version</h2>
+    <ul class="mt-6">
+      {% for release in releases %}
+      <li class="release px-5 py-4">
+        <div class="flex flex-wrap items-center gap-3">
+          <a href="{{ release.url }}" class="release-version transition hover:text-primary-soft">{{ release.version }}</a>
+          {% if release.name %}<span class="text-sm text-fog">{{ release.name }}</span>{% endif %}
+          <span class="release-date">{{ release.date }}</span>
+          {% if release.prerelease %}<span class="release-badge">Pre-release</span>{% endif %}
+          {% if changelogAnchors[release.version] %}
+          <a href="/changelog/#{{ changelogAnchors[release.version] }}" aria-label="{{ release.version }} changelog" title="Changelog"
+             class="ml-auto rounded-md p-1 text-mist transition hover:bg-white/5 hover:text-frost">
+            <svg viewBox="0 0 16 16" class="h-4 w-4 fill-none stroke-current" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.75h5.5L12.25 4.5v9.75H4z"/><path d="M9.25 1.75V4.75h3"/><path d="M6 8h4.25M6 10.75h4.25"/></svg>
+          </a>
+          {% endif %}
+        </div>
+        {% for dmg in release.dmgs %}
+        <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          <a href="{{ dmg.url }}" class="font-medium text-primary-soft transition hover:text-frost">{{ dmg.name }}</a>
+          <span class="text-mist">{{ dmg.size }}</span>
+        </div>
+        {% if dmg.sha256 %}
+        <p class="mt-1 break-all font-mono text-[11px] text-mist">sha256 {{ dmg.sha256 }}</p>
+        {% endif %}
+        {% endfor %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {% else %}
+
+  <p class="mt-10 text-fog">
+    The list of releases could not be read when this page was built.
+    <a href="{{ site.repo }}/releases" class="font-medium text-primary-soft transition hover:text-frost">Every release is on GitHub &rarr;</a>
+  </p>
+
+  {% endif %}
+</div>

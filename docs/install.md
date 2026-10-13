@@ -55,7 +55,8 @@ control. [Nix](/docs/nix/) is the whole story, including `services.arin` and its
 
 ## The dmg
 
-Every release attaches one, and the checksum is in the release notes.
+Every release attaches one. The [download page](/download/) lists them by version, each
+with its checksum.
 
 **It is unsigned.** macOS will refuse it the first time and you will have to allow it in
 System Settings under Privacy and Security. If that is not something you want to do, use
