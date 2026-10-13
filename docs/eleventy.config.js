@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { HtmlBasePlugin } from "@11ty/eleventy";
@@ -178,7 +179,7 @@ function starfield(count) {
 // because 0.2.0 alone is about six hundred lines and a changelog nobody can skim is a
 // changelog nobody reads. Upcoming is collapsed too: it is the least settled thing on the
 // page, so it should not be the loudest.
-function changelogMarkdown(currentVersion) {
+function changelogEntries() {
   const raw = fs.readFileSync(path.join(docsDir, "..", "CHANGELOG.md"), "utf8");
 
   // Link reference definitions sit at the foot of the file and are used from the headings.
@@ -210,6 +211,18 @@ function changelogMarkdown(currentVersion) {
     };
   });
 
+  return { intro, entries, references };
+}
+
+// The anchor a version's entry carries on /changelog/, so /download/ can link to it.
+// Prefixed, because an id that starts with a digit has to be escaped in every selector.
+function changelogAnchor(version) {
+  return `v${version}`;
+}
+
+function changelogMarkdown(currentVersion) {
+  const { intro, entries, references } = changelogEntries();
+
   const released = entries.filter((entry) => !entry.unreleased);
   // Falls back to the newest released section when the manifest has been bumped ahead of
   // the tag, which is how Latest stays on the last version anyone can install while the one
@@ -223,7 +236,7 @@ function changelogMarkdown(currentVersion) {
     const badge = entry.unreleased ? "Unreleased" : entry === open ? "Latest" : "";
 
     return [
-      `<details class="release"${entry === open ? " open" : ""}>`,
+      `<details class="release" id="${changelogAnchor(entry.version)}"${entry === open ? " open" : ""}>`,
       `<summary class="release-summary"><span class="release-version">${title}</span>` +
         (entry.date ? `<span class="release-date">${entry.date}</span>` : "") +
         (badge ? `<span class="release-badge">${badge}</span>` : "") +
@@ -314,6 +327,79 @@ function privacyMarkdown() {
   });
 }
 
+// Every published release that carries a dmg, newest first, for /download/.
+//
+// Read from GitHub at build time rather than in the visitor's browser, so the page makes no
+// request of its own and PRIVACY.md stays true when it says the site runs nothing. The cost
+// is that the page is only as new as the last build, which is why pages.yml rebuilds when
+// the release workflow finishes attaching the dmg.
+//
+// A token is used when one is set, because CI shares its IP with every other job and the
+// anonymous limit is sixty requests an hour. Outside CI the GitHub CLI's login stands in
+// when nothing is set, since a few dev server restarts spend that limit too. In CI a failure throws, since a download page
+// that silently lists nothing is worse than a deploy that did not happen. Locally it warns,
+// so the site still builds offline, and the page falls back to linking GitHub's own list.
+//
+// Asked once per process. The dev server rebuilds on every save, and asking on each of
+// those spends the anonymous limit in an afternoon.
+let releaseList;
+function releases() {
+  releaseList ??= fetchReleases();
+  return releaseList;
+}
+
+// Empty when `gh` is not installed or not logged in, which leaves the request anonymous.
+function ghToken() {
+  try {
+    return execFileSync("gh", ["auth", "token"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function fetchReleases() {
+  const headers = { Accept: "application/vnd.github+json", "User-Agent": "arin-docs" };
+  const token = process.env.GITHUB_TOKEN || (!process.env.CI && ghToken());
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  try {
+    const api = REPO.replace("https://github.com/", "https://api.github.com/repos/");
+    const response = await fetch(`${api}/releases?per_page=100`, { headers });
+    if (!response.ok) {
+      throw new Error(`GitHub answered ${response.status} ${response.statusText}`);
+    }
+
+    // Drafts are filtered here rather than trusted to be absent: an authenticated request
+    // can see them, and a draft's asset links do not work for anyone else.
+    return (await response.json())
+      .filter((release) => !release.draft)
+      .map((release) => ({
+        version: release.tag_name.replace(/^v/, ""),
+        name: release.name && release.name !== release.tag_name ? release.name : "",
+        date: release.published_at.slice(0, 10),
+        prerelease: release.prerelease,
+        url: release.html_url,
+        dmgs: release.assets
+          .filter((asset) => asset.name.endsWith(".dmg"))
+          .map((asset) => ({
+            name: asset.name,
+            url: asset.browser_download_url,
+            size: `${(asset.size / 1e6).toFixed(1)} MB`,
+            sha256: (asset.digest || "").replace(/^sha256:/, ""),
+          })),
+      }))
+      .filter((release) => release.dmgs.length > 0);
+  } catch (error) {
+    if (process.env.CI) {
+      throw new Error(`could not list releases for /download/: ${error.message}`);
+    }
+    console.warn(`[docs] /download/ will link to GitHub instead: ${error.message}`);
+    return null;
+  }
+}
+
 export default function (eleventyConfig) {
   eleventyConfig.addPlugin(HtmlBasePlugin);
   eleventyConfig.addPlugin(syntaxHighlight);
@@ -332,6 +418,17 @@ export default function (eleventyConfig) {
   eleventyConfig.addGlobalData("docsSections", docsSections);
   eleventyConfig.addGlobalData("docsGroups", docsGroups);
   eleventyConfig.addGlobalData("starfield", starfield(60));
+  eleventyConfig.addGlobalData("releases", releases);
+  // Released versions only, mapped to their anchor, so a version with no section of its own
+  // gets no link rather than one that lands at the top of the page.
+  eleventyConfig.addGlobalData(
+    "changelogAnchors",
+    Object.fromEntries(
+      changelogEntries()
+        .entries.filter((entry) => !entry.unreleased)
+        .map((entry) => [entry.version, changelogAnchor(entry.version)]),
+    ),
+  );
   eleventyConfig.addGlobalData("site", {
     name: "Arin",
     tagline: "An annotation layer any agent can draw on.",

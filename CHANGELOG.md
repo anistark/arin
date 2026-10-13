@@ -57,6 +57,25 @@ is a format.
   anything off your machine.
 - **The docs site is at [arin.anirudha.dev](https://arin.anirudha.dev/)**, moved from
   `anistark.github.io/arin`. Links to the old address redirect to the same page.
+- **The docs site has a [download page](https://arin.anirudha.dev/download/)** listing the
+  dmg for every release, with its size and checksum, and a link to that version's changelog.
+
+### Added
+
+- **`/download/` on the docs site.** The release list is read from GitHub's API when the
+  site builds, not in the visitor's browser, so the site still makes no request of its own.
+  Pages now rebuilds when the Release workflow succeeds, since the dmg is attached minutes
+  after the tag. The build uses the workflow token because the anonymous limit is shared
+  with every other job on the runner's IP. Locally the GitHub CLI's login is used when no
+  `GITHUB_TOKEN` is set, so a few dev server restarts do not spend the anonymous limit. A
+  failed fetch fails the build in CI, while locally the page links to GitHub's release list
+  instead. Below `sm` the nav drops its
+  Changelog link to make room, since the version pill already leads there. The nav's
+  GitHub link is its mark alone at every width.
+- **Each changelog entry has an anchor**, `#v<version>`, which is what the download page
+  links to. A version with no section in `CHANGELOG.md` gets no link. The base layout opens
+  a collapsed entry when the address points at it, since not every browser does that for
+  a fragment.
 
 ### Changed
 
