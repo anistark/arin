@@ -32,6 +32,10 @@ is a format.
   0.6.1 or earlier left two Arin rows in System Settings. Arin now resets the old one when
   it starts. macOS only allows that while it still knows of an app under the old
   identifier, so on some machines the row has to be removed by hand once.
+- **`arin service enable` no longer leaves Arin stopped when it was already running.** It
+  stopped the old daemon and could fail to start the new one, after which
+  `arin service restart` reported that the agent did not exist. Running `enable` again was
+  the way out.
 
 ### Added
 
@@ -45,6 +49,15 @@ is a format.
   and a cask's `postflight_steps` both run in Homebrew 7's sandbox, which denies the lookup
   of `tccd`, and `tccutil` exits 77 with `Operation not permitted from sandbox`. The legacy
   `postflight` block runs unsandboxed but is deprecated in Homebrew 7.
+
+### Fixed
+
+- **`arin service enable` waits for launchd to remove the agent it boots out before
+  bootstrapping the new one.** `launchctl bootout` can return before the service is gone,
+  and a bootstrap in that gap fails with `37: Operation already in progress`. launchd's own
+  log showed the bootstrap landing 4ms before `removing service: dev.anirudha.arin`. It now
+  polls `launchctl print` every 50ms for up to 5s. A bootstrap that still fails says the
+  agent loads at the next login and that running `enable` again starts it now.
 
 ## [0.7.0] - 2026-10-17
 
