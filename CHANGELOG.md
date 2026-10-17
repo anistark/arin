@@ -24,7 +24,7 @@ second renderer rather than landing at 1.0, since one implementation cannot prov
 is a format.
 
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
-0.7 and beyond in the plan; those never appear here. Only released versions do.
+0.8 and beyond in the plan; those never appear here. Only released versions do.
 
 ## [0.7.0] - 2026-10-17
 
@@ -90,7 +90,7 @@ is a format.
 
 - **The bundle identifier is `dev.anirudha.arin`, from `com.anistark.arin`.** It is also
   the launch agent's label and what TCC files the grant under, so it moved now, ahead of
-  signing in 0.7, while it costs the fewest installs a grant. It lives once in
+  signing in 0.8, while it costs the fewest installs a grant. It lives once in
   `arin_core::BUNDLE_ID`, replacing the copies `arin-cli` and `arin-mac` each held, and the
   agent template is now `packaging/macos/dev.anirudha.arin.plist`. The old identifier is
   kept in `arin_core::LEGACY_BUNDLE_IDS`: `arin service enable` and `disable` boot out and

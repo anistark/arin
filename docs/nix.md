@@ -120,7 +120,7 @@ colour that can be seen against whatever is underneath.
 **Today, every update needs it granted again.** Nothing is signed yet, and macOS identifies unsigned
 code by its hash and its path, both of which change on every Nix build. This is not
 peculiar to Nix, `brew upgrade` has the same problem, but a store path makes it visible.
-Signing lands in 0.7, after which the grant follows the certificate and the bundle
+Signing lands in 0.8, after which the grant follows the certificate and the bundle
 identifier rather than the path, and updating stops costing anything.
 
 If Screen Recording reads as missing while System Settings shows Arin switched on, the
