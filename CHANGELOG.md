@@ -26,6 +26,22 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.8 and beyond in the plan; those never appear here. Only released versions do.
 
+## [Unreleased]
+
+- **`arin service enable` no longer leaves Arin stopped when it was already running.** It
+  stopped the old daemon and could fail to start the new one, after which
+  `arin service restart` reported that the agent did not exist. Running `enable` again was
+  the way out.
+
+### Fixed
+
+- **`arin service enable` waits for launchd to remove the agent it boots out before
+  bootstrapping the new one.** `launchctl bootout` can return before the service is gone,
+  and a bootstrap in that gap fails with `37: Operation already in progress`. launchd's own
+  log showed the bootstrap landing 4ms before `removing service: dev.anirudha.arin`. It now
+  polls `launchctl print` every 50ms for up to 5s. A bootstrap that still fails says the
+  agent loads at the next login and that running `enable` again starts it now.
+
 ## [0.7.0] - 2026-10-17
 
 - **`arin mcp` no longer needs the daemon running first.** An agent launched before Arin
