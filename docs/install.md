@@ -18,7 +18,7 @@ after itself.
 **Building rather than downloading is the point, not a shortcut.** There is no certificate
 yet, and macOS quarantines anything unsigned that arrived over the network, so a downloaded
 app gets refused by Gatekeeper. Something compiled where it runs was never downloaded,
-carries no quarantine attribute, and Gatekeeper never engages. A certificate lands in 0.7,
+carries no quarantine attribute, and Gatekeeper never engages. A certificate lands in 0.8,
 and the formula is replaced by a cask then.
 
 The bundle is still ad-hoc signed, which buys nothing from Gatekeeper and is not optional
@@ -61,7 +61,7 @@ with its checksum.
 **It is unsigned.** macOS will refuse it the first time and you will have to allow it in
 System Settings under Privacy and Security. If that is not something you want to do, use
 Homebrew, which avoids the question rather than answering it. This is the one install route
-that gets easier rather than harder in 0.7.
+that gets easier rather than harder in 0.8.
 
 **It does not put `arin` on your PATH.** Dragging the app to Applications gets you the menu
 bar item and nothing that can drive it: no `arin mcp` for an agent to start, no `arin
