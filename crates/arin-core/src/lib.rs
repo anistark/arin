@@ -81,5 +81,7 @@ pub const BUNDLE_ID: &str = "dev.anirudha.arin";
 /// Identifiers earlier builds shipped under, newest first.
 ///
 /// A login agent installed by one of those builds is still on disk under its old label, and
-/// would start a second daemon beside the new one. `arin service` clears them.
+/// would start a second daemon beside the new one. `arin service` clears them. The Screen
+/// Recording row macOS kept for each is a second leftover, and the macOS daemon resets that
+/// at startup.
 pub const LEGACY_BUNDLE_IDS: &[&str] = &["com.anistark.arin"];

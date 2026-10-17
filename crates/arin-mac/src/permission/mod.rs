@@ -23,12 +23,14 @@
 //!
 //! - [`tcc`] asks the system, and is the only place the CoreGraphics calls appear.
 //! - [`identity`] answers whether a grant can stick to this build at all.
+//! - [`legacy`] clears the rows earlier bundle identifiers left in System Settings.
 //! - [`record`] remembers, per build, what the system cannot be asked about.
 //! - [`settings`] opens the pane with the switch on it.
 //! - [`flow`] is the startup sequence, and owns the decision to interrupt the user.
 
 mod flow;
 mod identity;
+mod legacy;
 mod record;
 mod settings;
 mod tcc;

@@ -21,7 +21,7 @@
 //! taking the screen, which was the bug fixed on 2026-08-11. The pane opens from the menu bar
 //! item and from `arin permissions --open`, and from nowhere else.
 
-use super::{record, tcc};
+use super::{legacy, record, tcc};
 use arin_core::Access;
 use std::time::{Duration, Instant};
 
@@ -47,6 +47,8 @@ pub fn begin_screen_recording_flow() {
 }
 
 fn run() {
+    legacy::retire();
+
     match super::access() {
         Access::Working => {
             record::remember_holder();

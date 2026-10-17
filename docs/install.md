@@ -158,12 +158,19 @@ than overwriting it and leaving two definitions of one agent.
 
 Arin's bundle identifier changed from `com.anistark.arin` to `dev.anirudha.arin` after
 0.6.1. macOS files the Screen Recording grant under that identifier, so it sees the new
-build as a different app: grant Screen Recording once more. The old row stays in System
-Settings until you clear it:
+build as a different app: grant Screen Recording once more.
+
+That leaves two Arin rows in System Settings, one of them for the old identifier. Arin
+clears the old one when it starts. It can only do that while macOS still knows of an app
+under the old identifier, so if the row is still there afterwards, select it and remove it
+with the minus button, or run:
 
 ```sh
 tccutil reset ScreenCapture com.anistark.arin
 ```
+
+which fails with `No such bundle identifier` in exactly the case where the minus button is
+the only way left.
 
 A login agent an earlier build installed keeps working, because it names the same app.
 `arin service status` points it out, and `arin service enable` replaces it with one under

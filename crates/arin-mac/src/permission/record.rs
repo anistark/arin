@@ -5,9 +5,12 @@
 //! start. And which build capture last worked for, which is the only thing that explains
 //! System Settings showing Arin switched on while the permission reads as missing.
 //!
-//! Both live in `~/Library/Application Support/Arin`. Losing either costs one more dialog or
-//! one explanation, and never a wrong answer about the permission, which is always read from
-//! macOS.
+//! A third is kept against the machine: which old bundle identifiers have had their row
+//! cleared, so [`super::legacy`] does it once rather than at every start.
+//!
+//! All three live in `~/Library/Application Support/Arin`. Losing one costs one more dialog,
+//! one explanation, or one more `tccutil` run, and never a wrong answer about the
+//! permission, which is always read from macOS.
 
 use std::path::PathBuf;
 
@@ -16,6 +19,9 @@ const ASKED: &str = "screen-recording-prompted";
 
 /// Records the build capture last worked for.
 const HOLDER: &str = "screen-recording-granted";
+
+/// Records the old bundle identifiers whose row has been cleared, one per line.
+const RETIRED: &str = "screen-recording-retired";
 
 /// A build that capture worked for, as remembered by an earlier run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +82,29 @@ pub fn remember_holder() {
         HOLDER,
         &format!("{}\n{}", env!("CARGO_PKG_VERSION"), build_key()),
     );
+}
+
+/// Whether the row under an old bundle identifier has been cleared already.
+pub fn retired(identifier: &str) -> bool {
+    read(RETIRED).is_some_and(|recorded| lists(&recorded, identifier))
+}
+
+/// Note that the row under an old bundle identifier has been cleared.
+pub fn remember_retired(identifier: &str) {
+    let mut recorded = read(RETIRED).unwrap_or_default();
+    if lists(&recorded, identifier) {
+        return;
+    }
+    if !recorded.is_empty() && !recorded.ends_with('\n') {
+        recorded.push('\n');
+    }
+    recorded.push_str(identifier);
+    recorded.push('\n');
+    write(RETIRED, &recorded);
+}
+
+fn lists(recorded: &str, identifier: &str) -> bool {
+    recorded.lines().any(|line| line.trim() == identifier)
 }
 
 fn parse(recorded: &str) -> Option<Holder> {
@@ -189,6 +218,14 @@ mod tests {
             "{explained}"
         );
         assert!(explained.contains("menu bar"), "{explained}");
+    }
+
+    #[test]
+    fn a_retired_identifier_is_matched_by_whole_line() {
+        let recorded = "com.anistark.arin\n";
+        assert!(lists(recorded, "com.anistark.arin"));
+        assert!(!lists(recorded, "com.anistark"));
+        assert!(!lists("", "com.anistark.arin"));
     }
 
     #[test]
