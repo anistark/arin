@@ -17,7 +17,7 @@ failure it exists to prevent.
 
 Two things it is worth knowing before reading the versions below.
 
-**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.6 while
+**The crate version is not the wire version.** `arin-protocol` and `arin` are at 0.7 while
 the protocol they describe is at 0.2, and the gap will keep widening. A Rust API change bumps the crate; a wire format
 change bumps `PROTOCOL_VERSION`. The protocol is not frozen, and freezing it may wait for a
 second renderer rather than landing at 1.0, since one implementation cannot prove a format
@@ -26,7 +26,7 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.7 and beyond in the plan; those never appear here. Only released versions do.
 
-## [Unreleased]
+## [0.7.0] - 2026-10-17
 
 - **`arin mcp` no longer needs the daemon running first.** An agent launched before Arin
   used to get no Arin tools for the whole session. It now gets them, and a tool call made
@@ -1543,7 +1543,8 @@ macOS only. Linux and Windows are planned and nothing of either is in this relea
 core and the protocol build and test on Linux with no platform crate in the tree, which is
 what keeps that port cheap to pick up rather than evidence it works.
 
-[Unreleased]: https://github.com/anistark/arin/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/anistark/arin/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/anistark/arin/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/anistark/arin/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/anistark/arin/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/anistark/arin/compare/v0.4.1...v0.5.0
