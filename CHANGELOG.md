@@ -26,6 +26,26 @@ is a format.
 **Versions are not cycle numbers either.** Development runs in numbered cycles that reach
 0.8 and beyond in the plan; those never appear here. Only released versions do.
 
+## [Unreleased]
+
+- **Arin clears the Screen Recording row its old identifier left behind.** Upgrading from
+  0.6.1 or earlier left two Arin rows in System Settings. Arin now resets the old one when
+  it starts. macOS only allows that while it still knows of an app under the old
+  identifier, so on some machines the row has to be removed by hand once.
+
+### Added
+
+- **The macOS daemon resets Screen Recording for each identifier in
+  `arin_core::LEGACY_BUNDLE_IDS`** with `tccutil reset ScreenCapture`, once per identifier,
+  on the permission thread at startup. A success is recorded in
+  `~/Library/Application Support/Arin/screen-recording-retired` so it is not repeated.
+  `tccutil` resolves the identifier through LaunchServices and fails with `-10814` when no
+  installed app carries it, which is logged at debug and retried at the next start. It
+  lives in the daemon because neither Homebrew hook can run it: a formula's `post_install`
+  and a cask's `postflight_steps` both run in Homebrew 7's sandbox, which denies the lookup
+  of `tccd`, and `tccutil` exits 77 with `Operation not permitted from sandbox`. The legacy
+  `postflight` block runs unsandboxed but is deprecated in Homebrew 7.
+
 ## [0.7.0] - 2026-10-17
 
 - **`arin mcp` no longer needs the daemon running first.** An agent launched before Arin
