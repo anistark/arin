@@ -22,6 +22,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 use arin_core::{BUNDLE_ID, LEGACY_BUNDLE_IDS};
 
@@ -33,6 +34,12 @@ use crate::cli::ServiceAction;
 /// reference, and a second definition in Rust would be a copy to keep in step with it and
 /// with `packaging/nix/darwin-module.nix`.
 const TEMPLATE: &str = include_str!("../../../packaging/macos/dev.anirudha.arin.plist");
+
+/// How long `enable` waits for launchd to finish removing the agent it booted out.
+const UNLOAD_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often to ask launchd while waiting.
+const UNLOAD_POLL: Duration = Duration::from_millis(50);
 
 pub(crate) fn run(action: ServiceAction) -> Result<()> {
     match action {
@@ -69,10 +76,16 @@ fn enable(app: Option<&Path>) -> Result<()> {
     // Booted out first so that enabling is repeatable. Re-running this after the app moved
     // should replace the agent rather than fail on one already loaded.
     let _ = launchctl(&["bootout".as_ref(), target().as_ref()]);
+    // launchctl can return from a bootout before launchd has removed the service, and a
+    // bootstrap that lands in that gap fails with 37, "Operation already in progress". The
+    // old daemon is stopped by then, so enabling a running Arin left no Arin at all.
+    wait_for_unload(&target())?;
     let bootstrap = launchctl(&["bootstrap".as_ref(), domain().as_ref(), plist.as_os_str()])?;
     if !bootstrap.status.success() {
         bail!(
-            "launchctl would not load {}: {}",
+            "launchctl would not load {}: {}\n\
+             The agent is installed and loads at the next login. Run `arin service enable` \
+             again to start it now.",
             plist.display(),
             message(&bootstrap)
         );
@@ -192,6 +205,39 @@ fn loaded() -> Result<Option<(&'static str, String)>> {
         }
     }
     Ok(None)
+}
+
+/// Wait until launchd no longer knows the service, so a bootstrap of the same label can land.
+fn wait_for_unload(target: &str) -> Result<()> {
+    let unloaded = poll_until(UNLOAD_TIMEOUT, UNLOAD_POLL, || {
+        let printed = launchctl(&["print".as_ref(), target.as_ref()])?;
+        Ok(!printed.status.success())
+    })?;
+    if !unloaded {
+        bail!(
+            "launchd was still removing {target} after {}s. Run `arin service enable` again.",
+            UNLOAD_TIMEOUT.as_secs()
+        );
+    }
+    Ok(())
+}
+
+/// Ask `done` until it says yes or `timeout` passes, and say which happened.
+fn poll_until(
+    timeout: Duration,
+    interval: Duration,
+    mut done: impl FnMut() -> Result<bool>,
+) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if done()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(interval);
+    }
 }
 
 /// Unload and delete any agent an earlier build installed under a retired label.
@@ -555,6 +601,27 @@ mod tests {
         ))
         .expect_err("the bundle does not exist");
         assert!(error.to_string().contains("does not exist"), "got: {error}");
+    }
+
+    #[test]
+    fn polling_stops_as_soon_as_the_answer_is_yes() {
+        let mut asked = 0;
+        let done = poll_until(Duration::from_secs(5), Duration::ZERO, || {
+            asked += 1;
+            Ok(asked == 3)
+        })
+        .expect("no error");
+        assert!(done);
+        assert_eq!(asked, 3);
+    }
+
+    #[test]
+    fn polling_gives_up_at_the_deadline() {
+        let done = poll_until(Duration::from_millis(20), Duration::from_millis(5), || {
+            Ok(false)
+        })
+        .expect("no error");
+        assert!(!done);
     }
 
     #[test]
