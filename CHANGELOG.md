@@ -58,6 +58,12 @@ is a format.
   log showed the bootstrap landing 4ms before `removing service: dev.anirudha.arin`. It now
   polls `launchctl print` every 50ms for up to 5s. A bootstrap that still fails says the
   agent loads at the next login and that running `enable` again starts it now.
+- **`rustls-webpki` is at 0.103.16**, which distrusts the eight eMudhra intermediates whose
+  keys were compromised (CVE-2026-111943). It sits on the verification path for the Claude
+  resolver and the update check wherever the system trust store is not consulted, which
+  is Linux today. On macOS `rustls-platform-verifier` defers to Security.framework, and
+  Apple shipped its own block on 2026-10-19. `webpki-root-certs` moves to 1.0.10 alongside
+  it, though it is only built for wasm32.
 
 ## [0.7.0] - 2026-10-17
 
