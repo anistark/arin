@@ -646,6 +646,13 @@ fn expiring_config(default_ttl: Option<std::time::Duration>) -> Config {
     }
 }
 
+fn ack(reply: DaemonMessage) -> Ack {
+    match reply {
+        DaemonMessage::Ack(ack) => ack,
+        other => panic!("expected an ack, got {other:?}"),
+    }
+}
+
 /// Long enough for a one millisecond ttl to be comfortably past.
 async fn let_it_expire() {
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -708,28 +715,26 @@ async fn the_default_ttl_applies_when_a_client_asks_for_nothing() {
     let mut conn = started(daemon.clone()).await;
 
     // Every drawing message, since each one has to reach for the default separately.
-    conn.handle(wrap(ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY))))
-        .await
-        .unwrap();
-    conn.handle(wrap(ClientMessage::Highlight(Highlight::over(
-        LogicalRect::new(0.0, 0.0, 10.0, 10.0),
-        DISPLAY,
-    ))))
-    .await
-    .unwrap();
-    conn.handle(wrap(ClientMessage::Textbox(Textbox::new(
-        Anchor::new(LogicalRect::new(0.0, 0.0, 10.0, 10.0), DISPLAY),
-        "text",
-    ))))
-    .await
-    .unwrap();
-    conn.handle(wrap(ClientMessage::Draw(Draw::new(
-        DISPLAY,
-        vec![[0.0, 0.0], [10.0, 10.0]],
-    ))))
-    .await
-    .unwrap();
+    let messages = [
+        ClientMessage::Point(Point::at(1.0, 1.0, DISPLAY)),
+        ClientMessage::Highlight(Highlight::over(
+            LogicalRect::new(0.0, 0.0, 10.0, 10.0),
+            DISPLAY,
+        )),
+        ClientMessage::Textbox(Textbox::new(
+            Anchor::new(LogicalRect::new(0.0, 0.0, 10.0, 10.0), DISPLAY),
+            "text",
+        )),
+        ClientMessage::Draw(Draw::new(DISPLAY, vec![[0.0, 0.0], [10.0, 10.0]])),
+    ];
+    let mut settles_in = 0;
+    for message in messages {
+        let reply = ack(conn.handle(wrap(message)).await.unwrap());
+        settles_in = settles_in.max(reply.starts_in_ms.unwrap_or(0) + reply.reveal_ms.unwrap_or(0));
+    }
 
+    // The time to live counts from when the ink is finished, and two of these are drawn on.
+    tokio::time::sleep(std::time::Duration::from_millis(settles_in)).await;
     let_it_expire().await;
     assert_eq!(daemon.expire_annotations().len(), 4);
     assert_eq!(daemon.annotation_count(), 0);
@@ -2058,4 +2063,283 @@ async fn a_sketched_highlight_is_still_anchored_to_the_region_it_circles() {
     let (path, anchor) = outline_of(MarkStyle::Sketch).await;
     assert_eq!(anchor, REGION);
     assert_ne!(LogicalRect::containing(&path.unwrap()), REGION);
+}
+
+// drawing on
+
+fn line(from: [f64; 2], to: [f64; 2]) -> ClientMessage {
+    ClientMessage::Draw(Draw::new(DISPLAY, vec![from, to]))
+}
+
+/// One orb, so a second mark waits for the first to be finished before its ink starts.
+#[tokio::test]
+async fn a_mark_sent_during_another_waits_for_the_orb() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon).await;
+
+    let first = ack(conn
+        .handle(wrap(line([0.0, 0.0], [400.0, 0.0])))
+        .await
+        .unwrap());
+    let second = ack(conn
+        .handle(wrap(line([0.0, 50.0], [400.0, 50.0])))
+        .await
+        .unwrap());
+
+    assert_eq!(first.starts_in_ms, Some(0));
+    let first_reveal = first.reveal_ms.expect("a path is drawn on");
+    assert!(first_reveal > 0);
+    let waited = second.starts_in_ms.expect("timed");
+    assert!(
+        waited + 5 >= first_reveal && waited <= first_reveal,
+        "waited {waited} ms behind a reveal of {first_reveal} ms"
+    );
+}
+
+/// The limit on waiting is what keeps a burst of marks from holding the screen up.
+#[tokio::test]
+async fn a_mark_that_would_wait_too_long_is_drawn_at_once() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon).await;
+
+    let mut last = None;
+    for row in 0..12 {
+        let y = f64::from(row) * 20.0;
+        last = Some(ack(conn
+            .handle(wrap(line([0.0, y], [1500.0, y])))
+            .await
+            .unwrap()));
+    }
+
+    let last = last.unwrap();
+    assert_eq!(last.starts_in_ms, None, "drawn at once rather than queued");
+    assert_eq!(last.reveal_ms, None);
+    let kinds = renderer.drawn.lock().unwrap().len();
+    assert_eq!(kinds, 12, "every mark still reached the screen");
+}
+
+/// Clearing a mark still being drawn frees the orb for the next one.
+#[tokio::test]
+async fn clearing_a_mark_mid_reveal_frees_the_orb() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon).await;
+
+    let first = ack(conn
+        .handle(wrap(line([0.0, 0.0], [900.0, 0.0])))
+        .await
+        .unwrap());
+    conn.handle(wrap(ClientMessage::Clear(Clear::one(
+        first.annotation_id.unwrap(),
+    ))))
+    .await
+    .unwrap();
+    let next = ack(conn
+        .handle(wrap(line([0.0, 50.0], [90.0, 50.0])))
+        .await
+        .unwrap());
+    assert_eq!(next.starts_in_ms, Some(0));
+}
+
+/// A ruled rectangle is placed against a straightedge, so it appears at once.
+#[tokio::test]
+async fn a_ruled_highlight_is_not_drawn_on() {
+    let (daemon, _) = daemon_with(Config {
+        mark_style: MarkStyle::Ruled,
+        ..Config::with_socket_path("/tmp/arin-test.sock")
+    });
+    let mut conn = started(daemon).await;
+    let reply = ack(conn
+        .handle(wrap(ClientMessage::Highlight(Highlight::over(
+            LogicalRect::new(100.0, 100.0, 200.0, 40.0),
+            DISPLAY,
+        ))))
+        .await
+        .unwrap());
+    assert_eq!(reply.reveal_ms, None);
+}
+
+/// A sketched loop is drawn on, and the stored reveal follows a scroll with its ink.
+#[tokio::test]
+async fn a_sketched_loop_is_drawn_on() {
+    let (daemon, _) = daemon();
+    let mut conn = started(daemon).await;
+    let reply = ack(conn
+        .handle(wrap(ClientMessage::Highlight(Highlight::over(
+            LogicalRect::new(100.0, 100.0, 200.0, 40.0),
+            DISPLAY,
+        ))))
+        .await
+        .unwrap());
+    assert!(reply.reveal_ms.unwrap() >= 200);
+}
+
+// ttl ceiling
+
+fn ttl_config(default_ttl: Option<u64>, max_ttl: Option<u64>) -> Config {
+    Config {
+        default_ttl: default_ttl.map(std::time::Duration::from_millis),
+        max_ttl: max_ttl.map(std::time::Duration::from_millis),
+        mark_style: MarkStyle::Ruled,
+        ..Config::with_socket_path("/tmp/arin-test.sock")
+    }
+}
+
+/// The connection is handed back because dropping it ends the session and its marks.
+async fn highlight_with_ttl(daemon: Arc<Daemon>, ttl_ms: Option<u64>) -> Connection {
+    let mut conn = started(daemon).await;
+    let mut highlight = Highlight::over(LogicalRect::new(0.0, 0.0, 10.0, 10.0), DISPLAY);
+    highlight.ttl_ms = ttl_ms;
+    conn.handle(wrap(ClientMessage::Highlight(highlight)))
+        .await
+        .unwrap();
+    conn
+}
+
+/// A default fills in for a client that asked for nothing, and only for that client.
+#[tokio::test]
+async fn a_client_may_ask_for_longer_than_the_default() {
+    let (daemon, _) = daemon_with(ttl_config(Some(1), None));
+    let _conn = highlight_with_ttl(daemon.clone(), Some(60_000)).await;
+    let_it_expire().await;
+    assert_eq!(daemon.expire_annotations().len(), 0);
+}
+
+/// The ceiling clips a client asking for more than it.
+#[tokio::test]
+async fn the_ceiling_clips_a_longer_ttl() {
+    let (daemon, _) = daemon_with(ttl_config(None, Some(1)));
+    let _conn = highlight_with_ttl(daemon.clone(), Some(60_000)).await;
+    let_it_expire().await;
+    assert_eq!(daemon.expire_annotations().len(), 1);
+}
+
+/// A mark that asked for no expiry still lives no longer than the ceiling.
+#[tokio::test]
+async fn the_ceiling_applies_to_a_mark_with_no_ttl() {
+    let (daemon, _) = daemon_with(ttl_config(None, Some(1)));
+    let _conn = highlight_with_ttl(daemon.clone(), None).await;
+    let_it_expire().await;
+    assert_eq!(daemon.expire_annotations().len(), 1);
+}
+
+/// A shorter ttl than the ceiling is left as asked.
+#[tokio::test]
+async fn the_ceiling_leaves_a_shorter_ttl_alone() {
+    let (daemon, _) = daemon_with(ttl_config(None, Some(60_000)));
+    let _conn = highlight_with_ttl(daemon.clone(), Some(1)).await;
+    let_it_expire().await;
+    assert_eq!(daemon.expire_annotations().len(), 1);
+}
+
+// writing by hand
+
+fn last_kind(renderer: &FakeRenderer) -> AnnotationKind {
+    renderer.kinds.lock().unwrap().last().cloned().unwrap()
+}
+
+fn note(text: &str) -> ClientMessage {
+    ClientMessage::Textbox(Textbox::new(
+        Anchor::new(LogicalRect::new(100.0, 100.0, 420.0, 90.0), DISPLAY),
+        text,
+    ))
+}
+
+/// Short text in a text box is written by hand, and the ack says how long that takes.
+#[tokio::test]
+async fn a_short_note_is_written_by_hand() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon).await;
+    let reply = ack(conn.handle(wrap(note("Click Save first"))).await.unwrap());
+
+    let AnnotationKind::Textbox { writing, .. } = last_kind(&renderer) else {
+        panic!("a text box was drawn");
+    };
+    let writing = writing.expect("written");
+    assert_eq!(writing.letters, 14);
+    assert!(reply.reveal_ms.unwrap() >= 14 * 75);
+}
+
+/// A paragraph is typeset, because writing it would be slow to appear and slower to read.
+#[tokio::test]
+async fn a_long_note_is_typeset() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon).await;
+    let reply = ack(conn
+        .handle(wrap(note(
+            "This paragraph explains the counterargument at length.",
+        )))
+        .await
+        .unwrap());
+
+    let AnnotationKind::Textbox { writing, .. } = last_kind(&renderer) else {
+        panic!("a text box was drawn");
+    };
+    assert!(writing.is_none());
+    assert_eq!(reply.reveal_ms, None);
+}
+
+/// Text the hand has no letters for is typeset whole rather than written in part.
+#[tokio::test]
+async fn text_in_a_script_the_hand_cannot_write_is_typeset() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon).await;
+    conn.handle(wrap(note("保存してください"))).await.unwrap();
+    let AnnotationKind::Textbox { writing, .. } = last_kind(&renderer) else {
+        panic!("a text box was drawn");
+    };
+    assert!(writing.is_none());
+}
+
+/// The ruled style is typeset throughout, as it always was.
+#[tokio::test]
+async fn the_ruled_style_typesets_text() {
+    let (daemon, renderer) = daemon_with(Config {
+        mark_style: MarkStyle::Ruled,
+        ..Config::with_socket_path("/tmp/arin-test.sock")
+    });
+    let mut conn = started(daemon).await;
+    conn.handle(wrap(note("Click Save first"))).await.unwrap();
+    let AnnotationKind::Textbox { writing, .. } = last_kind(&renderer) else {
+        panic!("a text box was drawn");
+    };
+    assert!(writing.is_none());
+}
+
+/// A point's caption is written after the orb has had time to land.
+#[tokio::test]
+async fn a_point_writes_its_caption_after_landing() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon).await;
+    let mut point = Point::at(400.0, 300.0, DISPLAY);
+    point.label = Some("Save".into());
+    let reply = ack(conn
+        .handle(wrap(ClientMessage::Point(point)))
+        .await
+        .unwrap());
+
+    let AnnotationKind::Point { writing, .. } = last_kind(&renderer) else {
+        panic!("a point was drawn");
+    };
+    let writing = writing.expect("written beside the orb");
+    assert!(writing.bounds.x > 400.0);
+    assert!(reply.reveal_ms.unwrap() >= 550 + 4 * 75);
+}
+
+/// Text that would wait too long for the orb is typeset, since it would appear whole.
+#[tokio::test]
+async fn text_that_would_wait_too_long_is_typeset() {
+    let (daemon, renderer) = daemon();
+    let mut conn = started(daemon).await;
+    for row in 0..8 {
+        let y = f64::from(row) * 20.0;
+        conn.handle(wrap(line([0.0, y], [1500.0, y])))
+            .await
+            .unwrap();
+    }
+    let reply = ack(conn.handle(wrap(note("Click Save first"))).await.unwrap());
+    assert_eq!(reply.reveal_ms, None);
+    let AnnotationKind::Textbox { writing, .. } = last_kind(&renderer) else {
+        panic!("a text box was drawn");
+    };
+    assert!(writing.is_none());
 }

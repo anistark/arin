@@ -2,7 +2,9 @@
 
 use crate::contrast::{self, Rgb};
 use crate::fingerprint::Fingerprint;
+use crate::hand::Writing;
 use crate::policy::Rendering;
+use crate::reveal::Reveal;
 use crate::signature::Shift;
 use arin_protocol::{
     Anchor, AnnotationId, DisplayId, LogicalPoint, SessionId, StrokeStyle, TextboxStyle,
@@ -30,6 +32,10 @@ pub struct Annotation {
     /// a platform backend never has to know about palettes, contrast, or what a client
     /// asked for. See [`crate::contrast`].
     pub color: Rgb,
+    /// How the ink goes down, when it is drawn on rather than placed whole.
+    ///
+    /// `None` means the mark appears at once. See [`crate::reveal`].
+    pub reveal: Option<Reveal>,
 }
 
 impl Annotation {
@@ -43,6 +49,7 @@ impl Annotation {
             created: Instant::now(),
             ttl: None,
             color: contrast::DEFAULT,
+            reveal: None,
         }
     }
 
@@ -58,6 +65,52 @@ impl Annotation {
     pub fn with_ttl(mut self, ttl: Option<Duration>) -> Self {
         self.ttl = ttl;
         self
+    }
+
+    /// Draw the mark on over a timeline rather than placing it whole.
+    #[must_use]
+    pub fn with_reveal(mut self, reveal: Option<Reveal>) -> Self {
+        self.reveal = reveal;
+        self
+    }
+
+    /// The text this mark writes by hand, if it writes any.
+    pub fn writing(&self) -> Option<&Writing> {
+        match &self.kind {
+            AnnotationKind::Point { writing, .. }
+            | AnnotationKind::Highlight { writing, .. }
+            | AnnotationKind::Textbox { writing, .. } => writing.as_ref(),
+            AnnotationKind::Path { .. } => None,
+        }
+    }
+
+    fn writing_mut(&mut self) -> Option<&mut Writing> {
+        match &mut self.kind {
+            AnnotationKind::Point { writing, .. }
+            | AnnotationKind::Highlight { writing, .. }
+            | AnnotationKind::Textbox { writing, .. } => writing.as_mut(),
+            AnnotationKind::Path { .. } => None,
+        }
+    }
+
+    /// Typeset whatever this mark was going to write by hand.
+    ///
+    /// For a mark that cannot be drawn on after all, because it would wait too long for
+    /// the orb. Ink that appears whole is better typeset than written in an instant.
+    pub fn unwrite(&mut self) {
+        match &mut self.kind {
+            AnnotationKind::Point { writing, .. }
+            | AnnotationKind::Highlight { writing, .. }
+            | AnnotationKind::Textbox { writing, .. } => *writing = None,
+            AnnotationKind::Path { .. } => {}
+        }
+    }
+
+    /// When the ink is finished: the end of its reveal, or its creation if it has none.
+    pub fn settles_at(&self) -> Instant {
+        self.reveal
+            .as_ref()
+            .map_or(self.created, Reveal::settles_at)
     }
 
     /// Record what was under this mark when it was drawn.
@@ -86,6 +139,12 @@ impl Annotation {
     pub fn translate(&mut self, shift: Shift) {
         self.anchor.screen_rect.x += shift.dx;
         self.anchor.screen_rect.y += shift.dy;
+        if let Some(reveal) = &mut self.reveal {
+            reveal.translate(shift.dx, shift.dy);
+        }
+        if let Some(writing) = self.writing_mut() {
+            writing.translate(shift.dx, shift.dy);
+        }
         match &mut self.kind {
             AnnotationKind::Point { at, .. } => {
                 at.x += shift.dx;
@@ -124,9 +183,12 @@ impl Annotation {
     }
 
     /// Whether the time to live has run out as of `now`.
+    ///
+    /// Counted from when the ink settles rather than from creation, so `ttl` is how long
+    /// the finished mark stays readable however long it took to draw.
     pub fn is_expired(&self, now: Instant) -> bool {
         self.ttl
-            .is_some_and(|ttl| now.duration_since(self.created) >= ttl)
+            .is_some_and(|ttl| now.saturating_duration_since(self.settles_at()) >= ttl)
     }
 }
 
@@ -144,6 +206,11 @@ pub enum AnnotationKind {
         label: Option<String>,
         /// Whether to draw the point precisely or fall back to the anchor region.
         rendering: Rendering,
+        /// The caption written by hand beside the orb, when it is.
+        ///
+        /// `None` with a label means the label is typeset, by the renderer, where it
+        /// always has been.
+        writing: Option<Writing>,
     },
     /// An outlined region.
     Highlight {
@@ -157,6 +224,8 @@ pub enum AnnotationKind {
         /// it once is also what keeps it still: a shape rebuilt on each redraw would
         /// re-roll its wobble every time the content under it scrolled.
         path: Option<Vec<LogicalPoint>>,
+        /// The caption written by hand against the region, when it is.
+        writing: Option<Writing>,
     },
     /// A block of explanatory text. Display only.
     Textbox {
@@ -165,6 +234,12 @@ pub enum AnnotationKind {
         /// What the text is for. Resolved from the wire's optional field before it is
         /// stored, so a renderer never holds an opinion about the default.
         style: TextboxStyle,
+        /// The text written by hand straight onto the screen, when it is.
+        ///
+        /// `None` means it is typeset on glass. Short text under the sketch style is
+        /// written. Long text, text in a script the hand cannot write, and text that would
+        /// wait too long for the orb are typeset.
+        writing: Option<Writing>,
     },
     /// A freehand path.
     Path {
@@ -217,6 +292,7 @@ mod tests {
             AnnotationKind::Highlight {
                 label: None,
                 path: None,
+                writing: None,
             },
         );
         assert!(!annotation.is_expired(annotation.created + Duration::from_secs(86_400)));
@@ -233,6 +309,7 @@ mod tests {
                 at: LogicalPoint::new(120.0, 220.0),
                 label: None,
                 rendering: Rendering::Point,
+                writing: None,
             },
         );
 
@@ -284,6 +361,7 @@ mod tests {
             AnnotationKind::Highlight {
                 label: None,
                 path: Some(drawn.clone()),
+                writing: None,
             },
         );
 
@@ -314,6 +392,7 @@ mod tests {
             AnnotationKind::Highlight {
                 label: None,
                 path: None,
+                writing: None,
             },
         );
         assert!(annotation.is_on_screen(DISPLAY));
@@ -335,6 +414,7 @@ mod tests {
             AnnotationKind::Highlight {
                 label: None,
                 path: None,
+                writing: None,
             },
         );
         assert_eq!(annotation.fingerprint(), None);
@@ -353,11 +433,40 @@ mod tests {
             AnnotationKind::Highlight {
                 label: None,
                 path: None,
+                writing: None,
             },
         )
         .with_ttl(Some(Duration::from_secs(10)));
 
         assert!(!annotation.is_expired(annotation.created + Duration::from_secs(9)));
         assert!(annotation.is_expired(annotation.created + Duration::from_secs(10)));
+    }
+
+    /// A mark that takes a second to draw and asks for three seconds is readable, finished,
+    /// for all three.
+    #[test]
+    fn a_ttl_counts_from_when_the_ink_settles() {
+        let stroke = [LogicalPoint::new(0.0, 0.0), LogicalPoint::new(200.0, 0.0)];
+        let created = Instant::now();
+        let reveal = Reveal {
+            begins: created + Duration::from_millis(500),
+            strokes: crate::reveal::plan(&[&stroke], Duration::from_secs(1)),
+        };
+        let mut annotation = Annotation::new(
+            next_session_id(),
+            anchor(),
+            AnnotationKind::Path {
+                points: stroke.to_vec(),
+                style: None,
+            },
+        )
+        .with_ttl(Some(Duration::from_secs(3)))
+        .with_reveal(Some(reveal));
+        annotation.created = created;
+
+        let settled = annotation.settles_at();
+        assert!(settled >= created + Duration::from_millis(1490));
+        assert!(!annotation.is_expired(settled + Duration::from_millis(2999)));
+        assert!(annotation.is_expired(settled + Duration::from_secs(3)));
     }
 }

@@ -28,6 +28,20 @@ is a format.
 
 ## [Unreleased]
 
+- **Marks are drawn on, with the orb as the pen.** Under the sketch style a path, an arrow
+  or a circled region appears stroke by stroke, with the orb shrunk to a pen tip riding it.
+  Reduce Motion in macOS shows marks at once.
+- **Short text is written by hand.** A text box of up to about 30 letters, and every caption
+  on a point or a highlight, is written straight onto the screen at 75 ms a letter. Longer
+  text, and everything under `--style ruled`, stays typeset.
+- **`--hand` chooses the handwriting font.** A family name or a path. Left out, Arin writes
+  in EMS Tech, or in the one handwriting font you installed if there is exactly one. The menu
+  bar says which.
+- **Other scripts are written too.** Greek, Cyrillic, Japanese and Chinese from open stroke
+  data, and Arabic, Hebrew, Devanagari, Bengali, Tamil, Malayalam, Telugu and Thai from open
+  handwriting fonts. Anything else is typeset.
+- **A time to live counts from when the ink is finished,** so it is always how long the
+  finished mark stays up. Acks and MCP results say when drawing starts and how long it takes.
 - **Arin clears the Screen Recording row its old identifier left behind.** Upgrading from
   0.6.1 or earlier left two Arin rows in System Settings. Arin now resets the old one when
   it starts. macOS only allows that while it still knows of an app under the old
@@ -39,6 +53,47 @@ is a format.
 
 ### Added
 
+- **Drawing on.** `arin_core::reveal` times every stroke of a mark once, in core, as samples
+  at even slices of time whose spacing carries a half-cosine speed curve, so a renderer plays
+  them with no timing function of its own. A path or arrow takes `0.2 + length / 2000`
+  seconds, at most 0.8. The macOS renderer reveals each stroke with a keyframe animation of
+  `strokeEnd` anchored to the timeline's `Instant`, so a mark redrawn after a scroll carries
+  on from where its pen was and a settled one is never replayed. The orb takes a sixth state,
+  `Writing`, at 0.27 of its size so its halo is under the 20 point featured size, and follows
+  the tip with one keyframe animation over the whole timeline, pen lifts included.
+- **One pen, queued.** The daemon decides each mark's start under the lock that stores it,
+  from the latest settle time of what it holds, so two connections never share the pen. A
+  mark that would wait more than three seconds is drawn at once and its text typeset. The
+  limit is provisional and marked as such in `reveal::QUEUE_LIMIT`.
+- **`starts_in_ms` and `reveal_ms` on the ack,** additive, present on marks that are drawn on.
+  The MCP drawing tools return them as well.
+- **Handwriting.** `arin_core::hand` lays short text out in a hand, wraps and fits it to a
+  box, puts dots after stems and starts strokes at their top or left, and roughens each
+  letter from a seed taken from the text and its place, so a redraw writes the same letters.
+  Captions are placed beside the orb or against the region by the same rules the typeset
+  caption follows, computed in core. Text is written under the sketch style when the hand
+  has every letter, has at most 30 of them, and fits the box at 16 points or more.
+- **EMS Tech,** an OFL single-line font derived from Architects Daughter, is bundled under
+  `assets/fonts/ems-tech` with its licence and compiled into core. Its letters are given a
+  width that follows the pen's speed with `freedraw`, a port of perfect-freehand, and the
+  renderer reveals each filled outline through a mask along its stroke.
+- **Outline fonts.** A TrueType or OpenType font is shaped with `rustybuzz`, read with
+  `ttf-parser`, and each glyph is rasterised, thinned, and traced into strokes that steer the
+  reveal of the glyph's real outline. Right to left scripts are written from the right.
+  Fonts whose contours enclose no area, as cutting machine fonts do, are drawn as strokes.
+- **`--hand` and `ARIN_HAND`,** and detection: CoreText lists the fonts available, and a font
+  counts as handwriting when its PANOSE family is "Latin Hand Written", or its IBM class is
+  "Scripts" with PANOSE not saying otherwise. Fonts under `/System` are never picked on their
+  own. Mac Roman name records are read, which several of macOS's own fonts carry instead of
+  Unicode ones.
+- **Stroke packs and script fonts,** built by `just handwriting-data` from pinned sources and
+  committed: `greek-cyrillic` and `maths` from KiCad's newstroke (CC0), `japanese` from
+  KanjiVG (CC BY-SA 3.0), `chinese-simplified` from Make Me a Hanzi and `chinese-traditional`
+  from AnimCJK (Arphic Public License), 2.4 MB in all. Each pack carries a notice of its
+  source, licence, and how and when it was changed. Seven OFL fonts from Google Fonts cover
+  Arabic, Hebrew, Devanagari, Bengali, Tamil and Malayalam, Telugu and Thai, 2.5 MB. Both
+  bundle builders install them under `Contents/Resources`, never in the binary.
+- **`Config::max_ttl`,** a ceiling that clips every mark's time to live, its client's included.
 - **The macOS daemon resets Screen Recording for each identifier in
   `arin_core::LEGACY_BUNDLE_IDS`** with `tccutil reset ScreenCapture`, once per identifier,
   on the permission thread at startup. A success is recorded in
@@ -49,6 +104,13 @@ is a format.
   and a cask's `postflight_steps` both run in Homebrew 7's sandbox, which denies the lookup
   of `tccd`, and `tccutil` exits 77 with `Operation not permitted from sandbox`. The legacy
   `postflight` block runs unsandboxed but is deprecated in Homebrew 7.
+
+### Changed
+
+- **A time to live counts from when a mark's ink settles** rather than from when it was
+  stored. A mark that is drawn on lives longer than before by the time it took to draw.
+- **`Config::default_ttl` is a default, as its code always treated it.** Its documentation
+  called it a ceiling, which `ttl_for` never enforced. `max_ttl` is the ceiling now.
 
 ### Fixed
 

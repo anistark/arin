@@ -4,13 +4,15 @@ use super::Daemon;
 use crate::annotation::{Annotation, AnnotationKind};
 use crate::contrast::{self, Footprint};
 use crate::error::{Error, Result};
+use crate::hand::{self, Hand, Writing};
 use crate::policy::{OrbState, Rendering};
+use crate::reveal::{self, StrokeReveal};
 use crate::session::Session;
 use crate::sketch::{self, MarkStyle};
 use arin_protocol::{
     Ack, Anchor, AnnotationId, ArrowEnd, ArrowTarget, ClientMessage, DaemonMessage, DisplayId,
     Envelope, Highlight, HighlightTarget, LogicalPoint, LogicalRect, Point, PointTarget, SessionId,
-    Validate, ValidationError,
+    TextboxStyle, Validate, ValidationError,
 };
 use std::sync::Arc;
 
@@ -79,28 +81,41 @@ impl Connection {
                 let anchor = textbox.resolved_anchor()?;
                 let display = self.daemon.display(anchor.display_id)?;
                 let (anchor_display, anchor_rect) = (anchor.display_id, anchor.screen_rect);
-                // A text box is a filled panel, so every pixel of it is ink.
-                let look = self.daemon.appearance(
-                    None,
-                    anchor_display,
-                    &Footprint::Area(anchor_rect),
-                    anchor_rect,
-                );
+                let style = textbox.style.unwrap_or_default();
+                let writing = self
+                    .daemon
+                    .hand_for(&textbox.text)
+                    .and_then(|hand| written_box(hand, &textbox.text, style, anchor_rect));
+                // Written text is ink on the screen, so the colour is read along the pen's
+                // path. A typeset box is a filled panel, so every pixel of it is ink.
+                let footprint = match &writing {
+                    Some(writing) => Footprint::Path {
+                        points: writing.ink(),
+                        width: writing.width,
+                    },
+                    None => Footprint::Area(anchor_rect),
+                };
+                let look = self
+                    .daemon
+                    .appearance(None, anchor_display, &footprint, anchor_rect);
+                let strokes = writing.as_ref().map(written_on);
                 let annotation = Annotation::new(
                     session,
                     anchor,
                     AnnotationKind::Textbox {
                         text: textbox.text,
-                        style: textbox.style.unwrap_or_default(),
+                        style,
+                        writing,
                     },
                 )
                 .with_ttl(self.daemon.ttl_for(textbox.ttl_ms))
                 .with_color(look.color)
                 .with_fingerprint(look.fingerprint);
-                let id = self.daemon.store(annotation)?;
-                Ok(DaemonMessage::Ack(
+                let (id, timing) = self.daemon.store(annotation, strokes)?;
+                Ok(DaemonMessage::Ack(timed(
                     Ack::annotation(id).with_display(display),
-                ))
+                    timing,
+                )))
             }
 
             ClientMessage::Draw(draw) => {
@@ -128,6 +143,7 @@ impl Connection {
                     },
                     bounds,
                 );
+                let strokes = drawn_on(&points);
                 let annotation = Annotation::new(
                     session,
                     anchor,
@@ -139,10 +155,11 @@ impl Connection {
                 .with_ttl(self.daemon.ttl_for(draw.ttl_ms))
                 .with_color(look.color)
                 .with_fingerprint(look.fingerprint);
-                let id = self.daemon.store(annotation)?;
-                Ok(DaemonMessage::Ack(
+                let (id, timing) = self.daemon.store(annotation, Some(strokes))?;
+                Ok(DaemonMessage::Ack(timed(
                     Ack::annotation(id).with_display(display),
-                ))
+                    timing,
+                )))
             }
 
             ClientMessage::Arrow(arrow) => {
@@ -183,6 +200,7 @@ impl Connection {
                 );
                 // An ordinary path from here on, so an arrow scrolls, expires, and is
                 // cleared exactly as one, and renderers never learn arrows exist.
+                let strokes = drawn_on(&points);
                 let annotation = Annotation::new(
                     session,
                     Anchor::new(bounds, arrow.display_id),
@@ -194,10 +212,11 @@ impl Connection {
                 .with_ttl(self.daemon.ttl_for(arrow.ttl_ms))
                 .with_color(look.color)
                 .with_fingerprint(look.fingerprint);
-                let id = self.daemon.store(annotation)?;
-                Ok(DaemonMessage::Ack(
+                let (id, timing) = self.daemon.store(annotation, Some(strokes))?;
+                Ok(DaemonMessage::Ack(timed(
                     Ack::annotation(id).with_display(display),
-                ))
+                    timing,
+                )))
             }
 
             ClientMessage::Clear(clear) => {
@@ -254,6 +273,15 @@ impl Connection {
             &Footprint::Area(anchor_rect),
             anchor_rect,
         );
+        // The orb lands first, then writes its caption beside itself.
+        let writing = drawable(point.label.as_deref()).and_then(|label| {
+            self.daemon
+                .hand_for(label)
+                .and_then(|hand| hand::beside(hand, label, at, display.logical_size))
+        });
+        let strokes = writing
+            .as_ref()
+            .map(|writing| reveal::delayed(written_on(writing), reveal::LANDING));
         let annotation = Annotation::new(
             session,
             anchor,
@@ -261,16 +289,17 @@ impl Connection {
                 at,
                 label: point.label,
                 rendering,
+                writing,
             },
         )
         .with_ttl(self.daemon.ttl_for(point.ttl_ms))
         .with_color(look.color)
         .with_fingerprint(look.fingerprint);
 
-        let id = self.daemon.store(annotation)?;
+        let (id, timing) = self.daemon.store(annotation, strokes)?;
         self.daemon.renderer.set_orb_state(OrbState::Pointing)?;
 
-        let mut ack = Ack::annotation(id).with_display(display);
+        let mut ack = timed(Ack::annotation(id).with_display(display), timing);
         if let Some(confidence) = confidence {
             ack = ack.with_resolution(at, confidence);
         }
@@ -313,21 +342,39 @@ impl Connection {
         let look = self
             .daemon
             .appearance(None, highlight.display_id, &footprint, rect);
+        // Written against the ink, since a sketched loop sits outside the region it circles
+        // and a caption placed off the region would land on the loop.
+        let against = path.as_deref().map_or(rect, LogicalRect::containing);
+        let writing = drawable(highlight.label.as_deref()).and_then(|label| {
+            self.daemon
+                .hand_for(label)
+                .and_then(|hand| hand::against(hand, label, against, display.logical_size))
+        });
+        // A ruled rectangle is placed against a straightedge, all at once. A loop drawn by
+        // hand is drawn on, and a written caption after it.
+        let strokes = match (
+            path.as_deref().map(drawn_on),
+            writing.as_ref().map(written_on),
+        ) {
+            (Some(outline), Some(caption)) => Some(reveal::then(outline, caption)),
+            (outline, caption) => outline.or(caption),
+        };
         let annotation = Annotation::new(
             session,
             Anchor::new(rect, highlight.display_id),
             AnnotationKind::Highlight {
                 label: highlight.label,
                 path,
+                writing,
             },
         )
         .with_ttl(self.daemon.ttl_for(highlight.ttl_ms))
         .with_color(look.color)
         .with_fingerprint(look.fingerprint);
 
-        let id = self.daemon.store(annotation)?;
+        let (id, timing) = self.daemon.store(annotation, strokes)?;
 
-        let mut ack = Ack::annotation(id).with_display(display);
+        let mut ack = timed(Ack::annotation(id).with_display(display), timing);
         if let Some((point, confidence)) = resolved {
             ack = ack.with_resolution(point, confidence);
         }
@@ -564,6 +611,58 @@ impl Drop for Connection {
         if let Some(session) = self.session.take() {
             self.daemon.drop_session(&session);
         }
+    }
+}
+
+/// The timeline for a mark drawn in a single stroke, paced by its length.
+fn drawn_on(points: &[LogicalPoint]) -> Vec<StrokeReveal> {
+    reveal::plan(&[points], reveal::mark_duration(reveal::length(points)))
+}
+
+/// The timeline for text written by hand, paced by its letters.
+fn written_on(writing: &Writing) -> Vec<StrokeReveal> {
+    let strokes: Vec<&[LogicalPoint]> = writing.strokes.iter().map(Vec::as_slice).collect();
+    reveal::plan(&strokes, writing.duration())
+}
+
+/// A text box's text written inside it, or `None` to typeset it.
+fn written_box(hand: &Hand, text: &str, style: TextboxStyle, rect: LogicalRect) -> Option<Writing> {
+    let (size, centred) = match style {
+        TextboxStyle::Note => (hand::NOTE_SIZE, false),
+        TextboxStyle::Guide => (hand::GUIDE_SIZE, true),
+    };
+    let padding = hand::BOX_PADDING;
+    let inner = LogicalRect::new(
+        rect.x + padding,
+        rect.y + padding,
+        (rect.width - padding * 2.0).max(1.0),
+        (rect.height - padding * 2.0).max(1.0),
+    );
+    let layout = hand::Layout {
+        size,
+        max_width: inner.width,
+        centred,
+    };
+    hand.write_within(
+        text,
+        layout,
+        inner,
+        hand::MIN_SIZE,
+        hand::seed(text, LogicalPoint::new(rect.x, rect.y)),
+    )
+}
+
+/// A label worth drawing. A blank one is a client sending the field rather than omitting
+/// it, and writing nothing would still take the orb away.
+fn drawable(label: Option<&str>) -> Option<&str> {
+    label.filter(|text| !text.trim().is_empty())
+}
+
+/// Put a stored mark's timing on its ack, when it has one.
+fn timed(ack: Ack, timing: Option<super::Timing>) -> Ack {
+    match timing {
+        Some(timing) => timing.on(ack),
+        None => ack,
     }
 }
 

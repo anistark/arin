@@ -302,3 +302,34 @@ drawn with rather than being redrawn as it goes.
 means, so it sits with `--color` and `--palette` and nothing sent over the socket can
 override it. What a client does choose is what kind of thing it is drawing, such as `note`
 against `guide` on `arin annotate`.
+
+## Writing by hand
+
+Under the sketch style, marks are drawn on rather than placed whole: a path, an arrow or a
+circled region appears stroke by stroke, with the orb riding the tip as a pen. Short text
+is written the same way, straight onto the screen. That is a text box of up to about 30
+letters, and every caption on a `point` or a `highlight`. Longer text stays typeset on
+glass, and so does everything under `--style ruled`. Turning on Reduce Motion in macOS
+shows ink at once.
+
+The hand is EMS Tech, a single-line font made from Architects Daughter. If exactly one
+handwriting font you installed says it is one, Arin writes in that instead. `--hand` names
+one outright, by family or by path, and `--hand "EMS Tech"` keeps the default whatever you
+install. The menu bar says which hand is in use and why.
+
+```sh
+arin daemon --hand "Bradley Hand"
+arin daemon --hand ~/Fonts/MyHand.otf
+```
+
+Reads `ARIN_HAND`. A font of your own keeps its exact letters, and the order they appear in
+is worked out from their shapes.
+
+Text the hand cannot write is written in another one where Arin has it. Greek, Cyrillic,
+Japanese and Chinese come from open data that recorded how each character is written.
+Arabic, Hebrew, Devanagari, Bengali, Tamil, Malayalam, Telugu and Thai come from open
+handwriting fonts, in an order worked out from their shapes. Anything else is typeset.
+
+There is one pen, so marks sent together queue for it. One that would wait more than three
+seconds is shown at once instead, and its text is typeset. A time to live counts from when
+a mark's ink is finished.

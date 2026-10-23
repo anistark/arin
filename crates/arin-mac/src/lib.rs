@@ -47,21 +47,26 @@ mod capture;
 mod display;
 mod flight;
 mod focus;
+mod fonts;
 mod host;
 mod marker;
 mod menubar;
 mod orb;
 mod panel;
+mod pen;
 mod permission;
 
 pub use approval::{AlertApprover, WINDOW as GROUNDING_WINDOW, approver};
 pub use capture::MacCapture;
 pub use display::Screen;
 pub use focus::MacFocus;
+pub use fonts::available_fonts;
 pub use host::{
     MacRenderer, clear_marker, known_screens, on_displays_changed, set_marker_color, toggle_marker,
 };
-pub use menubar::{MenuBar, on_clear, on_grounding, on_quit, on_status, on_update_available};
+pub use menubar::{
+    MenuBar, on_clear, on_grounding, on_quit, on_status, on_update_available, set_hand,
+};
 pub use orb::MINIMUM_FEATURED_SIZE;
 pub use permission::{
     Identity, MacPermissions, SCREEN_RECORDING_HELP, access as screen_recording,

@@ -275,6 +275,20 @@ mod daemon_to_client {
         assert_eq!(ack.display.unwrap().scale, 2.0);
     }
 
+    /// A mark drawn on says when its ink starts going down and how long it takes, which is
+    /// what a client pacing speech to the drawing needs.
+    #[test]
+    fn ack_for_a_mark_that_is_drawn_on() {
+        let msg: Envelope<DaemonMessage> = round_trip(
+            r#"{"v":"0.2","type":"ack","annotation_id":"a_7f3","starts_in_ms":420,"reveal_ms":560}"#,
+        );
+        let DaemonMessage::Ack(ack) = &msg.body else {
+            panic!("wrong variant: {:?}", msg.body);
+        };
+        assert_eq!(ack.starts_in_ms, Some(420));
+        assert_eq!(ack.reveal_ms, Some(560));
+    }
+
     /// Found in a tab rather than a window, so the ack says which profile window to look
     /// in. Raising a browser cannot switch profile, which is what makes this worth carrying.
     #[test]

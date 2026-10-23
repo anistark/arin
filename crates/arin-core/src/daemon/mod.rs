@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::contrast::Rgb;
 use crate::error::{Error, Result};
 use crate::fingerprint::Fingerprint;
+use crate::reveal;
 use crate::session::Session;
 use crate::traits::{Capture, Renderer, Resolver};
 use arin_protocol::{AnnotationId, DisplayId, Invalidated, InvalidationReason, SessionId};
@@ -90,6 +91,8 @@ pub struct Daemon {
     drawn: AtomicU64,
     /// Invalidations nobody asked for, on their way to whoever owns them.
     announcements: broadcast::Sender<Announcement>,
+    /// The hands text is written in: the one chosen, and packs for other scripts.
+    hands: crate::hand::Hands,
 }
 
 /// An invalidation, and the session whose annotation it concerns.
@@ -126,7 +129,27 @@ impl Daemon {
             state: Mutex::new(State::default()),
             drawn: AtomicU64::new(0),
             announcements: broadcast::channel(ANNOUNCEMENT_BACKLOG).0,
+            hands: crate::hand::Hands::new(crate::hand::Chosen {
+                hand: crate::hand::ems_tech(),
+                how: crate::hand::How::Default { found: 0 },
+            }),
         }
+    }
+
+    /// Write by hand in a chosen hand rather than the default, and in stroke packs for
+    /// the scripts it cannot write.
+    ///
+    /// The binary chooses, because finding the fonts a person installed and the packs a
+    /// bundle carries is the platform's business. See [`crate::hand::choose`].
+    #[must_use]
+    pub fn with_hands(mut self, hands: crate::hand::Hands) -> Self {
+        self.hands = hands;
+        self
+    }
+
+    /// The hands text is written in.
+    pub fn hands(&self) -> &crate::hand::Hands {
+        &self.hands
     }
 
     /// Listen for invalidations the daemon raises on its own.
@@ -428,16 +451,30 @@ impl Daemon {
             .collect()
     }
 
-    /// The time to live a message asked for, or the daemon's default.
+    /// The time to live a message gets: what it asked for or the default, under the ceiling.
     ///
-    /// A client's `ttl_ms` wins over the configured default, including when the default
-    /// is set and the client wants something shorter. There is deliberately no way to ask
-    /// for "no expiry" against a configured default: the default exists so an operator
-    /// can guarantee marks do not pile up, and a client opting out would defeat it.
+    /// A client's `ttl_ms` is used in place of the default, longer or shorter. The ceiling
+    /// is what an operator sets to guarantee marks do not pile up, so it clips everything,
+    /// a mark that asked for no expiry included.
     fn ttl_for(&self, ttl_ms: Option<u64>) -> Option<std::time::Duration> {
-        ttl_ms
+        let asked = ttl_ms
             .map(std::time::Duration::from_millis)
-            .or(self.config.default_ttl)
+            .or(self.config.default_ttl);
+        match (asked, self.config.max_ttl) {
+            (Some(asked), Some(ceiling)) => Some(asked.min(ceiling)),
+            (asked, ceiling) => asked.or(ceiling),
+        }
+    }
+
+    /// The hand to write `text` in, or `None` when it is typeset.
+    ///
+    /// Writing by hand belongs to the sketch style, beside the circled highlight and the
+    /// bowed arrow. Under the ruled style everything is typeset, as it always was.
+    fn hand_for(&self, text: &str) -> Option<&crate::hand::Hand> {
+        match self.config.mark_style {
+            crate::sketch::MarkStyle::Sketch => self.hands.for_text(text),
+            crate::sketch::MarkStyle::Ruled => None,
+        }
     }
 
     /// Store a mark, refusing once a session is holding too many.
@@ -450,12 +487,22 @@ impl Daemon {
     /// Counted per session rather than globally, so a well behaved client is never refused
     /// because of a badly behaved one sharing the daemon. Checked before the renderer is
     /// asked to draw, so a refused mark never reaches the screen at all.
-    fn store(&self, annotation: Annotation) -> Result<AnnotationId> {
+    ///
+    /// `strokes` is the timeline for a mark that is drawn on rather than placed whole.
+    /// There is one orb, so a mark that arrives while another is still being drawn waits
+    /// for it, and the wait is decided here under the same lock that stores the mark: two
+    /// connections drawing at once must not both be told the pen is free. A mark that would
+    /// wait longer than [`reveal::QUEUE_LIMIT`] is drawn at once instead, and comes back
+    /// with no timing.
+    fn store(
+        &self,
+        mut annotation: Annotation,
+        strokes: Option<Vec<reveal::StrokeReveal>>,
+    ) -> Result<(AnnotationId, Option<Timing>)> {
         let session = annotation.session.clone();
-        let held = self
-            .state
-            .lock()
-            .expect("state lock")
+        let id = annotation.id.clone();
+        let mut state = self.state.lock().expect("state lock");
+        let held = state
             .annotations
             .values()
             .filter(|held| held.session == session)
@@ -466,14 +513,65 @@ impl Daemon {
             ));
         }
 
-        let id = annotation.id.clone();
-        self.renderer.draw(&annotation)?;
+        let now = std::time::Instant::now();
+        let timing = strokes.and_then(|strokes| {
+            let free = state
+                .annotations
+                .values()
+                .filter_map(|held| held.reveal.as_ref().map(reveal::Reveal::settles_at))
+                .max()
+                .unwrap_or(now)
+                .max(now);
+            let starts_in = free - now;
+            if starts_in > reveal::QUEUE_LIMIT {
+                return None;
+            }
+            let reveal = reveal::Reveal {
+                begins: free,
+                strokes,
+            };
+            let timing = Timing {
+                starts_in,
+                reveal: reveal.duration(),
+            };
+            annotation.reveal = Some(reveal);
+            Some(timing)
+        });
+        // Text that cannot be drawn on is typeset rather than written in an instant.
+        if timing.is_none() {
+            annotation.unwrite();
+        }
+        state.annotations.insert(id.clone(), annotation.clone());
+        drop(state);
+
+        if let Err(e) = self.renderer.draw(&annotation) {
+            self.state
+                .lock()
+                .expect("state lock")
+                .annotations
+                .remove(&id);
+            return Err(e);
+        }
         self.mark_drawn();
-        self.state
-            .lock()
-            .expect("state lock")
-            .annotations
-            .insert(id.clone(), annotation);
-        Ok(id)
+        Ok((id, timing))
+    }
+}
+
+/// When a stored mark starts being drawn, and how long drawing it takes.
+#[derive(Debug, Clone, Copy)]
+struct Timing {
+    /// The wait for the orb to finish whatever it was drawing.
+    starts_in: std::time::Duration,
+    /// From the first touch of the pen to the last lift.
+    reveal: std::time::Duration,
+}
+
+impl Timing {
+    /// Put the timing on an ack, in the wire's milliseconds.
+    fn on(self, ack: arin_protocol::Ack) -> arin_protocol::Ack {
+        ack.with_reveal(
+            self.starts_in.as_millis() as u64,
+            self.reveal.as_millis() as u64,
+        )
     }
 }

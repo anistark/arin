@@ -20,6 +20,22 @@ before a byte is read, and there is no network listener.
 The daemon replies to each with an `ack` carrying the annotation's id and the display it
 landed on, or an `error` naming a machine-readable code.
 
+## Drawing on
+
+Paths, arrows and sketched highlights are drawn on stroke by stroke, with the orb riding
+the tip, rather than appearing whole. There is one orb, so a mark sent while another is
+still being drawn waits its turn. The ack for a mark drawn this way carries two extra
+fields:
+
+```json
+{"v":"0.2","type":"ack","annotation_id":"a_7f3","starts_in_ms":420,"reveal_ms":560}
+```
+
+`starts_in_ms` is the wait for the orb, `0` when nothing is ahead. `reveal_ms` is how long
+the drawing takes once it starts. A mark that would wait longer than three seconds is drawn
+at once instead, and its ack has neither field. A `ttl_ms` counts from when the ink is
+finished, so it is always how long the finished mark stays up.
+
 ## Invalidations
 
 Separately, the daemon pushes an `invalidated` whenever one of your marks goes away for a

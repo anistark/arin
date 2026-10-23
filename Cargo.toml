@@ -36,6 +36,15 @@ png = { version = "0.18.1", default-features = false }
 # Defaults carry rustls, so a distributed binary does not depend on whatever OpenSSL the
 # machine happens to have, and the system proxy settings are honoured.
 reqwest = { version = "0.13.5", features = ["json"] }
+# The outline of a pen stroke whose width follows its speed, for handwriting.
+freedraw = "1.0.4"
+# Shaping text in a handwriting font, with the font's own kerning, ligatures and
+# contextual alternates, which a bought handwriting font leans on heavily.
+rustybuzz = "0.20.1"
+# Reading a font's outlines and its classification tables, for handwriting.
+ttf-parser = "0.25.1"
+# Reading the single-line fonts handwriting is drawn in, which ship as SVG fonts.
+roxmltree = "0.21.1"
 global-hotkey = "0.8.0"
 libc = "0.2.189"
 rmcp = "3.5.0"
@@ -54,6 +63,7 @@ objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
+objc2-core-text = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-quartz-core = "0.3.2"
 objc2-screen-capture-kit = "0.3.2"

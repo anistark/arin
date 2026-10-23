@@ -65,6 +65,12 @@ static GROUNDING: OnceLock<Box<dyn Fn() -> Option<Duration> + Send + Sync>> = On
 /// give in the first place, so this is part of the prompt working rather than a nicety.
 static REVOKE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
+/// Which hand text is written in, and why, as one line.
+///
+/// Settled at startup and never changes while the daemon runs, so it is set rather than
+/// asked for.
+static HAND: OnceLock<String> = OnceLock::new();
+
 /// Where the live lines sit in the menu, so the delegate can find them again.
 ///
 /// Positions rather than retained handles, because `menuNeedsUpdate:` is handed the menu
@@ -73,7 +79,8 @@ const TITLE_INDEX: isize = 0;
 const STATUS_INDEX: isize = 1;
 const PERMISSION_INDEX: isize = 2;
 const GROUNDING_INDEX: isize = 3;
-const MARKER_INDEX: isize = 6;
+const HAND_INDEX: isize = 4;
+const MARKER_INDEX: isize = 7;
 
 /// Retitle a menu item, doing nothing if the menu has been rearranged underneath us.
 fn set_title(menu: &NSMenu, index: isize, title: &str) {
@@ -109,6 +116,13 @@ pub fn on_grounding(
 ) {
     if GROUNDING.set(Box::new(state)).is_err() || REVOKE.set(Box::new(revoke)).is_err() {
         tracing::warn!("a grounding handler was already registered");
+    }
+}
+
+/// Say which hand text is written in.
+pub fn set_hand(line: String) {
+    if HAND.set(line).is_err() {
+        tracing::warn!("the hand was already set");
     }
 }
 
@@ -155,6 +169,9 @@ define_class!(
                 .get()
                 .map_or_else(|| "starting up".to_owned(), |status| status());
             set_title(menu, STATUS_INDEX, &status);
+            if let Some(hand) = HAND.get() {
+                set_title(menu, HAND_INDEX, &format!("Writing in {hand}"));
+            }
 
             // On the name rather than in a line of its own. A menu item that appears and
             // disappears moves everything under it, and the indices the rest of this
@@ -330,6 +347,11 @@ impl MenuBar {
         let grounding = menu_item(mtm, "Screen access", Some(sel!(revokeGrounding:)), "");
         unsafe { grounding.setTarget(Some(&actions)) };
         menu.addItem(&grounding);
+
+        // Index 4, filled in once the daemon has chosen a hand.
+        let hand = menu_item(mtm, "Writing in EMS Tech", None, "");
+        hand.setEnabled(false);
+        menu.addItem(&hand);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 

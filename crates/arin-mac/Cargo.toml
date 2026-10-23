@@ -33,6 +33,9 @@ block2.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
+  # Only for NSWorkspace's display preferences, to draw marks whole under Reduce Motion.
+  # Nothing here reads or drives another application's accessibility tree.
+  "NSAccessibility",
   # The grounding consent prompt.
   "NSAlert",
   "NSApplication",
@@ -68,7 +71,10 @@ objc2-app-kit = { workspace = true, features = [
   "NSWindow",
   "NSWorkspace",
 ] }
-objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
+objc2-core-foundation = { workspace = true, features = ["CFArray", "CFCGTypes", "CFURL"] }
+# Listing the fonts the person installed, to write in their handwriting font if they have
+# one.
+objc2-core-text = { workspace = true, features = ["CTFontManager"] }
 objc2-core-graphics = { workspace = true, features = [
   "CGColor",
   "CGDataProvider",

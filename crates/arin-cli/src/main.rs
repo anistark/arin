@@ -11,6 +11,7 @@ mod daemon;
 mod diagnose;
 #[cfg(target_os = "macos")]
 mod hotkey;
+mod resources;
 #[cfg(target_os = "macos")]
 mod service;
 mod update;
@@ -58,6 +59,7 @@ fn main() -> Result<()> {
             palette,
             grounding_consent,
             style,
+            hand,
             allow_activation,
             read_browser_tabs,
             no_adaptive_color,
@@ -67,6 +69,9 @@ fn main() -> Result<()> {
             config.adaptive_color = !no_adaptive_color;
             if let Some(style) = style {
                 config.mark_style = style.into();
+            }
+            if let Some(hand) = hand {
+                config.hand = arin_core::hand::HandChoice::Named(hand);
             }
             config.allow_activation = allow_activation;
             config.read_browser_tabs = read_browser_tabs;

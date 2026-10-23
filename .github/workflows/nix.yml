@@ -132,6 +132,12 @@ jobs:
           test -x "$contents/Resources/launch-agent.sh"
           test -f "$contents/Resources/dev.anirudha.arin.plist"
 
+          # Handwriting in other scripts, and the licences that travel with the data.
+          test -f "$contents/Resources/strokes/japanese.strk"
+          test -f "$contents/Resources/strokes/ARPHICPL.TXT"
+          test -f "$contents/Resources/fonts/EMS-Tech-OFL.txt"
+          test -f "$contents/Resources/fonts/scripts/Kalam-Regular.ttf"
+
           # One binary serving as the app and the command line tool, rather than a second
           # copy on PATH that would be a second identity asking for the same permission.
           # An inode comparison, because fixupPhase rewrites the symlink to a relative one.

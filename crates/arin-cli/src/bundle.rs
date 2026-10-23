@@ -185,6 +185,22 @@ fn settings(out: &mut String, config: &Config) {
             None => "none, marks live until cleared".to_owned(),
         }
     );
+    let _ = writeln!(
+        out,
+        "max ttl     {}",
+        match config.max_ttl {
+            Some(ttl) => format!("{}ms", ttl.as_millis()),
+            None => "none".to_owned(),
+        }
+    );
+    let _ = writeln!(
+        out,
+        "hand        {}",
+        match &config.hand {
+            arin_core::hand::HandChoice::Detect => "detect".to_owned(),
+            arin_core::hand::HandChoice::Named(name) => format!("named {name:?}"),
+        }
+    );
     let _ = writeln!(out, "linger      {}ms", config.linger.as_millis());
     let _ = writeln!(out, "scroll tick {}ms", config.scroll_tick.as_millis());
     let _ = writeln!(out, "same uid    {}", config.require_same_uid);

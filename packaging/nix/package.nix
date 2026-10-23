@@ -45,6 +45,9 @@ let
       # The About box compiles the logo in, and the bundle's icon is drawn from the other.
       ../../assets/logo.png
       ../../assets/app-icon.png
+      # Handwriting: the font core compiles in, and the stroke packs installed beside it.
+      ../../assets/fonts
+      ../../assets/strokes
       # arin-cli include_str!s Info.plist to check the identifier has not drifted, so this
       # is a build input and not only an installation one.
       ../../packaging/macos
@@ -121,6 +124,13 @@ rustPlatform.buildRustPackage {
     # starts at login when your configuration is written in Nix would be a worse app.
     install -m555 packaging/macos/launch-agent.sh "$contents/Resources/launch-agent.sh"
     install -m444 packaging/macos/dev.anirudha.arin.plist "$contents/Resources/"
+
+    # Data under licences of its own, beside the binary rather than compiled into it, where
+    # bundle.sh puts it too.
+    install -Dm444 -t "$contents/Resources/strokes" assets/strokes/*.strk \
+      assets/strokes/ARPHICPL.TXT assets/strokes/NOTICE.md
+    install -Dm444 assets/fonts/ems-tech/OFL.txt "$contents/Resources/fonts/EMS-Tech-OFL.txt"
+    install -Dm444 -t "$contents/Resources/fonts/scripts" assets/fonts/scripts/*
 
     printf 'APPL????' > "$contents/PkgInfo"
   '';

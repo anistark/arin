@@ -36,6 +36,10 @@ bundle *ARGS:
 app-icon:
     swift packaging/macos/app-icon.swift assets/logo.png assets/app-icon.png
 
+# Rebuild what other scripts are written in by hand, from pinned sources.
+handwriting-data:
+    python3 packaging/strokes/build.py assets/strokes assets/fonts/scripts
+
 # Start Arin at login, from the bundle so the Screen Recording grant sticks.
 startup-enable app="/Applications/Arin.app":
     packaging/macos/launch-agent.sh enable {{ app }}

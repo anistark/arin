@@ -182,6 +182,14 @@ cp packaging/macos/launch-agent.sh "$contents/Resources/launch-agent.sh"
 cp packaging/macos/dev.anirudha.arin.plist "$contents/Resources/dev.anirudha.arin.plist"
 chmod +x "$contents/Resources/launch-agent.sh"
 
+# Data under licences of its own, beside the binary rather than compiled into it: the stroke
+# packs and fonts other scripts are written in, and the licence of the font Arin writes in. The Nix
+# package installs the same files to the same places.
+mkdir -p "$contents/Resources/strokes" "$contents/Resources/fonts/scripts"
+cp assets/strokes/*.strk assets/strokes/ARPHICPL.TXT assets/strokes/NOTICE.md "$contents/Resources/strokes/"
+cp assets/fonts/ems-tech/OFL.txt "$contents/Resources/fonts/EMS-Tech-OFL.txt"
+cp assets/fonts/scripts/* "$contents/Resources/fonts/scripts/"
+
 # Ancient, and still what Finder reads first to decide this is an application.
 printf 'APPL????' >"$contents/PkgInfo"
 

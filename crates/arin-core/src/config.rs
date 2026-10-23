@@ -19,11 +19,18 @@ pub struct Config {
     /// walk over a handful of annotations while a scroll check is a screen capture, so
     /// there is no reason for the cheap one to run at the expensive one's rate.
     pub expiry_tick: Duration,
-    /// Default time to live for an annotation. `None` means it lives until cleared.
+    /// Time to live for an annotation whose client did not ask for one.
     ///
-    /// A client's own `ttl_ms` overrides this. Set it to put a ceiling on how long any
-    /// mark can sit on screen regardless of what clients ask for.
+    /// `None` means such a mark lives until it is cleared. A client's own `ttl_ms` is used
+    /// in place of this, longer or shorter. To bound what clients can ask for, see
+    /// [`Self::max_ttl`].
     pub default_ttl: Option<Duration>,
+    /// The longest any annotation may live, whatever its client asked for.
+    ///
+    /// Clips a client's `ttl_ms`, and applies to a mark that asked for none. This is the
+    /// operator's guarantee that marks do not pile up, which a default alone cannot give
+    /// because a client can always ask for a day. `None` sets no ceiling.
+    pub max_ttl: Option<Duration>,
     /// Reject peers whose effective uid differs from the daemon's.
     pub require_same_uid: bool,
     /// Which registered resolver grounds the query form of `point` and `highlight`.
@@ -56,6 +63,12 @@ pub struct Config {
     /// how a mark looks rather than what it means, so it belongs to whoever is looking at
     /// the screen and not to the client that asked for it. See [`crate::sketch::MarkStyle`].
     pub mark_style: crate::sketch::MarkStyle,
+    /// The font short text is written by hand in, under the sketch style.
+    ///
+    /// The choice is the person's, and finding the fonts it names is the platform's, so
+    /// the binary resolves it into a hand and hands that to the daemon. See
+    /// [`crate::hand::choose`].
+    pub hand: crate::hand::HandChoice,
     /// Whether a client may make the daemon look at the screen to ground a query.
     ///
     /// The capability split. Drawing is open to any peer that passes the uid check, because
@@ -120,6 +133,8 @@ impl Default for Config {
             // fraction of another one.
             expiry_tick: Duration::from_millis(100),
             default_ttl: None,
+            max_ttl: None,
+            hand: crate::hand::HandChoice::Detect,
             require_same_uid: true,
             // Nothing grounds and nothing leaves the machine until someone says so.
             resolver: None,
@@ -194,6 +209,7 @@ mod tests {
         let config = Config::default();
         assert!(config.require_same_uid);
         assert_eq!(config.default_ttl, None);
+        assert_eq!(config.max_ttl, None);
         assert_eq!(
             config.resolver, None,
             "a default daemon must not be able to send anything off the machine"
