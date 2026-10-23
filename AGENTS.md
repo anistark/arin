@@ -143,7 +143,7 @@ session_end
 Daemon to client:
 
 ```
-ack          {annotation_id | session_id, resolved_coords?, confidence?, display?}
+ack          {annotation_id | session_id, resolved_coords?, confidence?, display?, starts_in_ms?, reveal_ms?}
 invalidated  {reason: scroll | display_change | session_end | ttl}
 error        {code, msg}
 ```
@@ -174,6 +174,8 @@ The phoenix logo is a static brand asset. It is never rendered by the daemon. Do
 
 **Mark geometry is computed in core, not per platform.** `arin-core/src/arrow.rs` builds an arrow and `arin-core/src/sketch.rs` builds a sketched highlight's loop, both as ordinary polylines a renderer strokes exactly as it strokes a freehand path. Three renderers would otherwise hold three opinions about what an arrow or a circled region looks like, and the two nobody was looking at would drift. A renderer that finds itself deciding what a shape is has been handed the wrong thing.
 
+So is the timing of a mark drawn on, in `arin-core/src/reveal.rs`, and handwriting, in `arin-core/src/hand/`: the strokes of each letter, their order, the ink around them, and where a caption goes. A renderer receives timed strokes and decides only what ink looks like and how a timeline plays.
+
 Anything roughened is computed once and stored, never regenerated per frame. Marks are redrawn whenever the content under them scrolls, so a shape that re-rolled its wobble on each redraw would shimmer for as long as the page kept moving. `sketch::encircle` is a pure function of the region for the same reason, and takes its seed from the rect rather than carrying one.
 
 Orb state vocabulary. The client never requests these. They follow from daemon state.
@@ -185,6 +187,7 @@ Orb state vocabulary. The client never requests these. They follow from daemon s
 | Traveling | Stretch along velocity vector, trail particles spawn along the bezier arc |
 | Pointing | Settled at target, brief bright flare, embers calm |
 | Ending | Dims to faint core, embers stop, fade out |
+| Writing | Shrunk below the featured size to a pen tip, embers off, rides the stroke being drawn |
 
 A circle has no facing, so travel reads through stretch, never rotation.
 
@@ -239,6 +242,10 @@ Do not relitigate these without asking.
 | How a mark looks | The daemon's, never the client's. `--style sketch\|ruled` sits with `--color` and `--palette` in `Config`, and no message can override it. The split is the one `TextboxStyle` already documents: `note` against `guide` is on the wire because it says what a box is *for*, which only the client knows, while sketch against ruled is how it is drawn, which is the same kind of decision as colour. Adding a wire field later is additive and stays available if agents turn out to need one. |
 | Sketch as the default | A highlight is circled by hand unless `--style ruled` says otherwise. Arrows already bow because that is how a person draws one, text boxes are set in Chalkboard SE because Arin is the chalk, and the ruled rectangle was the one mark that did not follow. Changed in 0.x deliberately, which is when a default can still move. |
 | Textboxes | Display only through all of 0.x. No input widgets. |
+| Drawing on | Under the sketch style, paths, arrows and circled regions are drawn on stroke by stroke with the orb as the pen, and short text is written by hand. Core computes each timeline once and anchors it to an `Instant`, so a redraw after a scroll resumes rather than replays. There is one pen, so marks queue for it, and one that would wait more than 3 s is drawn at once with its text typeset. That limit is provisional. A time to live counts from when the ink settles. |
+| Writing by hand | Up to about 30 letters at 75 ms each, written straight onto the screen. Longer text, text no hand can write, and everything under `--style ruled` stays typeset. No model is involved: the letters come from fonts and recorded stroke data. |
+| The hand | EMS Tech by default, an OFL single-line font compiled into core. `--hand` names another. Left out, the one handwriting family the person installed is used if there is exactly one, judged by PANOSE and the OS/2 class, never counting fonts the system shipped. Finding fonts is the platform's job, deciding is core's. |
+| Other scripts | From stroke packs where open data records how characters are written (newstroke, KanjiVG, Make Me a Hanzi, AnimCJK), and from OFL handwriting fonts where none does. Both are data under their own licences, shipped beside the binary in both bundle builders and never compiled in. `just handwriting-data` rebuilds them from pinned sources. |
 | Sequencing | Brain side. The daemon has no concept of step 2 of 7. |
 | Audio | Never in the daemon. TTS belongs to the client. |
 | Telemetry | None. |

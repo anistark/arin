@@ -52,6 +52,20 @@ pub struct Ack {
     /// client knows which.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appeared: Option<bool>,
+    /// How long the mark waits for the orb before it starts being drawn, in milliseconds.
+    ///
+    /// Marks are drawn on, one stroke after another, by the one orb. A mark sent while
+    /// another is still going down waits its turn, and this is how long. Zero when nothing
+    /// is ahead of it. Absent when the mark appears at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts_in_ms: Option<u64>,
+    /// How long the mark takes to draw once it starts, in milliseconds.
+    ///
+    /// `starts_in_ms` plus this is when the ink is finished, which is also when a time to
+    /// live starts counting. A client pacing speech to the drawing reads both. Absent when
+    /// the mark appears at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal_ms: Option<u64>,
 }
 
 /// The application a focus request brought forward.
@@ -111,6 +125,14 @@ impl Ack {
     pub fn with_resolution(mut self, coords: LogicalPoint, confidence: f64) -> Self {
         self.resolved_coords = Some(coords);
         self.confidence = Some(confidence);
+        self
+    }
+
+    /// Attach when the mark starts being drawn and how long drawing it takes.
+    #[must_use]
+    pub fn with_reveal(mut self, starts_in_ms: u64, reveal_ms: u64) -> Self {
+        self.starts_in_ms = Some(starts_in_ms);
+        self.reveal_ms = Some(reveal_ms);
         self
     }
 

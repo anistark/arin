@@ -15,6 +15,7 @@
 //! | Traveling | Stretch along velocity, trail spawns along the arc |
 //! | Pointing | Settled, brief flare, embers calm |
 //! | Ending | Dims to faint core, embers stop, fade out |
+//! | Writing | Shrunk to a pen tip, no embers, rides the stroke being drawn |
 //!
 //! # Why stretch rather than rotation
 //!
@@ -71,7 +72,7 @@ mod color {
 ///
 /// Visible to the crate because a caption has to clear the orb it labels, and the orb is
 /// the only thing that knows how big it is.
-pub(crate) const HALO: f64 = 72.0;
+pub(crate) const HALO: f64 = arin_core::policy::ORB_DIAMETER;
 const RING: f64 = 34.0;
 const CORE: f64 = 14.0;
 
@@ -79,6 +80,12 @@ const CORE: f64 = 14.0;
 ///
 /// The menu bar icon is this same primitive with features disabled, not a separate asset.
 pub const MINIMUM_FEATURED_SIZE: f64 = 20.0;
+
+/// How small the orb gets while it is the pen.
+///
+/// Small enough that the halo is under [`MINIMUM_FEATURED_SIZE`], which is where the
+/// embers stop and the glow tightens, and small enough not to hide the ink at the tip.
+const WRITING_SCALE: f64 = 0.27;
 
 /// How far the flight arc bows away from the straight line, as a fraction of distance.
 const ARC_BOW: f64 = 0.22;
@@ -108,6 +115,7 @@ mod key {
     pub const PULSE: &str = "arin.pulse";
     pub const FLIGHT: &str = "arin.flight";
     pub const FLARE: &str = "arin.flare";
+    pub const PEN: &str = "arin.pen";
 }
 
 /// The orb.
@@ -266,10 +274,41 @@ impl Orb {
         Some(to)
     }
 
+    /// Ride the tip of a mark as it is drawn, `elapsed` into its timeline.
+    ///
+    /// Ends sitting at the last point the pen touched, shrunk, until something moves it on.
+    pub(crate) fn write_along(&mut self, track: &crate::pen::Track, elapsed: std::time::Duration) {
+        let Some(end) = track.end() else {
+            return;
+        };
+        self.root
+            .removeAnimationForKey(&NSString::from_str(key::FLIGHT));
+        self.set_state(OrbState::Writing);
+        self.root.setPosition(end);
+        self.root.addAnimation_forKey(
+            &track.animation(elapsed),
+            Some(&NSString::from_str(key::PEN)),
+        );
+        self.center = end;
+        self.placed = true;
+    }
+
+    /// Stop following a pen that is no longer drawing, where it stands.
+    pub(crate) fn stop_writing(&mut self) {
+        self.root
+            .removeAnimationForKey(&NSString::from_str(key::PEN));
+    }
+
     /// Move to a state.
     pub fn set_state(&mut self, state: OrbState) {
         if self.state == state {
             return;
+        }
+        // The pen's size is the one state held in the transform, so leaving it gives the
+        // transform back. Fading out is the exception: an orb that finished writing with
+        // nothing left to point at fades as the tip it was.
+        if self.state == OrbState::Writing && state != OrbState::Ending {
+            self.root.setTransform(unsafe { CATransform3DIdentity });
         }
         self.state = state;
         self.apply_state();
@@ -291,7 +330,13 @@ impl Orb {
             OrbState::Traveling => (1.0, 0.0, 0.0, 1.0),
             OrbState::Pointing => (1.0, 1.6, 0.05, 0.12),
             OrbState::Ending => (0.2, 0.0, 0.0, 0.0),
+            OrbState::Writing => (1.0, 0.0, 0.0, 0.0),
         };
+        if self.state == OrbState::Writing {
+            let identity = unsafe { CATransform3DIdentity };
+            self.root
+                .setTransform(identity.scale(WRITING_SCALE, WRITING_SCALE, 1.0));
+        }
 
         self.root.setOpacity(opacity);
         self.embers.setBirthRate(ember_density);

@@ -16,7 +16,8 @@ use crate::flight;
 use crate::marker::{self, Marker};
 use crate::orb::{self, Orb};
 use crate::panel::Panel;
-use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result, Rgb};
+use crate::pen::{self, Track};
+use arin_core::{Annotation, AnnotationKind, OrbState, Renderer, Result, Reveal, Rgb};
 use arin_protocol::{
     AnnotationId, DisplayId, DisplayInfo, LogicalPoint, LogicalRect, StrokeStyle, TextboxStyle,
 };
@@ -37,6 +38,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 thread_local! {
     /// Main thread only. Every access happens inside a block dispatched to the main
@@ -79,12 +81,25 @@ struct Host {
     /// removal from that map has a twin here, and forgetting one leaves an empty pane of
     /// glass on screen that nothing can clear.
     box_views: HashMap<AnnotationId, (DisplayId, Glass)>,
-    /// Point annotations, and the display each is on.
+    /// Point annotations: the display each is on, where it points, and when it arrived.
     ///
     /// Points have no layer of their own: they move the orb. Tracking them separately is
-    /// what lets the orb stay up while any point still wants it, and go away once the last
-    /// one is cleared.
-    points: HashMap<AnnotationId, DisplayId>,
+    /// what lets the orb stay up while any point still wants it, go away once the last one
+    /// is cleared, and go back to the latest one when it has finished drawing something.
+    points: HashMap<AnnotationId, (DisplayId, CGPoint, u64)>,
+    /// How many points have arrived, which orders them.
+    pointed: u64,
+    /// Marks whose pen has yet to finish, with the generation of their scheduled work and
+    /// the moment their pen touches down.
+    ///
+    /// The daemon queues marks for the one orb, so these never overlap in time. A mark
+    /// redrawn mid-reveal replaces its own entry, which is what stops the pen it had
+    /// scheduled from running alongside the one that replaces it.
+    pens: HashMap<AnnotationId, (u64, Instant)>,
+    /// Generations for [`Self::pens`].
+    pen_generation: u64,
+    /// The mark the orb is drawing right now, if it is drawing.
+    writer: Option<AnnotationId>,
     /// The orb. One, for the whole system.
     ///
     /// Arin is a single agent, so it has a single presence and can draw attention to one
@@ -115,6 +130,87 @@ impl Host {
     /// external display is reason enough to keep it up after one on the laptop is cleared.
     fn any_point(&self) -> bool {
         !self.points.is_empty()
+    }
+
+    /// Where the most recent point still on screen points.
+    fn latest_point(&self) -> Option<(DisplayId, CGPoint)> {
+        self.points
+            .values()
+            .max_by_key(|(_, _, order)| *order)
+            .map(|&(display, at, _)| (display, at))
+    }
+
+    /// Have the orb draw a mark, starting when its timeline says.
+    ///
+    /// Scheduled rather than started, because the mark may be waiting for the orb to finish
+    /// the one before it. A later redraw of the same mark replaces this, and a clear drops
+    /// it, which is what the generation is for.
+    fn schedule_pen(
+        &mut self,
+        id: &AnnotationId,
+        display: DisplayId,
+        reveal: &Reveal,
+        track: Track,
+    ) {
+        let now = Instant::now();
+        let settles = reveal.settles_at();
+        if settles <= now {
+            self.pens.remove(id);
+            return;
+        }
+        self.pen_generation = self.pen_generation.wrapping_add(1);
+        let generation = self.pen_generation;
+        // The pen touches down with the first stroke, which for a point's caption is after
+        // its flight has had time to land.
+        let begins = reveal.begins + reveal.strokes.first().map_or(Duration::ZERO, |s| s.start);
+        self.pens.insert(id.clone(), (generation, begins));
+
+        let starting = id.clone();
+        on_main_after(begins.saturating_duration_since(now), move |host, _mtm| {
+            if host.pens.get(&starting).map(|&(g, _)| g) != Some(generation) {
+                return;
+            }
+            let Some(root) = host.root_for(display) else {
+                return;
+            };
+            // Whatever the orb was flying to, it is the pen now.
+            host.flight = host.flight.wrapping_add(1);
+            host.orb.attach_to(&root);
+            host.orb_on = Some(display);
+            host.orb.set_visible(true);
+            host.orb
+                .write_along(&track, Instant::now().saturating_duration_since(begins));
+            host.writer = Some(starting);
+        });
+
+        let finishing = id.clone();
+        on_main_after(settles.saturating_duration_since(now), move |host, _mtm| {
+            if host.pens.get(&finishing).map(|&(g, _)| g) != Some(generation) {
+                return;
+            }
+            host.pens.remove(&finishing);
+            if host.writer.as_ref() == Some(&finishing) {
+                host.writer = None;
+                host.put_pen_down();
+            }
+        });
+    }
+
+    /// Take the orb back from a mark it has finished or abandoned.
+    ///
+    /// Back to the latest point if one still wants it, or away if nothing does. Unless
+    /// another mark is about to start: the daemon queues them back to back, and the orb
+    /// flying off between one stroke and the next would be the pen leaving the page.
+    fn put_pen_down(&mut self) {
+        let soon = Instant::now() + PEN_HANDOVER;
+        if self.pens.values().any(|&(_, begins)| begins <= soon) {
+            return;
+        }
+        self.orb.stop_writing();
+        match self.latest_point() {
+            Some((display, at)) => self.fly_orb_to(display, at),
+            None => self.dismiss_orb(),
+        }
     }
 
     fn panel_for(&mut self, display: DisplayId) -> Option<&mut Panel> {
@@ -173,6 +269,10 @@ impl Host {
     /// flight, and the generation check is what keeps a stale one from landing.
     fn fly_orb_to(&mut self, display: DisplayId, target: CGPoint) {
         self.orb.set_visible(true);
+        // A point takes the orb from whatever it was drawing. The ink carries on without it.
+        if self.writer.take().is_some() {
+            self.orb.stop_writing();
+        }
 
         let Some(from) = self.orb_global() else {
             // Never placed, or the display it was on was unplugged. Arriving from nowhere
@@ -249,8 +349,8 @@ impl Host {
     fn dismiss_orb(&mut self) {
         self.orb.set_state(OrbState::Ending);
         on_main_after(FADE, |host, _mtm| {
-            // Another point may have arrived while it was fading.
-            if !host.any_point() {
+            // Another point, or another mark to draw, may have arrived while it was fading.
+            if !host.any_point() && host.writer.is_none() {
                 host.orb.set_visible(false);
             }
         });
@@ -300,7 +400,7 @@ impl Host {
             // The views went down with their panel's window, so this is bookkeeping
             // rather than removal.
             self.box_views.retain(|_, (on, _)| on != display);
-            self.points.retain(|_, on| on != display);
+            self.points.retain(|_, (on, _, _)| on != display);
             self.marker.forget_display(*display);
         }
 
@@ -410,6 +510,12 @@ where
         CATransaction::commit();
     });
 }
+
+/// How close the next mark's start has to be for the orb to wait for it rather than leave.
+///
+/// The daemon queues marks back to back, so the next one starts the moment the last one
+/// ends. This only has to cover the main queue running the two a moment apart.
+const PEN_HANDOVER: Duration = Duration::from_millis(120);
 
 /// How long the orb spends dimming before it disappears.
 ///
@@ -562,6 +668,10 @@ impl MacRenderer {
                 layers: HashMap::new(),
                 box_views: HashMap::new(),
                 points: HashMap::new(),
+                pointed: 0,
+                pens: HashMap::new(),
+                pen_generation: 0,
+                writer: None,
                 // Built here rather than per panel, and not attached to any of them until
                 // the first point decides which display it belongs on.
                 orb,
@@ -642,6 +752,12 @@ impl Renderer for MacRenderer {
         let anchor = annotation.anchor.screen_rect;
         let kind = annotation.kind.clone();
         let color = annotation.color;
+        // Only a timeline with ink still to put down is played. One that has settled is a
+        // mark being redrawn after a scroll, and replaying it would draw it a second time.
+        let reveal = annotation
+            .reveal
+            .clone()
+            .filter(|r| pen::is_drawing(r) && !pen::reduce_motion());
 
         on_main(move |host, mtm| {
             // Drawing the same id twice is a redraw, which is how a mark follows content
@@ -663,7 +779,7 @@ impl Renderer for MacRenderer {
                 tracing::warn!(%screen_id, "no panel for display, dropping annotation");
                 return;
             };
-            let mut host_points: Vec<(AnnotationId, DisplayId)> = Vec::new();
+            let mut host_points: Vec<(AnnotationId, DisplayId, CGPoint)> = Vec::new();
             let mut fly_to: Option<(DisplayId, CGPoint, bool)> = None;
             let mut boxed: Option<Glass> = None;
             let info = panel.screen().info;
@@ -672,9 +788,11 @@ impl Renderer for MacRenderer {
             let scale = info.scale;
 
             let layer = match &kind {
-                AnnotationKind::Point { at, label, .. } => {
+                AnnotationKind::Point {
+                    at, label, writing, ..
+                } => {
                     let target = to_layer_point(*at, panel_height);
-                    host_points.push((id.clone(), screen_id));
+                    host_points.push((id.clone(), screen_id, target));
                     // Otherwise flying rather than teleporting, which is what makes the orb
                     // read as one thing moving between targets instead of blinking out and
                     // back. The move itself is deferred until after this match, because it
@@ -682,19 +800,61 @@ impl Renderer for MacRenderer {
                     fly_to = Some((screen_id, target, following));
                     // At the destination rather than riding the arc: text already in
                     // place reads better, and a clear during flight cannot race it.
-                    caption::is_drawable(label.as_ref())
-                        .map(|text| caption::beside_orb(text, target, color, panel_size, scale))
+                    match writing {
+                        Some(writing) => Some(written_layer(
+                            writing,
+                            color,
+                            panel_size,
+                            reveal.as_ref(),
+                            0,
+                        )),
+                        None => caption::is_drawable(label.as_ref()).map(|text| {
+                            caption::beside_orb(text, target, color, panel_size, scale)
+                        }),
+                    }
                 }
-                AnnotationKind::Highlight { label, path } => {
+                AnnotationKind::Highlight {
+                    label,
+                    path,
+                    writing,
+                } => {
                     // A loop the daemon drew, or the rectangle this renderer draws itself.
                     // Which one is not this crate's decision, the same way the colour it
                     // arrives in is not.
                     let outline = match path {
-                        Some(points) => path_layer(points, None, color, panel_height),
+                        Some(points) => {
+                            let loop_layer = path_layer(points, None, color, panel_height);
+                            if let Some(reveal) = &reveal
+                                && let Some(stroke) = reveal.strokes.first()
+                            {
+                                pen::draw_on(&loop_layer, stroke, reveal.begins);
+                            }
+                            Retained::into_super(loop_layer)
+                        }
                         None => highlight_layer(anchor, color, panel_height),
                     };
+                    // A written caption is drawn after the loop, so its strokes follow the
+                    // loop's one on the timeline.
+                    let written = writing.as_ref().map(|writing| {
+                        written_layer(
+                            writing,
+                            color,
+                            panel_size,
+                            reveal.as_ref(),
+                            usize::from(path.is_some()),
+                        )
+                    });
                     match caption::is_drawable(label.as_ref()) {
                         None => Some(outline),
+                        Some(_) if written.is_some() => {
+                            let group = CALayer::new();
+                            group.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), panel_size));
+                            group.addSublayer(&outline);
+                            if let Some(written) = &written {
+                                group.addSublayer(written);
+                            }
+                            Some(group)
+                        }
                         // `clear` removes one layer per annotation, so an outline and its
                         // caption are grouped rather than tracked as two entries that
                         // could come apart.
@@ -709,18 +869,34 @@ impl Renderer for MacRenderer {
                                 Some(points) => LogicalRect::containing(points),
                                 None => anchor,
                             };
-                            group.addSublayer(&caption::against_rect(
+                            let caption = caption::against_rect(
                                 text,
                                 to_layer_rect(against, panel_height),
                                 color,
                                 panel_size,
                                 scale,
-                            ));
+                            );
+                            // The pen does not write a typeset caption, so it arrives with
+                            // the finished loop rather than ahead of it.
+                            if let Some(reveal) = &reveal {
+                                pen::appear_at(&caption, reveal.settles_at());
+                            }
+                            group.addSublayer(&caption);
                             Some(group)
                         }
                     }
                 }
-                AnnotationKind::Textbox { text, style } => {
+                AnnotationKind::Textbox {
+                    writing: Some(writing),
+                    ..
+                } => Some(written_layer(
+                    writing,
+                    color,
+                    panel_size,
+                    reveal.as_ref(),
+                    0,
+                )),
+                AnnotationKind::Textbox { text, style, .. } => {
                     let frame = to_layer_rect(anchor, panel_height);
                     let glass = textbox_glass(frame, text, *style, color, scale, mtm);
                     // The material first, the face above it.
@@ -731,7 +907,13 @@ impl Renderer for MacRenderer {
                     Some(textbox_halo(frame, *style, color))
                 }
                 AnnotationKind::Path { points, style } => {
-                    Some(path_layer(points, style.as_ref(), color, panel_height))
+                    let layer = path_layer(points, style.as_ref(), color, panel_height);
+                    if let Some(reveal) = &reveal
+                        && let Some(stroke) = reveal.strokes.first()
+                    {
+                        pen::draw_on(&layer, stroke, reveal.begins);
+                    }
+                    Some(Retained::into_super(layer))
                 }
             };
 
@@ -740,10 +922,21 @@ impl Renderer for MacRenderer {
                 host.layers.insert(id.clone(), (screen_id, layer));
             }
             if let Some(view) = boxed {
-                host.box_views.insert(id, (screen_id, view));
+                host.box_views.insert(id.clone(), (screen_id, view));
             }
-            for (point, display) in host_points {
-                host.points.insert(point, display);
+            for (point, display, target) in host_points {
+                host.pointed += 1;
+                let order = host.pointed;
+                host.points.insert(point, (display, target, order));
+            }
+            match &reveal {
+                Some(reveal) => {
+                    let track = Track::of(reveal, |at| to_layer_point(at, panel_height));
+                    host.schedule_pen(&id, screen_id, reveal, track);
+                }
+                None => {
+                    host.pens.remove(&id);
+                }
             }
             // Last, because the orb belongs to the host rather than to this panel and
             // moving it needs the panel borrow released. Also the right order on screen:
@@ -772,6 +965,11 @@ impl Renderer for MacRenderer {
             if let Some((_, glass)) = host.box_views.remove(&id) {
                 glass.remove();
             }
+            host.pens.remove(&id);
+            if host.writer.as_ref() == Some(&id) {
+                host.writer = None;
+                host.put_pen_down();
+            }
             // A point has no layer of its own, it moves the orb, so the orb only goes away
             // once nothing anywhere still wants it. Clearing a point on one display while
             // another holds one elsewhere leaves the orb where it is: a pointer does not
@@ -793,6 +991,9 @@ impl Renderer for MacRenderer {
                 glass.remove();
             }
             host.points.clear();
+            host.pens.clear();
+            host.writer = None;
+            host.orb.stop_writing();
             // Any flight still in the air is going nowhere anyone asked for.
             host.flight = host.flight.wrapping_add(1);
             host.dismiss_orb();
@@ -1005,13 +1206,86 @@ fn cg_as_object(color: &CGColor) -> &AnyObject {
     cf.as_ref()
 }
 
-/// A freehand path.
-fn path_layer(
-    points: &[LogicalPoint],
-    style: Option<&StrokeStyle>,
+/// Text written by hand, one stroked layer per pen stroke, on the timeline from `first`.
+///
+/// Straight onto the screen with no panel behind it, so the ink carries a dark edge of its
+/// own. The colour the daemon chose already reads against what is under it, and the edge
+/// keeps a busy background from eating the thin line.
+fn written_layer(
+    writing: &arin_core::hand::Writing,
     color: Rgb,
-    panel_height: f64,
+    panel: CGSize,
+    reveal: Option<&Reveal>,
+    first: usize,
 ) -> Retained<CALayer> {
+    let group = CALayer::new();
+    group.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), panel));
+    group.setShadowColor(Some(&srgb(0.0, 0.0, 0.0, 1.0)));
+    group.setShadowOpacity(0.7);
+    group.setShadowRadius(2.0);
+    group.setShadowOffset(CGSize::new(0.0, -1.0));
+    let frame = CGRect::new(CGPoint::new(0.0, 0.0), panel);
+    for (index, stroke) in writing.strokes.iter().enumerate() {
+        let timing = reveal.and_then(|r| r.strokes.get(first + index).map(|t| (t, r.begins)));
+        let Some(outline) = writing
+            .outlines
+            .get(index)
+            .filter(|contours| contours.iter().any(|c| c.len() > 2))
+        else {
+            let layer = stroke_layer(color, writing.width);
+            layer.setPath(Some(&polyline(stroke, panel.height)));
+            if let Some((timing, begins)) = timing {
+                pen::draw_on(&layer, timing, begins);
+            }
+            group.addSublayer(&layer);
+            continue;
+        };
+        // The ink is the outline, filled. It is revealed through a line along the stroke
+        // that is drawn on, wide enough to cover the outline at its fullest, so the ink
+        // appears behind the pen at whatever width it has there.
+        let ink = CAShapeLayer::new();
+        ink.setFrame(frame);
+        ink.setFillColor(Some(&annotation_color(color, 1.0)));
+        ink.setPath(Some(&contours(outline, panel.height)));
+        if let Some((timing, begins)) = timing {
+            let mask = stroke_layer(color, writing.width * 2.0 + 2.0);
+            mask.setFrame(frame);
+            mask.setPath(Some(&polyline(stroke, panel.height)));
+            pen::draw_on(&mask, timing, begins);
+            // SAFETY: the mask is a fresh layer owned by nothing else, and the ink retains it.
+            unsafe { ink.setMask(Some(&mask)) };
+        }
+        group.addSublayer(&ink);
+    }
+    group
+}
+
+/// Closed contours in a panel's layer coordinates, filled by the non-zero rule, which is
+/// how a glyph's outline describes its holes.
+fn contours(
+    contours: &[Vec<LogicalPoint>],
+    panel_height: f64,
+) -> objc2_core_foundation::CFRetained<CGMutablePath> {
+    let path = CGMutablePath::new();
+    for contour in contours.iter().filter(|c| c.len() > 2) {
+        let start = to_layer_point(contour[0], panel_height);
+        unsafe {
+            CGMutablePath::move_to_point(Some(&path), std::ptr::null(), start.x, start.y);
+            for point in &contour[1..] {
+                let point = to_layer_point(*point, panel_height);
+                CGMutablePath::add_line_to_point(Some(&path), std::ptr::null(), point.x, point.y);
+            }
+        }
+        CGMutablePath::close_subpath(Some(&path));
+    }
+    path
+}
+
+/// A polyline in a panel's layer coordinates.
+fn polyline(
+    points: &[LogicalPoint],
+    panel_height: f64,
+) -> objc2_core_foundation::CFRetained<CGMutablePath> {
     let path = CGMutablePath::new();
     let mut rest = points.iter();
     if let Some(first) = rest.next() {
@@ -1024,13 +1298,23 @@ fn path_layer(
             }
         }
     }
+    path
+}
 
+/// A freehand path.
+fn path_layer(
+    points: &[LogicalPoint],
+    style: Option<&StrokeStyle>,
+    color: Rgb,
+    panel_height: f64,
+) -> Retained<CAShapeLayer> {
+    let path = polyline(points, panel_height);
     let width = style
         .and_then(|s| s.width)
         .unwrap_or(arin_core::contrast::STROKE_WIDTH);
     let layer = stroke_layer(color, width);
     layer.setPath(Some(&path));
-    Retained::into_super(layer)
+    layer
 }
 
 /// A layer that strokes whatever path it is given, in a colour and a width.

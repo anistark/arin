@@ -244,7 +244,7 @@ fn seed(rect: LogicalRect) -> u64 {
 }
 
 /// splitmix64's finaliser, which is enough to turn four coordinates into unrelated phases.
-const fn mix(hash: u64) -> u64 {
+pub(crate) const fn mix(hash: u64) -> u64 {
     let hash = (hash ^ (hash >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     let hash = (hash ^ (hash >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     hash ^ (hash >> 31)

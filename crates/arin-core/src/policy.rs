@@ -13,6 +13,13 @@ use serde::{Deserialize, Serialize};
 /// pointing at the wrong button reads as broken. When in doubt, draw the region.
 pub const HIGH_CONFIDENCE: f64 = 0.85;
 
+/// How wide the orb's glow is, in logical points.
+///
+/// A rendering detail, but a caption placed beside the orb has to clear it, and that
+/// placement is computed in core for every renderer. So the size lives here and the
+/// renderers read it rather than each holding a number of their own.
+pub const ORB_DIAMETER: f64 = 72.0;
+
 /// How a resolved target should be drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rendering {
@@ -51,6 +58,9 @@ pub enum OrbState {
     Traveling,
     /// Settled on a target. Brief bright flare, then the embers calm.
     Pointing,
+    /// Riding the tip of a stroke as it is drawn. Shrunk below the featured size, so the
+    /// embers stop and the halo tightens, and nothing of it hides the ink going down.
+    Writing,
     /// Winding down. Dims to a faint core, embers stop, fades out.
     Ending,
 }

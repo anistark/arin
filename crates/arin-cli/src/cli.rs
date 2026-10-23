@@ -169,6 +169,14 @@ pub(crate) enum Command {
         #[arg(long, value_enum, value_name = "sketch|ruled", env = "ARIN_MARK_STYLE")]
         style: Option<MarkStyleArg>,
 
+        /// The font short text is written by hand in, under the sketch style.
+        ///
+        /// A family name or a path to a font file. Left out, Arin writes in EMS Tech unless
+        /// exactly one handwriting font you installed says it is one, in which case it
+        /// writes in that. Name `EMS Tech` to keep the default whatever you install.
+        #[arg(long, value_name = "FONT", env = "ARIN_HAND")]
+        hand: Option<String>,
+
         /// Whether a client may make Arin look at the screen to ground a query.
         ///
         /// `ask` prompts you the first time and remembers your answer for as long as you
@@ -530,7 +538,7 @@ pub(crate) struct Target {
     #[arg(long)]
     pub(crate) hold: bool,
 
-    /// Remove the mark after this many seconds.
+    /// Remove the mark this many seconds after it finishes drawing.
     ///
     /// Seconds here, milliseconds on the wire. Combine with `--hold` to watch a mark
     /// expire, since otherwise the session ends first and takes it away regardless.

@@ -181,7 +181,13 @@ there is nothing to paste into a prompt. [Resolvers](/docs/resolvers/) covers `q
 which is off until you name one.
 
 Marks live until they are cleared, the content scrolls out from under them, or the client
-disconnects. Pass `ttl_seconds` to have one remove itself instead.
+disconnects. Pass `ttl_seconds` to have one remove itself instead, counted from when it
+finishes drawing.
+
+Paths, arrows and sketched highlights are drawn on with the orb as the pen, so a tool
+result can carry `starts_in_ms` and `reveal_ms`: how long until the pen starts on this
+mark, and how long it takes. An agent speaking alongside the drawing can use the sum to
+say "this one" as the mark lands.
 
 When a mark goes away for a reason the agent did not ask for, that arrives as a `gone`
 field on the next tool result. There is no way for an MCP server to interrupt a model

@@ -152,6 +152,18 @@ pub struct Drawn {
     pub display_height: Option<f64>,
     /// Backing scale. Divide screenshot pixels by this to get logical points.
     pub display_scale: Option<f64>,
+    /// Milliseconds before the pen starts drawing this mark.
+    ///
+    /// Arin draws marks on stroke by stroke with one pen, so a mark sent while another is
+    /// still going down waits its turn. Absent when the mark appears at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starts_in_ms: Option<u64>,
+    /// Milliseconds the pen takes to draw this mark once it starts.
+    ///
+    /// Add `starts_in_ms` to get when the mark is finished, for example to say "this one"
+    /// as it lands. A time to live counts from then. Absent when the mark appears at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reveal_ms: Option<u64>,
     /// Marks of yours that went away since your last call, and why.
     ///
     /// Empty almost always. A non-empty list means the screen moved on without you: the
@@ -206,8 +218,8 @@ pub struct PointAtArgs {
     /// Short caption drawn beside the orb, for example "Save".
     #[serde(default)]
     pub label: Option<String>,
-    /// Remove the mark automatically after this many seconds. Omit to leave it up until
-    /// you clear it or the session ends.
+    /// Remove the mark automatically this many seconds after it is finished drawing. Omit
+    /// to leave it up until you clear it or the session ends.
     #[serde(default)]
     pub ttl_seconds: Option<f64>,
     /// Display to draw on. Omit for the primary display.
@@ -239,8 +251,8 @@ pub struct HighlightArgs {
     /// Short caption drawn against the region.
     #[serde(default)]
     pub label: Option<String>,
-    /// Remove the mark automatically after this many seconds. Omit to leave it up until
-    /// you clear it or the session ends.
+    /// Remove the mark automatically this many seconds after it is finished drawing. Omit
+    /// to leave it up until you clear it or the session ends.
     #[serde(default)]
     pub ttl_seconds: Option<f64>,
     /// Display to draw on. Omit for the primary display.
@@ -266,8 +278,8 @@ pub struct AnnotateArgs {
     /// about to act on it.
     #[serde(default)]
     pub style: Option<String>,
-    /// Remove the mark automatically after this many seconds. Omit to leave it up until
-    /// you clear it or the session ends.
+    /// Remove the mark automatically this many seconds after it is finished drawing. Omit
+    /// to leave it up until you clear it or the session ends.
     #[serde(default)]
     pub ttl_seconds: Option<f64>,
     /// Display to draw on. Omit for the primary display.
@@ -306,8 +318,8 @@ pub struct DrawArrowArgs {
     /// left. Omit for a natural curve.
     #[serde(default)]
     pub bow: Option<f64>,
-    /// Remove the mark automatically after this many seconds. Omit to leave it up until
-    /// you clear it or the session ends.
+    /// Remove the mark automatically this many seconds after it is finished drawing. Omit
+    /// to leave it up until you clear it or the session ends.
     #[serde(default)]
     pub ttl_seconds: Option<f64>,
     /// Display to draw on. Omit for the primary display.
@@ -766,6 +778,8 @@ impl Arin {
                     display_width: display.map(|d| d.logical_size[0]),
                     display_height: display.map(|d| d.logical_size[1]),
                     display_scale: display.map(|d| d.scale),
+                    starts_in_ms: ack.starts_in_ms,
+                    reveal_ms: ack.reveal_ms,
                     gone,
                 }))
             }

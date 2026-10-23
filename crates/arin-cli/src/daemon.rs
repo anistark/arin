@@ -215,6 +215,38 @@ fn report_palette(palette: &arin_core::Palette, adaptive: bool) {
     );
 }
 
+/// Pick the hand short text is written in, from the fonts the person installed, and load
+/// the stroke packs for other scripts.
+///
+/// Said at startup however it was chosen, since a font that turned up on its own is the one
+/// thing here somebody could not otherwise work out. The menu bar says it too.
+fn choose_hands(choice: &arin_core::hand::HandChoice) -> arin_core::hand::Hands {
+    #[cfg(target_os = "macos")]
+    let fonts = arin_mac::available_fonts();
+    #[cfg(not(target_os = "macos"))]
+    let fonts: Vec<arin_core::hand::FontFile> = Vec::new();
+
+    let chosen = arin_core::hand::choose(choice, &fonts);
+    tracing::info!(hand = %chosen.describe(), "writing by hand");
+    #[cfg(target_os = "macos")]
+    arin_mac::set_hand(chosen.describe());
+
+    let mut hands = arin_core::hand::Hands::new(chosen);
+    if let Some(directory) = crate::resources::stroke_packs() {
+        hands = hands.with_packs(&directory);
+    }
+    if let Some(directory) = crate::resources::script_fonts() {
+        hands = hands.with_fonts(&directory);
+    }
+    let others = hands.others();
+    if others.is_empty() {
+        tracing::info!("no stroke packs or script fonts found, so other scripts are typeset");
+    } else {
+        tracing::info!(hands = others.join(", "), "writing other scripts");
+    }
+    hands
+}
+
 /// Say how marks are drawn, when it is not how they are drawn by default.
 ///
 /// [`report_palette`]'s reason. "Why are my highlights rectangles" is a question the daemon
@@ -242,8 +274,9 @@ async fn serve(
     // the workspace on Linux with `-D warnings`.
     #[cfg(target_os = "macos")]
     let reads_tabs = config.read_browser_tabs;
+    let hands = choose_hands(&config.hand);
 
-    let daemon = Daemon::new(config, renderer, capture);
+    let daemon = Daemon::new(config, renderer, capture).with_hands(hands);
     let daemon = match resolver {
         Some(resolver) => daemon.with_resolver(resolver),
         None => daemon,
