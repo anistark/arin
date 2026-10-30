@@ -201,7 +201,6 @@ fn settings(out: &mut String, config: &Config) {
             arin_core::hand::HandChoice::Named(name) => format!("named {name:?}"),
         }
     );
-    let _ = writeln!(out, "linger      {}ms", config.linger.as_millis());
     let _ = writeln!(out, "scroll tick {}ms", config.scroll_tick.as_millis());
     let _ = writeln!(out, "same uid    {}", config.require_same_uid);
 }

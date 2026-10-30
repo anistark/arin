@@ -8,8 +8,6 @@ use std::time::Duration;
 pub struct Config {
     /// Where the Unix domain socket lives. Created with mode 0600.
     pub socket_path: PathBuf,
-    /// How long annotations linger after a session ends or its socket drops.
-    pub linger: Duration,
     /// How often to check whether content scrolled, during active sessions only.
     pub scroll_tick: Duration,
     /// How often to sweep for annotations whose time to live has run out.
@@ -122,9 +120,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             socket_path: default_socket_path(),
-            // Long enough to read a final annotation, short enough that a crashed client
-            // does not leave marks on the screen.
-            linger: Duration::from_secs(5),
             // Fast enough that a scroll does not leave a stale mark visible for long,
             // slow enough to stay off the CPU graph.
             scroll_tick: Duration::from_millis(500),
