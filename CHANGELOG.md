@@ -111,6 +111,9 @@ is a format.
   stored. A mark that is drawn on lives longer than before by the time it took to draw.
 - **`Config::default_ttl` is a default, as its code always treated it.** Its documentation
   called it a ceiling, which `ttl_for` never enforced. `max_ttl` is the ceiling now.
+- **`Config::linger` is gone.** It said marks stayed up for 5 seconds after their session
+  ended, and nothing read it: marks have always cleared the moment a session ends or its
+  socket drops. AGENTS.md now records that, and the diagnostic bundle no longer reports it.
 
 ### Fixed
 

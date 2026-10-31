@@ -225,7 +225,7 @@ Do not relitigate these without asking.
 | Teaching mode | Freeze frame. Capture once, annotate, valid until scroll. |
 | Scroll detection | Screenshot diff on a 500ms tick during active sessions only. Keeps permissions at Screen Recording alone, no Accessibility TCC. |
 | Scroll response | Follow the content where the movement can be measured, invalidate where it cannot. Never guess: a mark that vanishes is a failure the client can see, and a mark confidently pointing at the wrong thing is one it cannot. |
-| Annotation lifetime | Session scoped. Clear 5 seconds after `session_end` or socket disconnect. |
+| Annotation lifetime | Session scoped. Cleared the moment `session_end` arrives or the socket drops, so a client that crashes leaves nothing on screen. |
 | Clear affordance | Menu bar item plus global hotkey. No overlay button. |
 | Marker | The person can draw on the overlay themselves, and their strokes are not annotations. No session, no anchor, nothing on the wire: the daemon never learns they exist, so a client cannot move, expire, or clear them, and the scroll watcher leaves them where they were drawn. A right click while the marker is on wipes them, Clear takes them along with everything else on the overlay, and switching the marker off leaves them up. Colour is the palette's first choice, handed to the renderer by the binary, so the marker matches the marks around it without the renderer holding an opinion. Lives entirely in `arin-mac`: `marker.rs` for the ink, `panel.rs` for taking the mouse. |
 | Grounding | CUA class models only. Raw coordinates from the client in 0.1. Resolver plugin registry from 0.3. |
