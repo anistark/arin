@@ -50,9 +50,24 @@ is a format.
   stopped the old daemon and could fail to start the new one, after which
   `arin service restart` reported that the agent did not exist. Running `enable` again was
   the way out.
+- **`arin update` now acts instead of only reporting.** Installed with Homebrew, it runs
+  `brew upgrade anistark/tools/arin` and stays on your major version, which on 0.x is still
+  the first number. `arin update --check` is the old report, with the install method and the
+  exact command added.
+- **`arin upgrade` moves to the newest release, including a new major version.** It takes
+  `--check` as well.
+- **Arin still never downloads a build or replaces itself.** A dmg, Nix, `cargo install` or
+  anything it cannot place changes nothing, prints what to do, and exits non-zero.
 
 ### Added
 
+- **`arin upgrade`, and acting on `arin update`.** Each makes the one request `arin update`
+  always made, and `update` holds back once a new major version is out, because every install
+  route gets only its newest release. `crates/arin-cli/tests/update.rs` runs the real binary
+  from install paths against fake tools and a stub.
+- **`ARIN_RELEASES_API`** points the check at a stand-in for testing. It is read from the
+  environment only and refused unless it names this machine, so GitHub stays the only place
+  that request can go. `arin diagnose` reports it.
 - **Drawing on.** `arin_core::reveal` times every stroke of a mark once, in core, as samples
   at even slices of time whose spacing carries a half-cosine speed curve, so a renderer plays
   them with no timing function of its own. A path or arrow takes `0.2 + length / 2000`
@@ -107,6 +122,20 @@ is a format.
 
 ### Changed
 
+- **The no-download decision is restated rather than dropped.** The module doc in `update.rs`
+  still rules out fetching a build until there is a certificate, and now names the one thing
+  allowed: handing over to Homebrew when someone runs the command. Nix is left to the person
+  because a store path does not say what holds it and a profile follows `main`, so it cannot
+  be held to a major version.
+- **The version is read back from `arin` on PATH** after `brew upgrade`, since the keg the
+  running process came from is gone by then. A tap that lags a release is reported as that,
+  exit zero, and success is never claimed from Homebrew finishing.
+- **A 429 counts as a spent rate limit** as well as a 403, which is what GitHub documents.
+- **The daemon's update notice names `arin update`,** or `arin upgrade` for a new major
+  version, rather than `brew upgrade`, which only answers for one kind of install.
+  `homebrew_opt` and `unversioned` moved from `service.rs` to `update.rs`, since `service` is
+  macOS only and detection is not, and `arin_resolve::local::names_loopback` is shared with
+  the local resolver.
 - **A time to live counts from when a mark's ink settles** rather than from when it was
   stored. A mark that is drawn on lives longer than before by the time it took to draw.
 - **`Config::default_ttl` is a default, as its code always treated it.** Its documentation

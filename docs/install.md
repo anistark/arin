@@ -29,9 +29,12 @@ It installs `Arin.app` into the Homebrew prefix and links the binary inside it o
 PATH, so `arin` and the app are one file rather than two that could drift.
 
 ```sh
-brew upgrade arin       # a newer version
+arin update             # a newer version, through brew upgrade
 brew uninstall arin     # and gone
 ```
+
+[`arin update`](/docs/cli/#updating) stays on your major version and `arin upgrade` does not.
+`brew upgrade arin` still works on its own.
 
 Two consequences of the app living in the Homebrew prefix rather than `/Applications`:
 Spotlight will not find it, and every upgrade needs Screen Recording granted again. Both are
@@ -76,6 +79,9 @@ sudo mkdir -p /usr/local/bin && sudo ln -sf /Applications/Arin.app/Contents/MacO
 `mkdir`. The link points into the app, so replacing `Arin.app` with a newer dmg keeps it
 working, and `arin service enable` follows it back to the app it belongs to.
 
+That replacing is yours to do. `arin update` says when there is a newer dmg and changes
+nothing, because Arin does not download builds.
+
 ## From source
 
 ```sh
@@ -96,6 +102,9 @@ properties of the bundle. `just bundle` builds `Arin.app` from a clone if you wa
 
 `cargo install arin` does not work, on purpose. `arin` is a library on crates.io, so Cargo
 correctly answers that there is nothing to install. The binary is `arin-cli`.
+
+`arin update` prints the command that builds the new release and changes nothing. Building is
+yours to run.
 
 ## First run
 
@@ -130,7 +139,7 @@ how you point it at an app that moved.
 
 ```sh
 arin service status      # installed? running? which build?
-arin service restart     # what to run after brew upgrade
+arin service restart     # what to run after arin update or brew upgrade
 arin service disable     # stop starting at login, leave the app alone
 ```
 

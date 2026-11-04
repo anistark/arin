@@ -44,6 +44,36 @@ disable` stops it starting at login and leaves the app alone.
 [Install](/docs/install/) has the rest, including what happens with Nix, which manages the
 same agent through `services.arin.enable` instead.
 
+## Updating
+
+```sh
+arin update              # a newer release on the major version you have
+arin upgrade             # the newest release, including a new major version
+arin update --check      # report, and change nothing
+```
+
+Major means the first number, so 0.7 to 0.8 is an `update` and 1.0 is an `upgrade`. Every way
+of installing Arin gets only the newest release, so once a new major version is out `arin
+update` changes nothing and points at `arin upgrade`. With no new major version out, `arin
+upgrade` takes the newest release just the same.
+
+Arin never downloads a build and never replaces itself. Installed with Homebrew, either
+command runs `brew upgrade anistark/tools/arin` in your terminal, then reads the version back
+from the `arin` on your PATH and says what it found. If the tap has not caught up with the
+release yet it says that as well, and that is not an error. Installed any other way, it
+changes nothing, prints what to do, and exits non-zero.
+
+`--check` works on both. It prints how Arin was installed, the version it would move to and
+the exact command, and exits zero whichever install it finds.
+
+A daemon that is already running stays on the old build, and nothing restarts it for you. Run
+`arin service restart`, or stop `arin -d` and start it again. Screen Recording then has to be
+granted again for the new build, which [Install](/docs/install/#when-permissions-go-wrong)
+covers.
+
+Each run makes one request to GitHub. Nothing checks on its own unless you started the daemon
+with `--check-updates`, and that only ever reports.
+
 ## Drawing on the screen yourself
 
 Everything else on the overlay is drawn by an agent. **Marker**, in the menu bar or with
