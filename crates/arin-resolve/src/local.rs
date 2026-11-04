@@ -419,6 +419,19 @@ impl Resolver for LocalResolver {
     }
 }
 
+/// Whether a url is written as this machine: 127.0.0.1, ::1, or localhost.
+///
+/// Reads the address written down and asks no resolver. Also how the update check holds its
+/// test stand-in to this machine.
+pub fn names_loopback(url: &reqwest::Url) -> bool {
+    // Brackets because a url spells an IPv6 host `[::1]`, and `IpAddr` does not.
+    let host = url.host_str().unwrap_or_default();
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or_else(|_| bare.eq_ignore_ascii_case("localhost"))
+}
+
 /// Resolve an endpoint to the loopback address it names, or refuse it.
 ///
 /// A hostname that resolves to loopback today is still refused, because what it resolves to
@@ -428,14 +441,7 @@ fn loopback_address(endpoint: &str) -> Result<SocketAddr> {
     let url = reqwest::Url::parse(endpoint)
         .map_err(|e| Error::Resolver(format!("{endpoint:?} is not a url: {e}")))?;
 
-    // Brackets because a url spells an IPv6 host `[::1]`, and `IpAddr` does not.
-    let host = url.host_str().unwrap_or_default();
-    let bare = host.trim_start_matches('[').trim_end_matches(']');
-    let local = bare
-        .parse::<std::net::IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or_else(|_| bare.eq_ignore_ascii_case("localhost"));
-    if !local {
+    if !names_loopback(&url) {
         return Err(Error::Resolver(format!(
             "{endpoint:?} is not on this machine. The local resolver reports that it sends \
              nothing off the machine, so it will only talk to 127.0.0.1, ::1, or localhost. \

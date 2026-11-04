@@ -111,6 +111,20 @@ For pulling Arin into your own package set:
 nixpkgs.overlays = [ arin.overlays.default ];  # gives you pkgs.arin
 ```
 
+## Updating
+
+`arin update` and `arin upgrade` say what is out, change nothing, and exit non-zero here. A
+store path says Nix built Arin and not what holds it, and these update differently:
+
+```sh
+nix profile upgrade arin     # a profile
+nix flake update arin        # nix-darwin, then rebuild
+```
+
+`nix run github:anistark/arin` needs neither. All three follow `main` rather than a release,
+which is the other reason Arin leaves this to you: nothing here can be held to a major
+version, and what you get can be ahead of the release the commands report.
+
 ## Permissions, and what an update costs
 
 Arin asks for Screen Recording on first run. It is the only permission it ever asks for,

@@ -306,7 +306,7 @@ fn locate() -> Result<PathBuf> {
         )
     })?;
 
-    Ok(unversioned(binary))
+    Ok(crate::update::unversioned(binary))
 }
 
 /// Accept a path only if it really is the binary inside an app bundle.
@@ -323,43 +323,6 @@ fn in_bundle(binary: &Path) -> Result<PathBuf> {
         Some(()) => bail!("{} does not exist", binary.display()),
         None => bail!("{} is not Contents/MacOS inside an .app", binary.display()),
     }
-}
-
-/// Trade a versioned Homebrew path for the alias that outlives an upgrade.
-///
-/// Resolving the symlink on PATH lands in `<prefix>/Cellar/arin/<version>/`, and writing
-/// that into the agent would break it on the next `brew upgrade`, because the version is
-/// part of the path and the old keg is deleted. `<prefix>/opt/arin` is the same keg under a
-/// name Homebrew re-points, so the agent survives.
-///
-/// Confirmed against the filesystem rather than trusted, so a path that merely contains a
-/// directory called `Cellar` is left alone.
-fn unversioned(binary: PathBuf) -> PathBuf {
-    let Some(alias) = homebrew_opt(&binary) else {
-        return binary;
-    };
-    match (
-        std::fs::canonicalize(&alias),
-        std::fs::canonicalize(&binary),
-    ) {
-        (Ok(through_alias), Ok(resolved)) if through_alias == resolved => alias,
-        _ => binary,
-    }
-}
-
-/// Rewrite `<prefix>/Cellar/<name>/<version>/<rest>` as `<prefix>/opt/<name>/<rest>`.
-fn homebrew_opt(binary: &Path) -> Option<PathBuf> {
-    let parts: Vec<_> = binary.components().collect();
-    let cellar = parts.iter().position(|part| part.as_os_str() == "Cellar")?;
-    let name = parts.get(cellar + 1)?;
-    // The version, which is the component being dropped. Absent means this is not a keg.
-    parts.get(cellar + 2)?;
-
-    let mut alias: PathBuf = parts[..cellar].iter().collect();
-    alias.push("opt");
-    alias.push(name);
-    alias.extend(&parts[cellar + 3..]);
-    Some(alias)
 }
 
 /// Refuse when nix-darwin manages the agent under the current label or a retired one.
@@ -541,42 +504,6 @@ mod tests {
             !rendered.contains("/Users/a&b/"),
             "the raw ampersand reached the plist:\n{rendered}"
         );
-    }
-
-    /// The upgrade path. A keg is deleted when the version it holds is replaced, so an
-    /// agent pointing into one stops working at the next `brew upgrade`.
-    #[test]
-    fn a_versioned_keg_is_traded_for_the_alias_that_survives_an_upgrade() {
-        assert_eq!(
-            homebrew_opt(Path::new(
-                "/opt/homebrew/Cellar/arin/0.4.1/Arin.app/Contents/MacOS/arin"
-            )),
-            Some(PathBuf::from(
-                "/opt/homebrew/opt/arin/Arin.app/Contents/MacOS/arin"
-            ))
-        );
-
-        // Intel, where the prefix is not /opt/homebrew.
-        assert_eq!(
-            homebrew_opt(Path::new(
-                "/usr/local/Cellar/arin/0.9.0/Arin.app/Contents/MacOS/arin"
-            )),
-            Some(PathBuf::from(
-                "/usr/local/opt/arin/Arin.app/Contents/MacOS/arin"
-            ))
-        );
-    }
-
-    #[test]
-    fn a_path_that_is_not_a_keg_is_left_alone() {
-        for path in [
-            "/Applications/Arin.app/Contents/MacOS/arin",
-            "/nix/store/abc123-arin-0.4.1/Applications/Arin.app/Contents/MacOS/arin",
-            // A directory called Cellar with nothing under it is not a keg.
-            "/opt/homebrew/Cellar",
-        ] {
-            assert_eq!(homebrew_opt(Path::new(path)), None, "rewrote {path}");
-        }
     }
 
     #[test]

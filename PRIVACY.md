@@ -37,7 +37,7 @@ Nothing, unless you turn on one of these:
 | `--resolver claude` | Each `point` or `highlight` that describes its target instead of giving coordinates | Anthropic's API, using your own API key | A screenshot of that display and the description |
 | `--check-updates` | Once a day | GitHub's API | A request for the latest release tag, with `arin/<version>` as its user agent |
 
-`arin update` makes the same request as `--check-updates`, once, when you run it.
+`arin update` and `arin upgrade` make the same request as `--check-updates`, once, when you run them. Arin itself downloads nothing. Installed with Homebrew, they then run `brew upgrade` in your terminal, and what Homebrew fetches is covered under [Getting Arin](#getting-arin).
 
 The daemon logs a warning at startup when a resolver that sends data off the machine is on, and again each time a screenshot goes out. An API key in your environment does not turn the `claude` resolver on. It has to be named.
 

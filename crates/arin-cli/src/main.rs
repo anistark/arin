@@ -87,7 +87,8 @@ fn main() -> Result<()> {
         #[cfg(target_os = "macos")]
         Command::Service { action } => service::run(action.unwrap_or(cli::ServiceAction::Status)),
         Command::Resolvers => diagnose::list_resolvers(),
-        Command::Update => update::check(),
+        Command::Update { check } => update::run(update::Scope::SameMajor, check),
+        Command::Upgrade { check } => update::run(update::Scope::Latest, check),
         // Reads the same settings a daemon started here would, so a palette or a resolver
         // named in the environment shows up in the report rather than being invisible to
         // it. Nothing is sent anywhere.
@@ -140,7 +141,7 @@ fn configured_palette(color: Option<&str>, palette: Option<&str>) -> Result<arin
     Ok(Palette::preferring(parsed)?)
 }
 
-fn block_on<F: std::future::Future<Output = Result<()>>>(future: F) -> Result<()> {
+fn block_on<T, F: std::future::Future<Output = Result<T>>>(future: F) -> Result<T> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

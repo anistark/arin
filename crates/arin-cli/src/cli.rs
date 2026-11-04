@@ -227,7 +227,7 @@ pub(crate) enum Command {
         /// nothing but a version string.
         ///
         /// It only ever reports. Nothing is downloaded and nothing is installed.
-        /// `arin update` asks the same question once, without turning anything on.
+        /// `arin update --check` asks the same question once, without turning anything on.
         #[arg(long, env = "ARIN_CHECK_UPDATES")]
         check_updates: bool,
 
@@ -271,16 +271,35 @@ pub(crate) enum Command {
     /// List the resolvers this build can ground queries with.
     Resolvers,
 
-    /// Check whether a newer Arin has been released.
+    /// Move to a newer release within the installed major version.
     ///
-    /// Reports and stops. Nothing is downloaded and nothing is installed: builds are
-    /// unsigned, so fetching one would put you in front of Gatekeeper, and replacing a
-    /// running app without a signature to check is not something to do quietly. It prints
-    /// the upgrade command instead.
+    /// Major means the first number, so 0.7 to 0.8 is an update and 1.0 is not. Every way of
+    /// installing Arin gets only the newest release, so once a new major version is out this
+    /// changes nothing and points at `arin upgrade`.
+    ///
+    /// Arin never downloads a build and never replaces itself. Installed with Homebrew, this
+    /// runs `brew upgrade anistark/tools/arin` in your terminal. Installed any other way, it
+    /// changes nothing, prints what to do, and exits non-zero.
     ///
     /// This makes one request to GitHub. Running it is how you ask for that, which is why
     /// there is no flag to turn it on: nothing here checks on its own.
-    Update,
+    Update {
+        /// Report and change nothing: how Arin was installed, the version it would move to,
+        /// and the exact command.
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Move to the newest release, including a new major version.
+    ///
+    /// The same as `arin update` except that it does not stop at a new major version. With no
+    /// new major version out, it takes the newest release just the same.
+    Upgrade {
+        /// Report and change nothing: how Arin was installed, the version it would move to,
+        /// and the exact command.
+        #[arg(long)]
+        check: bool,
+    },
 
     /// Put the orb on a point.
     ///
