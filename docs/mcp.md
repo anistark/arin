@@ -189,7 +189,7 @@ result can carry `starts_in_ms` and `reveal_ms`: how long until the pen starts o
 mark, and how long it takes. An agent speaking alongside the drawing can use the sum to
 say "this one" as the mark lands.
 
-When a mark goes away for a reason the agent did not ask for, that arrives as a `gone`
-field on the next tool result. There is no way for an MCP server to interrupt a model
+When a mark goes away for a reason the agent did not ask for, that arrives in the `gone`
+list on the next tool result. There is no way for an MCP server to interrupt a model
 mid-thought, so the news waits for the next exchange. A daemon restart shows up the same
 way, as one `session_end` with no annotation id, since every mark went with it.
