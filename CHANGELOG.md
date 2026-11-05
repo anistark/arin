@@ -58,6 +58,10 @@ is a format.
   `--check` as well.
 - **Arin still never downloads a build or replaces itself.** A dmg, Nix, `cargo install` or
   anything it cannot place changes nothing, prints what to do, and exits non-zero.
+- **MCP drawing tools no longer report failure when they worked.** `annotate`, `highlight`,
+  `point_at`, `draw_arrow` and `clear` came back as errors in Claude Code on most calls, with
+  the mark on screen. An agent could draw the same mark twice, and lost the id it needed to
+  clear it.
 
 ### Added
 
@@ -146,6 +150,11 @@ is a format.
 
 ### Fixed
 
+- **MCP results always carry `gone`.** `Drawn` and `Cleared` left it out when empty while
+  the output schema lists it as required, so a client validating results rejected nearly
+  every successful call. They now send an empty list, as `Raised` and `Arrived` already did.
+  The integration test's helper read a missing field as an empty one, which hid this, and
+  a new test checks each tool's emptiest result against its schema. Closes #27.
 - **`arin service enable` waits for launchd to remove the agent it boots out before
   bootstrapping the new one.** `launchctl bootout` can return before the service is gone,
   and a bootstrap in that gap fails with `37: Operation already in progress`. launchd's own

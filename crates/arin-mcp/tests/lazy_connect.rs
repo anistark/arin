@@ -93,7 +93,7 @@ fn gone(result: &CallToolResult) -> Vec<Value> {
         .and_then(|content| content.get("gone"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
+        .expect("the output schema requires `gone`, so an empty one is still sent")
 }
 
 #[tokio::test]
