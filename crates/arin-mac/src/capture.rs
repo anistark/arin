@@ -6,7 +6,8 @@
 //! # Excluding ourselves
 //!
 //! The filter asks ScreenCaptureKit to leave Arin's own windows out of the frame, so a
-//! capture shows the screen as it would look with Arin not running.
+//! capture shows the screen as it would look with Arin not running. The person's own
+//! screenshots are the exception, and [`capture_area`] keeps the overlay in.
 //!
 //! This was documented here as not working, on a measurement taken before the frame
 //! geometry below was correct. Re-measured on macOS 15: it does hold. A textbox was drawn
@@ -42,13 +43,15 @@ use arin_core::{Error, Frame, Result};
 use arin_protocol::DisplayId;
 use block2::RcBlock;
 use objc2::{AnyThread, Message as _};
+use objc2_core_foundation::{CFRetained, CGRect, Type};
 use objc2_core_graphics::{CGDataProvider, CGDisplayCopyDisplayMode, CGDisplayMode, CGImage};
 use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
+    SCContentFilter, SCDisplay, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
+    SCWindow,
 };
 use std::sync::Arc;
-use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
 /// How long to wait for ScreenCaptureKit before giving up.
@@ -378,11 +381,63 @@ fn capture_display(display: DisplayId, max_edge: Option<u32>) -> Result<Shot> {
     // Back on our own thread now, so this is an ordinary call rather than a reentrant one.
     let (filter, config) = build_filter(&content.0, display.0, max_edge).map_err(Error::Capture)?;
 
-    let (tx, rx) = sync_channel::<std::result::Result<Shot, String>>(1);
-    request_image(&filter, &config, tx);
+    let (tx, rx) = sync_channel(1);
+    request_image(&filter, &config, tx, read_pixels);
+    wait_for_image(&rx)
+}
 
+/// A captured image, kept whole so it can be written out as a file.
+pub(crate) struct Image(CFRetained<CGImage>);
+
+// SAFETY: a CGImage is immutable once made, and Core Graphics documents it as safe to hand
+// between threads. It is made on ScreenCaptureKit's queue and read on one thread after.
+unsafe impl Send for Image {}
+
+impl Image {
+    pub(crate) fn cg(&self) -> &CGImage {
+        &self.0
+    }
+}
+
+/// Capture part of a display, at full resolution, leaving out the windows named.
+///
+/// `area` is in the display's own points with the origin at its top left, which is how
+/// ScreenCaptureKit measures, and `scale` is the display's backing scale.
+///
+/// Unlike the daemon's captures this keeps Arin's overlay in the frame. Marks, the orb and
+/// marker ink are on the screen the person is taking a picture of, so they are in the
+/// picture. Only `leave_out` is excluded, which is the selector used to choose the area.
+pub(crate) fn capture_area(
+    display: DisplayId,
+    area: CGRect,
+    scale: f64,
+    leave_out: &[u32],
+) -> Result<Image> {
+    let content = shareable_content()?;
+    let target = find_display(&content.0, display.0).map_err(Error::Capture)?;
+    let excluded: Vec<_> = unsafe { content.0.windows() }
+        .iter()
+        .filter(|window| leave_out.contains(&unsafe { window.windowID() }))
+        .collect();
+    let filter = filter_excluding(&target, &excluded);
+
+    let config = unsafe { SCStreamConfiguration::new() };
+    unsafe {
+        config.setSourceRect(area);
+        config.setWidth((area.size.width * scale).round() as usize);
+        config.setHeight((area.size.height * scale).round() as usize);
+        config.setShowsCursor(false);
+    }
+
+    let (tx, rx) = sync_channel(1);
+    request_image(&filter, &config, tx, |image| Ok(Image(Type::retain(image))));
+    wait_for_image(&rx)
+}
+
+/// Wait for the image a request was made for, giving up rather than hanging.
+fn wait_for_image<T>(rx: &Receiver<std::result::Result<T, String>>) -> Result<T> {
     match rx.recv_timeout(TIMEOUT) {
-        Ok(Ok(shot)) => Ok(shot),
+        Ok(Ok(image)) => Ok(image),
         Ok(Err(message)) => Err(Error::Capture(message)),
         Err(RecvTimeoutError::Timeout) => Err(Error::Capture(
             "ScreenCaptureKit did not return an image in time".into(),
@@ -455,11 +510,15 @@ fn ask_for_content(
     }
 }
 
-/// Ask for the image itself, reporting whatever comes back down the channel.
-fn request_image(
+/// Ask for the image itself, reporting what `read` makes of it down the channel.
+///
+/// `read` runs on ScreenCaptureKit's queue, while the image is still alive, and turns it
+/// into something that can leave that queue.
+fn request_image<T: 'static>(
     filter: &SCContentFilter,
     config: &SCStreamConfiguration,
-    tx: SyncSender<std::result::Result<Shot, String>>,
+    tx: SyncSender<std::result::Result<T, String>>,
+    read: fn(&CGImage) -> std::result::Result<T, String>,
 ) {
     let handler = RcBlock::new(move |image: *mut CGImage, error: *mut NSError| {
         if let Some(message) = error_message(error) {
@@ -467,7 +526,7 @@ fn request_image(
             return;
         }
         let result = match unsafe { image.as_ref() } {
-            Some(image) => read_pixels(image),
+            Some(image) => read(image),
             None => Err("no image returned".into()),
         };
         let _ = tx.send(result);
@@ -493,10 +552,7 @@ fn build_filter(
     ),
     String,
 > {
-    let display = unsafe { content.displays() }
-        .iter()
-        .find(|d| unsafe { d.displayID() } == target)
-        .ok_or_else(|| format!("no display with id {target} is shareable"))?;
+    let display = find_display(content, target)?;
 
     // Excluded window by window rather than application by application. The application
     // form of this filter does not keep our overlay out of the frame: it matches our
@@ -518,16 +574,7 @@ fn build_filter(
         "excluding our own windows"
     );
 
-    let excluded =
-        objc2_foundation::NSArray::from_slice(&mine.iter().map(|w| w.as_ref()).collect::<Vec<_>>());
-
-    let filter = unsafe {
-        SCContentFilter::initWithDisplay_excludingWindows(
-            SCContentFilter::alloc(),
-            &display,
-            &excluded,
-        )
-    };
+    let filter = filter_excluding(&display, &mine);
 
     // `SCDisplay` reports points. Sizing the capture to those would throw away half the
     // detail on a Retina panel, so ask Core Graphics for the pixel dimensions.
@@ -555,6 +602,34 @@ fn build_filter(
     }
 
     Ok((filter, config))
+}
+
+/// The shareable display with a Core Graphics id.
+fn find_display(
+    content: &SCShareableContent,
+    target: u32,
+) -> std::result::Result<objc2::rc::Retained<SCDisplay>, String> {
+    unsafe { content.displays() }
+        .iter()
+        .find(|d| unsafe { d.displayID() } == target)
+        .ok_or_else(|| format!("no display with id {target} is shareable"))
+}
+
+/// A filter for everything on one display except the windows given.
+fn filter_excluding(
+    display: &SCDisplay,
+    windows: &[objc2::rc::Retained<SCWindow>],
+) -> objc2::rc::Retained<SCContentFilter> {
+    let excluded = objc2_foundation::NSArray::from_slice(
+        &windows.iter().map(|w| w.as_ref()).collect::<Vec<_>>(),
+    );
+    unsafe {
+        SCContentFilter::initWithDisplay_excludingWindows(
+            SCContentFilter::alloc(),
+            display,
+            &excluded,
+        )
+    }
 }
 
 /// Copy a captured image's pixels out into a plain buffer.

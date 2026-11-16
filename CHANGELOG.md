@@ -42,6 +42,11 @@ is a format.
   handwriting fonts. Anything else is typeset.
 - **A time to live counts from when the ink is finished,** so it is always how long the
   finished mark stays up. Acks and MCP results say when drawing starts and how long it takes.
+- **Screenshot, in the menu bar under Marker, takes a picture of an area of any display.**
+  Move or resize the selection, draw a new one, or drag it onto another screen, then click
+  Capture or press Return. Cancel, Escape or a right click puts it away. The PNG goes where
+  macOS saves your screenshots, the Desktop unless you changed it, and shows Arin's marks and
+  your marker ink.
 - **Arin clears the Screen Recording row its old identifier left behind.** Upgrading from
   0.6.1 or earlier left two Arin rows in System Settings. Arin now resets the old one when
   it starts. macOS only allows that while it still knows of an app under the old
@@ -109,6 +114,15 @@ is a format.
   Arabic, Hebrew, Devanagari, Bengali, Tamil and Malayalam, Telugu and Thai, 2.5 MB. Both
   bundle builders install them under `Contents/Resources`, never in the binary.
 - **`Config::max_ttl`,** a ceiling that clips every mark's time to live, its client's included.
+- **Screenshots,** in `arin-mac/src/screenshot/`. The selector is one panel per display at
+  `NSScreenSaverWindowLevel`, a level above the overlay, non activating and able to become
+  key, so the bar's Return and Escape work without Arin becoming the active application. The
+  selection's geometry is pure and tested in `screenshot/area.rs`. The capture runs on a
+  thread of its own through `capture::capture_area`, which sets `sourceRect` at the display's
+  backing scale and excludes only the selector's windows, so the overlay is in the picture.
+  `NSBitmapImageRep` writes the PNG sized in points, so a Retina shot carries 144 dpi, into
+  the `location` in `com.apple.screencapture`, and never replaces a file. A failed capture
+  says why in an alert. Nothing reaches the daemon or the wire.
 - **The macOS daemon resets Screen Recording for each identifier in
   `arin_core::LEGACY_BUNDLE_IDS`** with `tccutil reset ScreenCapture`, once per identifier,
   on the permission thread at startup. A success is recorded in

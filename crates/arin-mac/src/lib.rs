@@ -28,7 +28,8 @@
 //!
 //! Complete for 0.1. The overlay, display enumeration, every annotation kind, the orb
 //! with its flight and ember trail, ScreenCaptureKit capture and its permission flow,
-//! the menu bar item, the global hotkeys, and the marker all work.
+//! the menu bar item, the global hotkeys, the marker, and the person's own screenshots
+//! all work.
 //!
 //! # Building
 //!
@@ -55,6 +56,7 @@ mod orb;
 mod panel;
 mod pen;
 mod permission;
+mod screenshot;
 
 pub use approval::{AlertApprover, WINDOW as GROUNDING_WINDOW, approver};
 pub use capture::MacCapture;

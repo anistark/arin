@@ -38,9 +38,14 @@ objc2-app-kit = { workspace = true, features = [
   "NSAccessibility",
   # The grounding consent prompt.
   "NSAlert",
+  # The screenshot selector's bar is dark whatever the system appearance, like the
+  # system's own.
+  "NSAppearance",
   "NSApplication",
   # NSAttributedString carries NSFontAttributeName, which is how a caption is measured.
   "NSAttributedString",
+  # Encoding a screenshot as a PNG.
+  "NSBitmapImageRep",
   "NSButton",
   "NSCell",
   "NSColor",
@@ -49,7 +54,9 @@ objc2-app-kit = { workspace = true, features = [
   "NSCursor",
   "NSEvent",
   "NSFont",
+  "NSFontDescriptor",
   "NSImage",
+  "NSImageRep",
   "NSMenu",
   "NSMenuItem",
   "NSGraphics",
@@ -64,6 +71,9 @@ objc2-app-kit = { workspace = true, features = [
   "NSStatusBarButton",
   "NSStatusItem",
   "NSStringDrawing",
+  # The size readout in the screenshot selector's bar, and its alignment.
+  "NSText",
+  "NSTextField",
   "NSTrackingArea",
   "NSView",
   # The blurred material behind a text box.
@@ -71,7 +81,14 @@ objc2-app-kit = { workspace = true, features = [
   "NSWindow",
   "NSWorkspace",
 ] }
-objc2-core-foundation = { workspace = true, features = ["CFArray", "CFCGTypes", "CFURL"] }
+objc2-core-foundation = { workspace = true, features = [
+  "CFArray",
+  "CFCGTypes",
+  # Reading where the person keeps their screenshots.
+  "CFPreferences",
+  "CFString",
+  "CFURL",
+] }
 # Listing the fonts the person installed, to write in their handwriting font if they have
 # one.
 objc2-core-text = { workspace = true, features = ["CTFontManager"] }
@@ -87,9 +104,15 @@ objc2-core-graphics = { workspace = true, features = [
 ] }
 objc2-foundation = { workspace = true, features = [
   "NSArray",
+  "NSData",
+  # A screenshot's file name says when it was taken.
+  "NSDate",
+  "NSDateFormatter",
   "NSError",
   "NSDictionary",
+  "NSFormatter",
   "NSGeometry",
+  "NSLocale",
   "NSString",
   "NSURL",
   "NSValue",
@@ -107,6 +130,8 @@ objc2-quartz-core = { workspace = true, features = [
   "CATextLayer",
   "CATransaction",
   "CATransform3D",
+  # Taking the screenshot flash off once it has faded.
+  "block2",
   "objc2-core-graphics",
 ] }
 
