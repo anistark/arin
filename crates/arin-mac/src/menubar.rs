@@ -8,6 +8,9 @@
 //! the marker is on, the overlay takes the mouse so the person can draw on it. The panel
 //! ducks under the menu bar for the duration, which is what keeps this menu the way back.
 //!
+//! So does Screenshot, which opens a selector of its own above the overlay rather than
+//! changing the overlay at all. See [`crate::screenshot`].
+//!
 //! # The icon
 //!
 //! Drawn rather than loaded. It is the orb primitive with its features disabled: no
@@ -248,6 +251,11 @@ define_class!(
             host::toggle_marker();
         }
 
+        #[unsafe(method(takeScreenshot:))]
+        fn take_screenshot(&self, _sender: Option<&AnyObject>) {
+            crate::screenshot::begin();
+        }
+
         #[unsafe(method(revokeGrounding:))]
         fn revoke_grounding(&self, _sender: Option<&AnyObject>) {
             match REVOKE.get() {
@@ -365,17 +373,26 @@ impl MenuBar {
         unsafe { clear.setTarget(Some(&actions)) };
         menu.addItem(&clear);
 
-        // Index 6, its check mark rewritten every time the menu opens. The chord is shown
+        // Index 7, its check mark rewritten every time the menu opens. The chord is shown
         // for the same reason Clear's is, and is backed by the same global listener.
         let marker = menu_item(mtm, "Marker", Some(sel!(toggleMarker:)), "m");
         marker.setKeyEquivalentModifierMask(
             NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
         );
-        if let Some(icon) = marker_icon() {
+        if let Some(icon) = symbol("pencil.tip", "marker") {
             marker.setImage(Some(&icon));
         }
         unsafe { marker.setTarget(Some(&actions)) };
         menu.addItem(&marker);
+
+        // Under the marker, since the two are used together: draw on the screen, then take
+        // a picture of what you drew around.
+        let screenshot = menu_item(mtm, "Screenshot", Some(sel!(takeScreenshot:)), "");
+        if let Some(icon) = symbol("camera.viewfinder", "screenshot") {
+            screenshot.setImage(Some(&icon));
+        }
+        unsafe { screenshot.setTarget(Some(&actions)) };
+        menu.addItem(&screenshot);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
@@ -448,15 +465,16 @@ fn template_icon() -> Option<Retained<NSImage>> {
     })
 }
 
-/// The marker item's icon: a pen tip from the system's symbol set.
+/// A menu item's icon from the system's symbol set.
 ///
 /// A symbol rather than a drawing, unlike the orb beside it in the menu bar. The orb is
-/// Arin's own primitive and has to be drawn, while a pen is a thing the system already
-/// knows how to draw in every appearance, and it says "draw" without a word.
-fn marker_icon() -> Option<Retained<NSImage>> {
+/// Arin's own primitive and has to be drawn, while a pen tip or a viewfinder is a thing
+/// the system already knows how to draw in every appearance, and says what the item does
+/// without a word.
+fn symbol(name: &str, description: &str) -> Option<Retained<NSImage>> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str("pencil.tip"),
-        Some(&NSString::from_str("marker")),
+        &NSString::from_str(name),
+        Some(&NSString::from_str(description)),
     )
 }
 

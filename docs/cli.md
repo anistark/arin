@@ -90,6 +90,27 @@ Your strokes are not annotations. No client can move them, expire them, or clear
 they do not follow content that scrolls: they are ink on the glass rather than on the page.
 `Clear annotations`, or `Cmd+Shift+K`, takes them along with the agent's marks.
 
+## Taking a screenshot
+
+**Screenshot**, under Marker in the menu bar, takes a picture of part of the screen. It dims
+every display and puts a selection on the one your pointer is on, or where you left it last
+time. Drag its middle to move it, its edges or corners to resize it, or anywhere outside it
+to draw a new one. Dragging it onto another display carries it there. A selection covers one
+display at a time.
+
+The bar under the selection shows its size in points. **Capture**, or Return, takes the
+picture. **Cancel**, Escape, or a right click puts the selector away without one.
+
+The picture is saved as a PNG where macOS saves your screenshots, which is the Desktop unless
+you changed it in the Screenshot app's Options. It is named `Arin Screenshot` with the date
+and time, and it shows Arin's marks and your marker ink, since those are on the screen. The
+selector itself is left out. Screen Recording is needed, as it is for everything else Arin
+reads, and Arin says so if a picture could not be taken. The Desktop is a folder macOS
+protects, so the first time Arin saves there macOS asks whether it may.
+
+No client can take a screenshot this way or see one. It is something you do from the menu
+bar, and nothing about it reaches an agent.
+
 ## Checking the screen recording permission
 
 ```sh

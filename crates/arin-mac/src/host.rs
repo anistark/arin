@@ -32,8 +32,11 @@ use objc2_app_kit::{
 };
 use objc2_core_foundation::{CFString, CFType, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
-use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSString};
-use objc2_quartz_core::{CAGradientLayer, CALayer, CAShapeLayer, CATextLayer, CATransaction};
+use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSNumber, NSString};
+use objc2_quartz_core::{
+    CABasicAnimation, CAGradientLayer, CALayer, CAMediaTiming, CAMediaTimingFunction, CAShapeLayer,
+    CATextLayer, CATransaction, kCAMediaTimingFunctionEaseOut,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
@@ -625,6 +628,46 @@ pub fn set_marker_color(color: Rgb) {
     on_main(move |host, _mtm| host.marker.set_color(color));
 }
 
+/// How long the flash over a screenshot's area takes to fade.
+const FLASH: Duration = Duration::from_millis(360);
+
+/// A brief white flash over part of a display, the way a camera says it took the picture.
+///
+/// `area` is in the display's own points, origin at its bottom left, which is the overlay
+/// panel's layer space as it stands. Drawn on the overlay so it sits over whatever was
+/// captured, and only once the capture is done, since the overlay is in the picture.
+pub(crate) fn flash(display: DisplayId, area: CGRect) {
+    on_main(move |host, _mtm| {
+        let Some(root) = host.root_for(display) else {
+            return;
+        };
+        let layer = CALayer::new();
+        layer.setFrame(area);
+        layer.setBackgroundColor(Some(&srgb(1.0, 1.0, 1.0, 1.0)));
+        layer.setOpacity(0.0);
+
+        let fade = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("opacity")));
+        unsafe {
+            fade.setFromValue(Some(&*NSNumber::new_f64(0.55)));
+            fade.setToValue(Some(&*NSNumber::new_f64(0.0)));
+        }
+        fade.setDuration(FLASH.as_secs_f64());
+        fade.setTimingFunction(Some(&CAMediaTimingFunction::functionWithName(unsafe {
+            kCAMediaTimingFunctionEaseOut
+        })));
+
+        // A transaction of its own, so the layer comes off once its fade has finished and
+        // not when anything else does.
+        CATransaction::begin();
+        let faded = layer.clone();
+        let remove = RcBlock::new(move || faded.removeFromSuperlayer());
+        unsafe { CATransaction::setCompletionBlock(Some(&*remove)) };
+        root.addSublayer(&layer);
+        layer.addAnimation_forKey(&fade, Some(&NSString::from_str("flash")));
+        CATransaction::commit();
+    });
+}
+
 /// What to run after the displays change, once the panels have caught up.
 ///
 /// Set by the binary, because the renderer has no handle on the daemon and the daemon is
@@ -718,6 +761,7 @@ impl MacRenderer {
                 }
             });
             CATransaction::commit();
+            crate::screenshot::displays_changed(mtm);
 
             // After the panels, so that anything the handler draws has somewhere to go.
             *cache.lock().expect("display cache") = refreshed;
