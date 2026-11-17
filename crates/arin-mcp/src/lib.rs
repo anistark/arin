@@ -170,7 +170,6 @@ pub struct Drawn {
     /// user scrolled, a time to live ran out, they cleared the overlay themselves, or
     /// Arin restarted and took every mark with it. Anything you were relying on being
     /// visible is not.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gone: Vec<Gone>,
 }
 
@@ -189,7 +188,6 @@ pub struct Cleared {
     /// Whether the daemon accepted the request.
     pub cleared: bool,
     /// Marks of yours that had already gone away on their own. See [`Drawn::gone`].
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gone: Vec<Gone>,
 }
 
@@ -904,6 +902,7 @@ pub async fn serve(socket: &std::path::Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn tool_names_are_unique() {
@@ -997,6 +996,60 @@ mod tests {
         for tool in Arin::tool_router().list_all() {
             let described = tool.description.as_ref().is_some_and(|d| d.len() > 40);
             assert!(described, "{} needs a description", tool.name);
+        }
+    }
+
+    /// A client checks each result against the tool's output schema, and reports one that
+    /// does not match as a failed call whatever it did on screen. The emptiest result is
+    /// the one to check, because it is what almost every call returns, and a field dropped
+    /// when empty is still a field the schema requires.
+    #[test]
+    fn the_emptiest_result_carries_what_its_schema_requires() {
+        fn emptiest(tool: &str) -> Value {
+            let result = match tool {
+                tools::POINT_AT | tools::HIGHLIGHT | tools::ANNOTATE | tools::DRAW_ARROW => {
+                    serde_json::to_value(Drawn {
+                        annotation_id: "a_1".into(),
+                        display_width: None,
+                        display_height: None,
+                        display_scale: None,
+                        starts_in_ms: None,
+                        reveal_ms: None,
+                        gone: Vec::new(),
+                    })
+                }
+                tools::CLEAR => serde_json::to_value(Cleared {
+                    cleared: true,
+                    gone: Vec::new(),
+                }),
+                tools::BRING_TO_FRONT => serde_json::to_value(Raised {
+                    app: String::new(),
+                    gone: Vec::new(),
+                }),
+                tools::WAIT_UNTIL_SHOWING => serde_json::to_value(Arrived {
+                    arrived: false,
+                    gone: Vec::new(),
+                }),
+                other => panic!("{other} needs a result here"),
+            };
+            result.expect("a result serialises")
+        }
+
+        for tool in Arin::tool_router().list_all() {
+            let schema = tool.output_schema.as_ref().expect("an output schema");
+            let required = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("a list of required fields");
+            let result = emptiest(&tool.name);
+
+            for field in required.iter().filter_map(Value::as_str) {
+                assert!(
+                    result.get(field).is_some(),
+                    "{} requires `{field}` and returned {result}",
+                    tool.name
+                );
+            }
         }
     }
 
